@@ -10,15 +10,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { getSession } from "../session";
+import { config } from "../lib/config";
+import { colors, radius, spacing } from "../lib/theme";
 
-
-const API_BASE = "http://192.168.1.117:3001";
-
-const BG = "#07050F";
-const CARD = "#141027";
-const BORDER = "#2E255A";
-const PRIMARY = "#8B7CFF";
-const MUTED = "#9C94D7";
+const API_BASE = config.API_BASE;
 
 export default function OwnerOrdersScreen({ storeId }: { storeId: string }) {
   const [token, setToken] = useState<string | null>(null);
@@ -45,8 +40,14 @@ export default function OwnerOrdersScreen({ storeId }: { storeId: string }) {
           headers: { Authorization: `Bearer ${jwt}` },
         }
       );
-      const json = await res.json();
-      setOrders(json.orders || []);
+      const raw = await res.text();
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        json = null;
+      }
+      setOrders(json?.orders || []);
     } catch {
       setOrders([]);
     } finally {
@@ -66,9 +67,14 @@ export default function OwnerOrdersScreen({ storeId }: { storeId: string }) {
         headers: { Authorization: `Bearer ${token}` },
       }
     );
-
-    const json = await res.json();
-    if (json.success) setSelectedOrder(json.order);
+    const raw = await res.text();
+    let json: any = null;
+    try {
+      json = raw ? JSON.parse(raw) : null;
+    } catch {
+      json = null;
+    }
+    if (json?.success) setSelectedOrder(json.order);
 
     setDetailsLoading(false);
   };
@@ -79,7 +85,7 @@ export default function OwnerOrdersScreen({ storeId }: { storeId: string }) {
         <Text style={styles.title}>Orders</Text>
 
         {loading ? (
-          <ActivityIndicator color={PRIMARY} />
+          <ActivityIndicator color={colors.primary} />
         ) : orders.length === 0 ? (
           <Text style={styles.empty}>No orders yet</Text>
         ) : (
@@ -103,7 +109,7 @@ export default function OwnerOrdersScreen({ storeId }: { storeId: string }) {
         <View style={styles.overlay}>
           <View style={styles.modal}>
             {detailsLoading ? (
-              <ActivityIndicator color={PRIMARY} />
+              <ActivityIndicator color={colors.primary} />
             ) : (
               <>
                 <Text style={styles.modalCode}>
@@ -151,85 +157,85 @@ export default function OwnerOrdersScreen({ storeId }: { storeId: string }) {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: BG },
-  container: { padding: 20 },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { padding: spacing.lg },
 
   title: {
-    color: "#FFF",
+    color: colors.textPrimary,
     fontSize: 20,
     fontWeight: "800",
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
 
-  empty: { color: MUTED },
+  empty: { color: colors.textTertiary },
 
   orderCard: {
-    backgroundColor: CARD,
-    borderRadius: 14,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     padding: 14,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: colors.border,
     marginBottom: 10,
   },
-  orderCode: { color: "#FFF", fontWeight: "700", fontSize: 15 },
-  status: { color: PRIMARY, fontSize: 12, marginTop: 4 },
-  meta: { color: MUTED, fontSize: 11, marginTop: 2 },
+  orderCode: { color: colors.textPrimary, fontWeight: "700", fontSize: 15 },
+  status: { color: colors.primary, fontSize: 12, marginTop: 4 },
+  meta: { color: colors.textTertiary, fontSize: 11, marginTop: 2 },
 
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "center",
     alignItems: "center",
   },
   modal: {
     width: "92%",
-    backgroundColor: CARD,
-    borderRadius: 20,
-    padding: 20,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: colors.border,
   },
 
   modalCode: {
-    color: "#FFF",
+    color: colors.textPrimary,
     fontSize: 22,
     fontWeight: "800",
     textAlign: "center",
   },
   modalStatus: {
-    color: PRIMARY,
+    color: colors.primary,
     textAlign: "center",
     marginBottom: 10,
   },
 
   section: {
-    color: MUTED,
-    marginTop: 12,
+    color: colors.textTertiary,
+    marginTop: spacing.md,
     fontSize: 12,
   },
-  text: { color: "#FFF", fontSize: 13 },
+  text: { color: colors.textPrimary, fontSize: 13 },
 
   itemRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginTop: 6,
   },
-  itemName: { color: "#FFF" },
-  itemQty: { color: MUTED },
+  itemName: { color: colors.textPrimary },
+  itemQty: { color: colors.textTertiary },
 
   total: {
-    color: "#FFF",
+    color: colors.textPrimary,
     fontWeight: "700",
     marginTop: 14,
     textAlign: "right",
   },
 
   closeBtn: {
-    marginTop: 16,
-    backgroundColor: PRIMARY,
+    marginTop: spacing.lg,
+    backgroundColor: colors.primary,
     paddingVertical: 12,
-    borderRadius: 12,
+    borderRadius: radius.md,
     alignItems: "center",
   },
-  closeText: { color: "#FFF", fontWeight: "700" },
+  closeText: { color: colors.surface, fontWeight: "700" },
 });

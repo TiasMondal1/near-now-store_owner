@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -11,21 +11,13 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../session";
+import { config } from "../lib/config";
+import { colors, radius, spacing } from "../lib/theme";
 
-const API_BASE = "http://192.168.1.117:3001";
-
-const COLORS = {
-  bg: "#05030A",
-  card: "#120D24",
-  soft: "#181134",
-  border: "#392B6A",
-  text: "#FFFFFF",
-  muted: "#9C94D7",
-  green: "#2ECC71",
-  red: "#FF6B6B",
-  yellow: "#F1C40F",
-};
+const API_BASE = config.API_BASE;
+const INVENTORY_CACHE_KEY = "inventory_products_cache";
 
 export default function InventoryScreen() {
   const [loading, setLoading] = useState(true);
@@ -33,54 +25,219 @@ export default function InventoryScreen() {
   const [storeId, setStoreId] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [editingQty, setEditingQty] = useState<{ id: string; value: string } | null>(null);
+  const editingValueRef = useRef("");
+
+  const fetchInventory = async (authToken: string, storeIdVal: string) => {
+    const [masterRes, storeProductsRes] = await Promise.all([
+      fetch(`${API_BASE}/api/products/master-products?isActive=true`),
+      fetch(`${API_BASE}/store-owner/stores/${storeIdVal}/products`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }),
+    ]);
+    const masterRaw = await masterRes.text();
+    const storeRaw = await storeProductsRes.text();
+    let masterList: any[] = [];
+    let storeList: any[] = [];
+    try {
+      masterList = masterRaw ? JSON.parse(masterRaw) : [];
+    } catch {
+      masterList = [];
+    }
+    try {
+      const storeJson = storeRaw ? JSON.parse(storeRaw) : null;
+      storeList = storeJson?.products || [];
+    } catch {
+      storeList = [];
+    }
+    if (!Array.isArray(masterList)) masterList = [];
+    const byMasterId: Record<string, { id: string; quantity: number }> = {};
+    storeList.forEach((sp: any) => {
+      const mid = sp.master_product_id ?? sp.masterProductId;
+      if (mid) byMasterId[mid] = { id: sp.id, quantity: sp.quantity ?? 0 };
+    });
+    return masterList.map((mp: any) => {
+      const storeRow = byMasterId[mp.id];
+      return {
+        ...mp,
+        price: mp.base_price ?? mp.price,
+        quantity: storeRow ? storeRow.quantity : 0,
+        storeProductId: storeRow?.id ?? null,
+      };
+    });
+  };
+
+  const mergeMasterWithStoreProducts = (
+    masterList: any[],
+    storeList: any[],
+  ): any[] => {
+    const byMasterId: Record<string, { id: string; quantity: number }> = {};
+    storeList.forEach((sp: any) => {
+      const mid = sp.master_product_id ?? sp.masterProductId;
+      if (mid) byMasterId[mid] = { id: sp.id, quantity: sp.quantity ?? 0 };
+    });
+    return masterList.map((mp: any) => {
+      const storeRow = byMasterId[mp.id];
+      return {
+        ...mp,
+        price: mp.base_price ?? mp.price,
+        quantity: storeRow ? storeRow.quantity : 0,
+        storeProductId: storeRow?.id ?? null,
+      };
+    });
+  };
 
   useEffect(() => {
     (async () => {
-      const s: any = await getSession();
-      if (!s?.token) return;
-      setToken(s.token);
-
-      const storeRes = await fetch(`${API_BASE}/store-owner/stores`, {
-        headers: { Authorization: `Bearer ${s.token}` },
-      });
-      const storeJson = await storeRes.json();
-      if (!storeJson?.stores?.length) return;
-
-      const id = storeJson.stores[0].id;
-      setStoreId(id);
-
-      const res = await fetch(
-        `${API_BASE}/store-owner/stores/${id}/products`,
-        {
-          headers: { Authorization: `Bearer ${s.token}` },
+      try {
+        const cached = await AsyncStorage.getItem(INVENTORY_CACHE_KEY);
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setProducts(parsed);
+              setLoading(false);
+            }
+          } catch {
+            // ignore invalid cache
+          }
         }
-      );
-      const json = await res.json();
-      setProducts(json.products || []);
-      setLoading(false);
+
+        const s: any = await getSession();
+        if (!s?.token) {
+          setLoading(false);
+          return;
+        }
+        setToken(s.token);
+
+        const auth = { Authorization: `Bearer ${s.token}` };
+        const [storeRes, masterRes] = await Promise.all([
+          fetch(`${API_BASE}/store-owner/stores`, { headers: auth }),
+          fetch(`${API_BASE}/api/products/master-products?isActive=true`),
+        ]);
+        const [storeRaw, masterRaw] = await Promise.all([
+          storeRes.text(),
+          masterRes.text(),
+        ]);
+        let storeJson: any = null;
+        let masterList: any[] = [];
+        try {
+          storeJson = storeRaw ? JSON.parse(storeRaw) : null;
+        } catch {
+          storeJson = null;
+        }
+        try {
+          masterList = masterRaw ? JSON.parse(masterRaw) : [];
+        } catch {
+          masterList = [];
+        }
+        if (!Array.isArray(masterList)) masterList = [];
+        const toProducts = (list: any[]) =>
+          list.map((mp: any) => ({
+            ...mp,
+            price: mp.base_price ?? mp.price,
+            quantity: 0,
+            storeProductId: null,
+          }));
+
+        if (!storeJson?.stores?.length) {
+          const list = toProducts(masterList);
+          setProducts(list);
+          await AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(list));
+          setLoading(false);
+          return;
+        }
+
+        const id = storeJson.stores[0].id;
+        setStoreId(id);
+
+        const storeProductsRes = await fetch(
+          `${API_BASE}/store-owner/stores/${id}/products`,
+          { headers: auth },
+        );
+        const storeRaw2 = await storeProductsRes.text();
+        let storeList: any[] = [];
+        try {
+          const storeJson2 = storeRaw2 ? JSON.parse(storeRaw2) : null;
+          storeList = storeJson2?.products || [];
+        } catch {
+          storeList = [];
+        }
+        const merged = mergeMasterWithStoreProducts(masterList, storeList);
+        setProducts(merged);
+        await AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(merged));
+      } catch {
+        setProducts([]);
+      } finally {
+        setLoading(false);
+      }
     })();
   }, []);
 
-  const updateProduct = async (id: string, updates: any) => {
-    if (!token) return;
+  const setQuantityOptimistic = (productId: string, qty: number) => {
+    setProducts((prev) =>
+      prev.map((p) => (p.id === productId ? { ...p, quantity: Math.max(0, qty) } : p))
+    );
+  };
 
-    const res = await fetch(`${API_BASE}/store-owner/products/${id}`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(updates),
-    });
+  const updateQuantity = async (row: any, newQty: number) => {
+    const qty = Math.max(0, newQty);
+    const prevQty = row.quantity;
+    setQuantityOptimistic(row.id, qty);
 
-    if (!res.ok) {
-      Alert.alert("Error", "Failed to update product");
+    if (!token || !storeId) return;
+
+    if (row.storeProductId) {
+      const res = await fetch(`${API_BASE}/store-owner/products/${row.storeProductId}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ quantity: qty }),
+      });
+      if (!res.ok) {
+        setQuantityOptimistic(row.id, prevQty);
+        Alert.alert("Error", "Failed to update quantity");
+      }
       return;
     }
 
-    setProducts((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, ...updates } : p))
+    if (qty === 0) return;
+    const res = await fetch(
+      `${API_BASE}/store-owner/stores/${storeId}/products/bulk-from-master`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          items: [{ masterProductId: row.id, price: row.base_price ?? row.price, quantity: qty }],
+        }),
+      }
     );
+    const raw = await res.text();
+    let json: any = null;
+    try {
+      json = raw ? JSON.parse(raw) : null;
+    } catch {
+      json = null;
+    }
+    if (!res.ok || !json?.success) {
+      setQuantityOptimistic(row.id, prevQty);
+      Alert.alert("Error", json?.error || "Failed to add product");
+      return;
+    }
+    const merged = await fetchInventory(token, storeId);
+    setProducts(merged);
+    AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(merged)).catch(() => {});
+  };
+
+  const commitQtyEdit = (row: any, value: string) => {
+    setEditingQty(null);
+    const num = parseInt(value.replace(/\D/g, ""), 10);
+    if (!Number.isNaN(num)) updateQuantity(row, num);
   };
 
   const q = search.trim().toLowerCase();
@@ -89,11 +246,15 @@ export default function InventoryScreen() {
       .filter(Boolean)
       .some((x: string) => x.toLowerCase().includes(q))
   );
+  const sorted =
+    q === ""
+      ? [...filtered].sort((a, b) => (b.quantity ?? 0) - (a.quantity ?? 0))
+      : filtered;
 
-  if (loading) {
+  if (loading && products.length === 0) {
     return (
       <SafeAreaView style={styles.safe}>
-        <ActivityIndicator color="#fff" />
+        <ActivityIndicator color={colors.primary} />
       </SafeAreaView>
     );
   }
@@ -102,38 +263,35 @@ export default function InventoryScreen() {
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.title}>Inventory</Text>
+        <Text style={styles.subtitle}>
+          Master products and stock. Set quantities here—customers see these when ordering. You can also set quantities when adding from Catalog.
+        </Text>
 
         <TextInput
           value={search}
           onChangeText={setSearch}
           placeholder="Search products, brands or categories"
-          placeholderTextColor={COLORS.muted}
+          placeholderTextColor={colors.textTertiary}
           style={styles.search}
         />
 
-        {filtered.map((p) => {
+        {sorted.length === 0 && (
+          <Text style={styles.emptyText}>
+            {products.length === 0
+              ? "Could not load products. Check your connection and that the backend is running."
+              : "No products match your search."}
+          </Text>
+        )}
+
+        {sorted.map((p) => {
           const out = p.quantity === 0;
-          const inactive = !p.is_active;
+          const inStore = !!p.storeProductId;
+          const isEditing = editingQty?.id === p.id;
 
           return (
-            <TouchableOpacity
+            <View
               key={p.id}
               style={styles.card}
-              onLongPress={() =>
-                Alert.alert(
-                  "Deactivate product?",
-                  "This will hide the product from customers.",
-                  [
-                    { text: "Cancel" },
-                    {
-                      text: "Deactivate",
-                      style: "destructive",
-                      onPress: () =>
-                        updateProduct(p.id, { is_active: false }),
-                    },
-                  ]
-                )
-              }
             >
               <Image
                 source={{ uri: p.image_url }}
@@ -150,53 +308,64 @@ export default function InventoryScreen() {
                   {p.category}
                 </Text>
 
-                <Text style={styles.price}>₹{p.price}</Text>
+                <Text style={styles.price}>₹{p.price ?? p.base_price}</Text>
 
                 <Text
                   style={{
-                    color: inactive
-                      ? COLORS.red
-                      : out
-                        ? COLORS.yellow
-                        : COLORS.green,
+                    color: out ? colors.warning : colors.success,
                     fontSize: 12,
                     marginTop: 2,
                   }}
                 >
-                  {inactive
-                    ? "Inactive"
-                    : out
-                      ? "Out of stock"
-                      : "Active"}
+                  {out ? "Out of stock" : "In stock"}
                 </Text>
               </View>
 
               <View style={styles.stockCol}>
                 <TouchableOpacity
                   style={styles.qtyBtn}
-                  onPress={() =>
-                    updateProduct(p.id, {
-                      quantity: Math.max(0, p.quantity - 1),
-                    })
-                  }
+                  onPress={() => updateQuantity(p, p.quantity - 1)}
+                  activeOpacity={0.7}
                 >
                   <Text style={styles.qtyText}>−</Text>
                 </TouchableOpacity>
 
-                <Text style={styles.qty}>{p.quantity}</Text>
+                {isEditing ? (
+                  <TextInput
+                    style={styles.qtyInput}
+                    value={editingQty && editingQty.id === p.id ? editingQty.value : ""}
+                    onChangeText={(v) => {
+                      editingValueRef.current = v;
+                      setEditingQty((e) => (e && e.id === p.id ? { id: e.id, value: v } : e));
+                    }}
+                    onBlur={() => commitQtyEdit(p, editingValueRef.current)}
+                    onSubmitEditing={() => commitQtyEdit(p, editingValueRef.current)}
+                    keyboardType="number-pad"
+                    selectTextOnFocus
+                    autoFocus
+                  />
+                ) : (
+                  <TouchableOpacity
+                    onPress={() => {
+                      editingValueRef.current = String(p.quantity);
+                      setEditingQty({ id: p.id, value: String(p.quantity) });
+                    }}
+                    style={styles.qtyTouch}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.qty}>{p.quantity}</Text>
+                  </TouchableOpacity>
+                )}
 
                 <TouchableOpacity
                   style={styles.qtyBtn}
-                  onPress={() =>
-                    updateProduct(p.id, {
-                      quantity: p.quantity + 1,
-                    })
-                  }
+                  onPress={() => updateQuantity(p, p.quantity + 1)}
+                  activeOpacity={0.7}
                 >
                   <Text style={styles.qtyText}>+</Text>
                 </TouchableOpacity>
               </View>
-            </TouchableOpacity>
+            </View>
           );
         })}
       </ScrollView>
@@ -205,57 +374,68 @@ export default function InventoryScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.bg },
-  container: { padding: 16 },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { padding: spacing.lg },
   title: {
-    color: COLORS.text,
+    color: colors.textPrimary,
     fontSize: 22,
     fontWeight: "800",
-    marginBottom: 12,
+    marginBottom: spacing.xs,
+  },
+  subtitle: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    marginBottom: spacing.md,
+  },
+  emptyText: {
+    color: colors.textTertiary,
+    fontSize: 14,
+    marginBottom: spacing.lg,
+    textAlign: "center",
   },
 
   search: {
-    backgroundColor: COLORS.soft,
-    borderRadius: 14,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     padding: 12,
-    color: COLORS.text,
+    color: colors.textPrimary,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    marginBottom: 16,
+    borderColor: colors.border,
+    marginBottom: spacing.lg,
   },
 
   card: {
     flexDirection: "row",
-    gap: 12,
+    gap: spacing.md,
     padding: 14,
-    backgroundColor: COLORS.card,
-    borderRadius: 16,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    marginBottom: 12,
+    borderColor: colors.border,
+    marginBottom: spacing.md,
     alignItems: "center",
   },
 
   image: {
     width: 56,
     height: 56,
-    borderRadius: 12,
-    backgroundColor: COLORS.soft,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceVariant,
   },
 
   name: {
-    color: COLORS.text,
+    color: colors.textPrimary,
     fontWeight: "700",
   },
 
   meta: {
-    color: COLORS.muted,
+    color: colors.textTertiary,
     fontSize: 12,
     marginTop: 2,
   },
 
   price: {
-    color: COLORS.green,
+    color: colors.success,
     fontWeight: "800",
     marginTop: 4,
   },
@@ -270,19 +450,36 @@ const styles = StyleSheet.create({
     height: 32,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: colors.border,
     alignItems: "center",
     justifyContent: "center",
   },
 
   qtyText: {
-    color: COLORS.text,
+    color: colors.textPrimary,
     fontSize: 18,
     fontWeight: "700",
   },
 
   qty: {
-    color: COLORS.text,
+    color: colors.textPrimary,
     fontWeight: "700",
+  },
+  qtyTouch: {
+    minWidth: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  qtyInput: {
+    minWidth: 40,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: radius.sm,
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontWeight: "700",
+    textAlign: "center",
   },
 });

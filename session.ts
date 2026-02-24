@@ -11,6 +11,7 @@ export type UserSession = {
     role: string;
     isActivated: boolean;
     phone?: string;
+    email?: string;
   };
 };
 

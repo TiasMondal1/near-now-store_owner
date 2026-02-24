@@ -19,18 +19,11 @@ import { getSession, clearSession } from "../session";
 import { CameraView } from "expo-camera";
 import { Camera, useCameraPermissions } from "expo-camera";
 import { Ionicons } from "@expo/vector-icons";
+import { config } from "../lib/config";
+import { colors, radius, spacing } from "../lib/theme";
 
-
-const BG = "#07050F";
-const CARD = "#141027";
-const CARD_SOFT = "#1A1533";
-const BORDER = "#2E255A";
-const PRIMARY = "#8B7CFF";
-const MUTED = "#9C94D7";
-const SOFT = "#C9C4FF";
+const API_BASE = config.API_BASE;
 const ORDER_TIMEOUT_SECONDS = 20;
-
-const API_BASE = "http://192.168.1.117:3001";
 
 
 
@@ -89,7 +82,7 @@ export default function OwnerHomeScreen() {
   useEffect(() => {
     (async () => {
       const s: any = await getSession();
-      if (!s?.token) return router.replace("/phone");
+      if (!s?.token) return router.replace("/landing");
 
       setSession(s);
       await fetchStores(s.token);
@@ -108,31 +101,50 @@ export default function OwnerHomeScreen() {
 
 
   const fetchStores = async (token: string) => {
-    const res = await fetch(`${API_BASE}/store-owner/stores`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const json = await res.json();
-    setStores(json.stores || []);
+    try {
+      const res = await fetch(`${API_BASE}/store-owner/stores`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const raw = await res.text();
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        // HTML or non-JSON response
+      }
+      setStores(json?.stores || []);
+    } catch {
+      setStores([]);
+    }
   };
 
   const fetchOrders = async () => {
     if (!session || !selectedStore) return;
 
-    const res = await fetch(
-      `${API_BASE}/store-owner/stores/${selectedStore.id}/orders`,
-      { headers: { Authorization: `Bearer ${session.token}` } }
-    );
+    try {
+      const res = await fetch(
+        `${API_BASE}/store-owner/stores/${selectedStore.id}/orders`,
+        { headers: { Authorization: `Bearer ${session.token}` } }
+      );
+      const raw = await res.text();
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        return;
+      }
+      if (!json?.success) return;
 
-    const json = await res.json();
-    if (!json.success) return;
+      setOrders(json.orders || []);
 
-    setOrders(json.orders || []);
+      const pending = json.orders?.find(
+        (o: any) => o.status === "pending_store"
+      );
 
-    const pending = json.orders?.find(
-      (o: any) => o.status === "pending_store"
-    );
-
-    if (pending && !incomingOrder) openIncomingOrder(pending);
+      if (pending && !incomingOrder) openIncomingOrder(pending);
+    } catch {
+      setOrders([]);
+    }
   };
 
   const fetchPayments = async () => {
@@ -149,9 +161,14 @@ export default function OwnerHomeScreen() {
           headers: { Authorization: `Bearer ${session.token}` },
         }
       );
-
-      const json = await res.json();
-      if (!json.success) return;
+      const raw = await res.text();
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        return;
+      }
+      if (!json?.success) return;
 
       setPayments(json.payments || []);
       setPaymentsDayTotal(json.day_total || 0);
@@ -176,10 +193,15 @@ export default function OwnerHomeScreen() {
           },
         }
       );
+      const raw = await res.text();
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        return;
+      }
 
-      const json = await res.json();
-
-      if (!json.success) {
+      if (!json?.success) {
         console.log("Failed to load order details", json);
         return;
       }
@@ -212,10 +234,15 @@ export default function OwnerHomeScreen() {
           body: JSON.stringify({ token: data }),
         }
       );
+      const raw = await res.text();
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        throw new Error("Invalid response");
+      }
 
-      const json = await res.json();
-
-      if (!res.ok || !json.success) {
+      if (!res.ok || !json?.success) {
         throw json;
       }
 
@@ -407,13 +434,13 @@ export default function OwnerHomeScreen() {
 
   const logout = async () => {
     await clearSession();
-    router.replace("/phone");
+    router.replace("/landing");
   };
 
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
-        <ActivityIndicator color={PRIMARY} />
+        <ActivityIndicator color={colors.primary} />
       </SafeAreaView>
     );
   }
@@ -545,7 +572,7 @@ export default function OwnerHomeScreen() {
 
               <View style={styles.actions}>
                 <ActionBtn label="Reject" color="#E74C3C" onPress={rejectOrder} />
-                <ActionBtn label="Accept" color={PRIMARY} onPress={acceptOrder} />
+                <ActionBtn label="Accept" color={colors.primary} onPress={acceptOrder} />
               </View>
             </Animated.View>
           </View>
@@ -569,7 +596,7 @@ export default function OwnerHomeScreen() {
               <Switch
                 value={selectedStore.is_active}
                 onValueChange={toggleOnline}
-                trackColor={{ false: "#2A234B", true: PRIMARY }}
+                trackColor={{ false: colors.border, true: colors.primary }}
                 thumbColor="#FFF"
               />
             </View>
@@ -591,7 +618,7 @@ export default function OwnerHomeScreen() {
 
         {activeTab === "payments" && (
           paymentsLoading ? (
-            <ActivityIndicator color={PRIMARY} />
+            <ActivityIndicator color={colors.primary} />
           ) : payments.length === 0 ? (
             <View style={styles.emptyCard}>
               <Text style={styles.emptyTitle}>No payments today</Text>
@@ -699,7 +726,7 @@ function Tab({ label, active, onPress }: any) {
       onPress={onPress}
       style={[styles.tab, active && styles.tabActive]}
     >
-      <Text style={[styles.tabText, active && { color: "#FFF" }]}>
+      <Text style={[styles.tabText, active && { color: colors.surface }]}>
         {label}
       </Text>
     </TouchableOpacity>
@@ -718,93 +745,88 @@ function ActionBtn({ label, color, onPress }: any) {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: BG },
-  container: { padding: 20 },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { padding: spacing.lg },
 
-  header: { flexDirection: "row", justifyContent: "space-between", marginBottom: 20 },
-  brand: { color: "#FFF", fontSize: 20, fontWeight: "800" },
-  subtitle: { color: MUTED, fontSize: 11 },
-  logout: { color: SOFT, fontSize: 12 },
+  header: { flexDirection: "row", justifyContent: "space-between", marginBottom: spacing.lg },
+  brand: { color: colors.textPrimary, fontSize: 20, fontWeight: "800" },
+  subtitle: { color: colors.textTertiary, fontSize: 11 },
+  logout: { color: colors.primary, fontSize: 12, fontWeight: "600" },
 
   storeCard: {
     flexDirection: "row",
-    gap: 12,
-    backgroundColor: CARD,
-    borderRadius: 22,
-    padding: 18,
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
     borderWidth: 1,
-    borderColor: BORDER,
-    marginBottom: 16,
+    borderColor: colors.border,
+    marginBottom: spacing.lg,
   },
-  storeName: { color: "#FFF", fontSize: 17, fontWeight: "700" },
-  storeAddress: { color: SOFT, fontSize: 12 },
-  storeMeta: { color: MUTED, fontSize: 11, marginTop: 6 },
-  switchLabel: { color: SOFT, fontSize: 12, marginBottom: 4 },
-
-
+  storeName: { color: colors.textPrimary, fontSize: 17, fontWeight: "700" },
+  storeAddress: { color: colors.textSecondary, fontSize: 12 },
+  storeMeta: { color: colors.textTertiary, fontSize: 11, marginTop: 6 },
+  switchLabel: { color: colors.textSecondary, fontSize: 12, marginBottom: 4 },
 
   tabs: {
     flexDirection: "row",
-    backgroundColor: CARD,
-    borderRadius: 999,
+    backgroundColor: colors.surface,
+    borderRadius: radius.full,
     padding: 4,
-    marginBottom: 16,
+    marginBottom: spacing.lg,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: colors.border,
     gap: 6,
   },
-  tab: { alignItems: "center", paddingVertical: 8, paddingHorizontal: 19 },
-  tabActive: { backgroundColor: PRIMARY, borderRadius: 999 },
-  tabText: { color: MUTED, fontSize: 12, fontWeight: "600" },
-
-
-
+  tab: { alignItems: "center", paddingVertical: spacing.sm, paddingHorizontal: 19 },
+  tabActive: { backgroundColor: colors.primary, borderRadius: radius.full },
+  tabText: { color: colors.textTertiary, fontSize: 12, fontWeight: "600" },
 
   emptyCard: {
-    backgroundColor: CARD_SOFT,
-    borderRadius: 20,
-    padding: 20,
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: colors.border,
   },
-  emptyTitle: { color: "#FFF", fontSize: 14, fontWeight: "700" },
-  emptyText: { color: MUTED, fontSize: 12, marginTop: 6 },
+  emptyTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: "700" },
+  emptyText: { color: colors.textTertiary, fontSize: 12, marginTop: 6 },
 
   orderRow: {
-    backgroundColor: CARD,
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 8,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
   },
-  orderCode: { color: "#FFF", fontWeight: "700" },
-  orderStatus: { color: MUTED, fontSize: 12 },
+  orderCode: { color: colors.textPrimary, fontWeight: "700" },
+  orderStatus: { color: colors.textTertiary, fontSize: 12 },
 
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.65)",
+    backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "center",
     alignItems: "center",
   },
   popup: {
     width: "92%",
-    backgroundColor: CARD,
+    backgroundColor: colors.surface,
     borderRadius: 26,
-    padding: 20,
+    padding: spacing.lg,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: colors.border,
   },
-  popupTitle: { color: "#FFF", fontSize: 18, fontWeight: "800", textAlign: "center" },
-  orderCodeBig: { color: "#D8D3FF", fontSize: 24, fontWeight: "800", textAlign: "center" },
-  countdown: { textAlign: "center", color: "#FF6B6B", fontWeight: "700", marginBottom: 8 },
+  popupTitle: { color: colors.textPrimary, fontSize: 18, fontWeight: "800", textAlign: "center" },
+  orderCodeBig: { color: colors.textPrimary, fontSize: 24, fontWeight: "800", textAlign: "center" },
+  countdown: { textAlign: "center", color: colors.error, fontWeight: "700", marginBottom: 8 },
 
-  itemRow: { flexDirection: "row", gap: 12, marginBottom: 10, alignItems: "center" },
-  itemImg: { width: 48, height: 48, borderRadius: 10 },
-  itemName: { color: "#FFF", fontWeight: "600" },
-  itemQty: { color: MUTED, fontSize: 12 },
+  itemRow: { flexDirection: "row", gap: spacing.md, marginBottom: 10, alignItems: "center" },
+  itemImg: { width: 48, height: 48, borderRadius: radius.sm },
+  itemName: { color: colors.textPrimary, fontWeight: "600" },
+  itemQty: { color: colors.textTertiary, fontSize: 12 },
 
-  actions: { flexDirection: "row", gap: 12, marginTop: 14 },
-  btn: { flex: 1, paddingVertical: 14, borderRadius: 14, alignItems: "center" },
-  btnText: { color: "#FFF", fontWeight: "800" },
+  actions: { flexDirection: "row", gap: spacing.md, marginTop: 14 },
+  btn: { flex: 1, paddingVertical: 14, borderRadius: radius.md, alignItems: "center" },
+  btnText: { color: colors.surface, fontWeight: "800" },
 
   scannerOverlay: {
     flex: 1,
@@ -814,7 +836,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.4)",
   },
   scanText: {
-    color: "#fff",
+    color: colors.surface,
     fontSize: 18,
     fontWeight: "700",
   },
@@ -825,64 +847,62 @@ const styles = StyleSheet.create({
     backgroundColor: "#000",
   },
   successText: {
-    color: "#2ecc71",
+    color: colors.success,
     fontSize: 18,
     fontWeight: "700",
     marginTop: 12,
   },
   errorText: {
-    color: "#e74c3c",
+    color: colors.error,
     fontSize: 16,
     marginTop: 12,
   },
   retry: {
-    color: "#fff",
+    color: colors.surface,
     marginTop: 16,
     fontWeight: "600",
   },
 
   paymentRow: {
-    backgroundColor: CARD,
-    borderRadius: 14,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     padding: 14,
-    marginBottom: 8,
+    marginBottom: spacing.sm,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
   paymentCode: {
-    color: "#FFF",
+    color: colors.textPrimary,
     fontWeight: "700",
   },
   paymentMeta: {
-    color: MUTED,
+    color: colors.textTertiary,
     fontSize: 11,
     marginTop: 4,
   },
   paymentAmount: {
-    color: "#2ECC71",
+    color: colors.success,
     fontSize: 16,
     fontWeight: "800",
   },
   paymentFooter: {
-    marginTop: 12,
-    padding: 16,
-    backgroundColor: CARD_SOFT,
-    borderRadius: 16,
+    marginTop: spacing.md,
+    padding: spacing.lg,
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: colors.border,
     flexDirection: "row",
     justifyContent: "space-between",
   },
   paymentFooterText: {
-    color: MUTED,
+    color: colors.textTertiary,
     fontWeight: "600",
   },
   paymentFooterAmount: {
-    color: "#2ECC71",
+    color: colors.success,
     fontSize: 18,
     fontWeight: "800",
   },
-
-
 });

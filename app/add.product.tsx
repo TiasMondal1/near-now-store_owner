@@ -14,19 +14,10 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import { getSession } from "../session";
+import { config } from "../lib/config";
+import { colors, radius, spacing } from "../lib/theme";
 
-const API_BASE = "http://192.168.1.117:3001";
-
-const COLORS = {
-  bg: "#05030A",
-  card: "#120D24",
-  soft: "#181134",
-  border: "#2F245A",
-  primary: "#7B6EF6",
-  text: "#FFFFFF",
-  muted: "#9C94D7",
-  danger: "#FF6B6B",
-};
+const API_BASE = config.API_BASE;
 
 const UNITS = ["kg", "g", "l", "ml", "pcs", "units", "bunch", "pack"];
 
@@ -36,9 +27,10 @@ export default function AddProductScreen() {
   const [mode, setMode] = useState<"catalog" | "custom">("catalog");
 
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState<any[]>([]);
+  const [allCatalogProducts, setAllCatalogProducts] = useState<any[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  /** Selected catalog items: { product, quantity } — quantity is the stock the store will have */
+  const [selected, setSelected] = useState<Array<{ product: any; quantity: number }>>([]);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const [name, setName] = useState("");
@@ -63,32 +55,42 @@ export default function AddProductScreen() {
       const res = await fetch(`${API_BASE}/store-owner/stores`, {
         headers: { Authorization: `Bearer ${s.token}` },
       });
-      const json = await res.json();
+      const raw = await res.text();
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        json = null;
+      }
       if (json?.stores?.length) setStoreId(json.stores[0].id);
     })();
   }, []);
 
+  // Load all master_products as soon as screen opens (so catalog tab is fast)
   useEffect(() => {
-    if (mode !== "catalog" || query.trim().length < 2) {
-      setResults([]);
-      return;
-    }
-
-    const run = async () => {
+    let cancelled = false;
+    (async () => {
       try {
-        setLoading(true);
+        setCatalogLoading(true);
         const res = await fetch(
-          `${API_BASE}/master-products/search?q=${encodeURIComponent(query)}`
+          `${API_BASE}/api/products/master-products?isActive=true`
         );
-        const json = await res.json();
-        setResults(json.products || []);
+        const raw = await res.text();
+        let data: any = null;
+        try {
+          data = raw ? JSON.parse(raw) : null;
+        } catch {
+          data = null;
+        }
+        if (!cancelled) setAllCatalogProducts(Array.isArray(data) ? data : []);
+      } catch {
+        if (!cancelled) setAllCatalogProducts([]);
       } finally {
-        setLoading(false);
+        if (!cancelled) setCatalogLoading(false);
       }
-    };
-
-    run();
-  }, [query, mode]);
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const pickFromCamera = async () => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -138,17 +140,22 @@ export default function AddProductScreen() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            items: selected.map((p) => ({
-              masterProductId: p.id,
-              price: p.base_price,
-              quantity: 0,
+            items: selected.map(({ product, quantity }) => ({
+              masterProductId: product.id,
+              price: product.base_price,
+              quantity: Math.max(0, quantity),
             })),
           }),
         }
       );
-
-      const json = await res.json();
-      if (!res.ok || !json.success) {
+      const raw = await res.text();
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        json = null;
+      }
+      if (!res.ok || !json?.success) {
         Alert.alert("Error", "Failed to add products.");
         return;
       }
@@ -156,7 +163,7 @@ export default function AddProductScreen() {
       setSelected([]);
       setQuery("");
       setConfirmOpen(false);
-      Alert.alert("Success", "Products added.");
+      Alert.alert("Success", "Products added. You can adjust stock in Inventory.");
     } finally {
       setSaving(false);
     }
@@ -200,9 +207,14 @@ export default function AddProductScreen() {
           }),
         }
       );
-
-      const json = await res.json();
-      if (!res.ok || !json.success) {
+      const resRaw = await res.text();
+      let json: any = null;
+      try {
+        json = resRaw ? JSON.parse(resRaw) : null;
+      } catch {
+        json = null;
+      }
+      if (!res.ok || !json?.success) {
         Alert.alert("Error", "Failed to add product.");
         return;
       }
@@ -243,49 +255,96 @@ export default function AddProductScreen() {
           <>
             <TextInput
               placeholder="Search catalog"
-              placeholderTextColor={COLORS.muted}
+              placeholderTextColor={colors.textTertiary}
               style={styles.search}
               value={query}
               onChangeText={setQuery}
             />
 
-            {loading && <ActivityIndicator color={COLORS.primary} />}
+            {catalogLoading && <ActivityIndicator color={colors.primary} />}
 
-            {results.map((p) => {
-              const checked = selected.some((x) => x.id === p.id);
+            {(() => {
+              const q = query.trim().toLowerCase();
+              const filtered = q
+                ? allCatalogProducts.filter(
+                    (p) =>
+                      [p.name, p.brand, p.category]
+                        .filter(Boolean)
+                        .some((s: string) =>
+                          String(s).toLowerCase().includes(q)
+                        )
+                  )
+                : allCatalogProducts;
+              return filtered.map((p) => {
+              const entry = selected.find((x) => x.product.id === p.id);
+              const checked = !!entry;
+              const qty = entry?.quantity ?? 0;
               return (
-                <TouchableOpacity
-                  key={p.id}
-                  style={styles.catalogItem}
-                  onPress={() =>
-                    setSelected((prev) =>
-                      checked ? prev.filter((x) => x.id !== p.id) : [...prev, p]
-                    )
-                  }
-                >
-                  <View style={styles.amountCol}>
-                    <Text style={styles.amountText}>₹{p.base_price}</Text>
-                  </View>
+                <View key={p.id} style={styles.catalogItem}>
+                  <TouchableOpacity
+                    style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
+                    onPress={() =>
+                      setSelected((prev) =>
+                        checked
+                          ? prev.filter((x) => x.product.id !== p.id)
+                          : [...prev, { product: p, quantity: 1 }]
+                      )
+                    }
+                  >
+                    <View style={styles.amountCol}>
+                      <Text style={styles.amountText}>₹{p.base_price}</Text>
+                    </View>
 
-                  <Image source={{ uri: p.image_url }} style={styles.thumb} />
+                    <Image source={{ uri: p.image_url }} style={styles.thumb} />
 
-                  <View style={styles.catalogText}>
-                    <Text numberOfLines={2} style={styles.catalogTitle}>
-                      {p.name}
-                    </Text>
-                    <Text style={styles.catalogMeta}>
-                      {p.brand ? `${p.brand} · ` : ""}
-                      {p.category} · {p.unit}
-                    </Text>
-                  </View>
+                    <View style={styles.catalogText}>
+                      <Text numberOfLines={2} style={styles.catalogTitle}>
+                        {p.name}
+                      </Text>
+                      <Text style={styles.catalogMeta}>
+                        {p.brand ? `${p.brand} · ` : ""}
+                        {p.category} · {p.unit}
+                      </Text>
+                    </View>
 
-                  <Text style={styles.check}>
-                    {checked ? "✓" : "○"}
-                  </Text>
-                </TouchableOpacity>
-
+                    {checked ? (
+                      <View style={styles.qtyStepper}>
+                        <TouchableOpacity
+                          style={styles.qtyStepperBtn}
+                          onPress={() =>
+                            setSelected((prev) =>
+                              prev.map((item) =>
+                                item.product.id === p.id
+                                  ? { ...item, quantity: Math.max(0, item.quantity - 1) }
+                                  : item
+                              )
+                            )}
+                        >
+                          <Text style={styles.qtyStepperText}>−</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.qtyStepperNum}>{qty}</Text>
+                        <TouchableOpacity
+                          style={styles.qtyStepperBtn}
+                          onPress={() =>
+                            setSelected((prev) =>
+                              prev.map((item) =>
+                                item.product.id === p.id
+                                  ? { ...item, quantity: item.quantity + 1 }
+                                  : item
+                              )
+                            )}
+                        >
+                          <Text style={styles.qtyStepperText}>+</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <Text style={styles.check}>○</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
               );
-            })}
+              });
+            })()}
           </>
         )}
 
@@ -305,7 +364,7 @@ export default function AddProductScreen() {
                     onPress={() => setUnit(u)}
                     style={[styles.chip, unit === u && styles.chipActive]}
                   >
-                    <Text style={{ color: COLORS.text }}>{u}</Text>
+                    <Text style={{ color: colors.textPrimary }}>{u}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -321,7 +380,7 @@ export default function AddProductScreen() {
                     <Btn label="Camera" onPress={pickFromCamera} />
                     <Btn label="Gallery" onPress={pickFromGallery} />
                     <TouchableOpacity onPress={() => setImageUri(null)}>
-                      <Text style={{ color: COLORS.danger }}>Remove</Text>
+                      <Text style={{ color: colors.error }}>Remove</Text>
                     </TouchableOpacity>
                   </View>
                 </>
@@ -348,11 +407,11 @@ export default function AddProductScreen() {
 
       {mode === "catalog" && selected.length > 0 && (
         <View style={styles.actionBar}>
-          <Text style={{ color: COLORS.text }}>
-            {selected.length} selected
+          <Text style={{ color: colors.textPrimary }}>
+            {selected.length} product{selected.length !== 1 ? "s" : ""} · Set quantities above
           </Text>
           <TouchableOpacity style={styles.primaryBtn} onPress={() => setConfirmOpen(true)}>
-            <Text style={styles.primaryText}>Add</Text>
+            <Text style={styles.primaryText}>Add to store</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -369,12 +428,18 @@ export default function AddProductScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>
-              Add {selected.length} products?
+              Add {selected.length} product{selected.length !== 1 ? "s" : ""} to store?
             </Text>
             <Text style={styles.modalText}>
-              Products will be added using catalog data.
+              Stock (quantities) will appear in Inventory. Customers see these when ordering.
             </Text>
-
+            <ScrollView style={{ maxHeight: 200, marginVertical: 8 }}>
+              {selected.map(({ product, quantity }) => (
+                <Text key={product.id} style={styles.modalRow}>
+                  {product.name} × {quantity}
+                </Text>
+              ))}
+            </ScrollView>
             <View style={styles.row}>
               <Btn label="Cancel" onPress={() => setConfirmOpen(false)} />
               <Btn label="Confirm" onPress={confirmAddCatalog} primary />
@@ -392,7 +457,7 @@ function Tab({ label, active, onPress }: any) {
       onPress={onPress}
       style={[styles.tab, active && styles.tabActive]}
     >
-      <Text style={{ color: active ? COLORS.text : COLORS.muted }}>
+      <Text style={{ color: active ? colors.textPrimary : colors.textTertiary }}>
         {label}
       </Text>
     </TouchableOpacity>
@@ -407,7 +472,7 @@ function Field({ label, value, onChange, ...props }: any) {
         value={value}
         onChangeText={onChange}
         style={styles.input}
-        placeholderTextColor={COLORS.muted}
+        placeholderTextColor={colors.textTertiary}
         {...props}
       />
     </>
@@ -418,119 +483,135 @@ function Btn({ label, onPress, primary }: any) {
   return (
     <TouchableOpacity
       onPress={onPress}
-      style={[styles.btn, primary && { backgroundColor: COLORS.primary }]}
+      style={[styles.btn, primary && { backgroundColor: colors.primary }]}
     >
-      <Text style={{ color: primary ? "#fff" : COLORS.text }}>{label}</Text>
+      <Text style={{ color: primary ? colors.surface : colors.textPrimary }}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.bg },
-  header: { padding: 16 },
-  title: { color: COLORS.text, fontSize: 22, fontWeight: "700" },
-  subtitle: { color: COLORS.muted },
+  safe: { flex: 1, backgroundColor: colors.background },
+  header: { padding: spacing.lg },
+  title: { color: colors.textPrimary, fontSize: 22, fontWeight: "700" },
+  subtitle: { color: colors.textTertiary },
 
-  tabs: { flexDirection: "row", borderBottomWidth: 1, borderColor: COLORS.border },
+  tabs: { flexDirection: "row", borderBottomWidth: 1, borderColor: colors.border },
   tab: { flex: 1, padding: 14, alignItems: "center" },
-  tabActive: { borderBottomWidth: 2, borderColor: COLORS.primary },
+  tabActive: { borderBottomWidth: 2, borderColor: colors.primary },
 
   search: {
-    backgroundColor: COLORS.soft,
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     padding: 14,
-    color: COLORS.text,
+    color: colors.textPrimary,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    marginBottom: 12,
+    borderColor: colors.border,
+    marginBottom: spacing.md,
   },
 
   catalogItem: {
     flexDirection: "row",
-    gap: 12,
+    gap: spacing.md,
     padding: 14,
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: colors.border,
     marginBottom: 10,
   },
 
-  thumb: { width: 48, height: 48, borderRadius: 10 },
-  catalogTitle: { color: COLORS.text, fontWeight: "600" },
-  catalogMeta: { color: COLORS.muted, fontSize: 12 },
+  thumb: { width: 48, height: 48, borderRadius: radius.sm },
+  catalogTitle: { color: colors.textPrimary, fontWeight: "600" },
+  catalogMeta: { color: colors.textTertiary, fontSize: 12 },
+  qtyStepper: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  qtyStepperBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  qtyStepperText: { fontSize: 16, fontWeight: "700", color: colors.primary },
+  qtyStepperNum: { minWidth: 24, textAlign: "center", fontWeight: "700", color: colors.textPrimary },
 
   card: {
-    backgroundColor: COLORS.card,
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: colors.border,
     marginBottom: 14,
   },
 
-  label: { color: COLORS.muted, marginBottom: 6 },
+  label: { color: colors.textTertiary, marginBottom: 6 },
   input: {
-    backgroundColor: COLORS.soft,
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     padding: 12,
-    color: COLORS.text,
+    color: colors.textPrimary,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: colors.border,
     marginBottom: 14,
   },
 
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   chip: {
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: colors.border,
   },
-  chipActive: { backgroundColor: COLORS.primary },
+  chipActive: { backgroundColor: colors.primary },
 
-  sectionTitle: { color: COLORS.text, fontWeight: "600", marginBottom: 12 },
+  sectionTitle: { color: colors.textPrimary, fontWeight: "600", marginBottom: spacing.md },
 
   imagePreview: {
     width: 100,
     height: 100,
-    borderRadius: 12,
+    borderRadius: radius.md,
     marginBottom: 10,
   },
 
-  row: { flexDirection: "row", gap: 12, alignItems: "center" },
+  row: { flexDirection: "row", gap: spacing.md, alignItems: "center" },
 
   btn: {
     paddingVertical: 10,
     paddingHorizontal: 14,
-    borderRadius: 10,
+    borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: colors.border,
   },
 
   actionBar: {
     padding: 14,
     borderTopWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.card,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
 
   primaryBtn: {
-    backgroundColor: COLORS.primary,
+    backgroundColor: colors.primary,
     paddingVertical: 12,
     paddingHorizontal: 20,
-    borderRadius: 12,
+    borderRadius: radius.md,
   },
 
   primaryBtnFull: {
-    backgroundColor: COLORS.primary,
-    margin: 16,
-    paddingVertical: 16,
-    borderRadius: 14,
+    backgroundColor: colors.primary,
+    margin: spacing.lg,
+    paddingVertical: spacing.lg,
+    borderRadius: radius.md,
     alignItems: "center",
   },
 
@@ -540,7 +621,7 @@ const styles = StyleSheet.create({
   },
 
   amountText: {
-    color: "#2ECC71",
+    color: colors.success,
     fontWeight: "800",
     fontSize: 14,
   },
@@ -550,33 +631,32 @@ const styles = StyleSheet.create({
   },
 
   check: {
-    color: COLORS.muted,
+    color: colors.textTertiary,
     fontSize: 18,
     marginLeft: 8,
   },
 
-
   catalogPrice: {
-    color: COLORS.muted,
+    color: colors.textTertiary,
     fontSize: 12,
     marginTop: 2,
   },
 
-
-  primaryText: { color: "#fff", fontWeight: "700" },
+  primaryText: { color: colors.surface, fontWeight: "700" },
 
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "center",
     alignItems: "center",
   },
   modal: {
-    backgroundColor: COLORS.card,
-    padding: 20,
-    borderRadius: 16,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    borderRadius: radius.lg,
     width: "85%",
   },
-  modalTitle: { color: COLORS.text, fontSize: 18, fontWeight: "700" },
-  modalText: { color: COLORS.muted, marginVertical: 12 },
+  modalTitle: { color: colors.textPrimary, fontSize: 18, fontWeight: "700" },
+  modalText: { color: colors.textTertiary, marginVertical: 12 },
+  modalRow: { color: colors.textSecondary, fontSize: 13, marginBottom: 4 },
 });

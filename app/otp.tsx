@@ -14,10 +14,10 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, router } from "expo-router";
 import { saveSession } from "../session";
+import { config } from "../lib/config";
+import { colors, radius, spacing } from "../lib/theme";
 
-const PRIMARY = "#765fba";
-const BG = "#05030A";
-const API_BASE = "http://192.168.1.117:3001";
+const API_BASE = config.API_BASE;
 
 export default function StoreOwnerOtpScreen() {
   const params = useLocalSearchParams();
@@ -71,20 +71,17 @@ export default function StoreOwnerOtpScreen() {
   const handleVerify = async () => {
     if (!isValid || loading) return;
     if (!phone || !sessionId) {
-      Alert.alert("Error", "Missing verification details.");
+      Alert.alert("Error", "Missing verification details. Go back and try again.");
       return;
     }
 
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/auth/phone/verify`, {
+      const url = `${API_BASE}/api/auth/verify-otp`;
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          phone,
-          sessionId,
-          otp,
-        }),
+        body: JSON.stringify({ phone, otp, role: "store_owner" }),
       });
 
       const raw = await res.text();
@@ -92,46 +89,76 @@ export default function StoreOwnerOtpScreen() {
       try {
         json = raw ? JSON.parse(raw) : null;
       } catch {
-        console.log("Non-JSON from /auth/phone/verify:", raw);
+        console.warn("OTP verify: non-JSON response", raw?.slice(0, 200));
       }
 
-      if (!res.ok || !json || json.success === false) {
-        console.log("OTP verify error:", res.status, raw);
-        Alert.alert("Error", json?.error || "Invalid OTP. Please try again.");
+      if (!res.ok) {
+        const msg =
+          json?.error ||
+          json?.message ||
+          (raw?.slice(0, 100) || `Server error ${res.status}`);
+        console.warn("OTP verify failed", res.status, msg);
+        Alert.alert(
+          "Verification failed",
+          msg + (res.status === 401 ? "\n\nCheck that the code is correct and not expired." : "")
+        );
         return;
       }
 
-      if (json.mode === "login" && json.token && json.user) {
+      if (!json || json.success === false) {
+        Alert.alert(
+          "Error",
+          json?.error || json?.message || "Invalid response. Please try again."
+        );
+        return;
+      }
+
+      const token = json.token ?? json.data?.token ?? json.access_token;
+      const user = json.user ?? json.data?.user;
+      const isStoreOwnerRole =
+        user && (user.role === "store_owner" || user.role === "shopkeeper");
+
+      // Existing user: we have token + user (and store-owner role) → always go to dashboard
+      if (token && user && isStoreOwnerRole) {
         await saveSession({
-          token: json.token,
+          token,
           user: {
-            id: json.user.id,
-            name: json.user.name,
-            role: json.user.role,
-            isActivated: json.user.isActivated ?? json.user.is_activated ?? false,
-            phone: json.user.phone ?? phone,
-            email: json.user.email ?? undefined,
+            id: user.id,
+            name: user.name ?? user.full_name ?? "Store Owner",
+            role: user.role ?? "store_owner",
+            isActivated: user.isActivated ?? user.is_activated ?? true,
+            phone: user.phone ?? phone,
+            email: user.email ?? undefined,
           },
         });
-
         router.replace("/owner-home");
         return;
       }
 
-      if (json.mode === "signup") {
+      // New user: backend said signup or no token/user → show setup store
+      if (json.mode === "signup" || !token || !user) {
         router.replace({
           pathname: "/store-owner-signup",
-          params: {
-            phone,
-          },
+          params: { phone },
         });
         return;
       }
 
-      Alert.alert("Error", "Unexpected response from server.");
-    } catch (e) {
-      console.log("Network error verifying OTP:", e);
-      Alert.alert("Error", "Network error. Please try again.");
+      Alert.alert("Error", json?.error || json?.message || "Unexpected response from server.");
+    } catch (e: any) {
+      const msg =
+        e?.message || String(e);
+      const isNetwork =
+        msg.includes("Network") ||
+        msg.includes("fetch") ||
+        msg.includes("Failed to connect");
+      console.warn("OTP verify error", e);
+      Alert.alert(
+        "Error",
+        isNetwork
+          ? `Cannot reach server. Check that the app is using the correct API URL (${API_BASE}) and the server is running.`
+          : "Something went wrong. Please try again."
+      );
     } finally {
       setLoading(false);
     }
@@ -143,7 +170,7 @@ export default function StoreOwnerOtpScreen() {
 
     try {
       setResendLoading(true);
-      const res = await fetch(`${API_BASE}/auth/phone/start`, {
+      const res = await fetch(`${API_BASE}/api/auth/send-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone }),
@@ -203,7 +230,9 @@ export default function StoreOwnerOtpScreen() {
               {digits.map((d, idx) => (
                 <TextInput
                   key={idx}
-                  ref={(el) => (inputsRef.current[idx] = el)}
+                  ref={(el) => {
+                  inputsRef.current[idx] = el;
+                }}
                   style={styles.otpInput}
                   keyboardType="number-pad"
                   maxLength={1}
@@ -258,7 +287,7 @@ export default function StoreOwnerOtpScreen() {
             </View>
 
             <TouchableOpacity
-              onPress={() => router.back()}
+              onPress={() => router.replace("/App")}
               activeOpacity={0.85}
               style={styles.backRow}
             >
@@ -274,46 +303,46 @@ export default function StoreOwnerOtpScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: colors.background,
   },
   flex: {
     flex: 1,
   },
   container: {
     flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 24,
-    paddingBottom: 24,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.xl,
     justifyContent: "space-between",
   },
   topSection: {
-    paddingTop: 24,
-    gap: 8,
+    paddingTop: spacing.xl,
+    gap: spacing.sm,
   },
   appTag: {
     fontSize: 11,
-    color: "#9C94D7",
+    color: colors.textTertiary,
     textTransform: "uppercase",
     letterSpacing: 1.4,
   },
   title: {
     fontSize: 24,
     fontWeight: "700",
-    color: "#FFFFFF",
+    color: colors.textPrimary,
     letterSpacing: 0.5,
   },
   subtitle: {
     fontSize: 13,
-    color: "#C4BDEA",
+    color: colors.textSecondary,
   },
   highlight: {
-    color: "#FFFFFF",
+    color: colors.textPrimary,
     fontWeight: "600",
   },
   smallText: {
     fontSize: 12,
-    color: "#948BD0",
-    marginTop: 4,
+    color: colors.textTertiary,
+    marginTop: spacing.xs,
   },
   otpBlock: {
     alignItems: "center",
@@ -322,43 +351,44 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     gap: 10,
-    marginTop: 24,
-    marginBottom: 8,
+    marginTop: spacing.xl,
+    marginBottom: spacing.sm,
   },
   otpInput: {
     width: 44,
     height: 52,
-    borderRadius: 14,
+    borderRadius: radius.md,
     textAlign: "center",
     fontSize: 20,
     fontWeight: "600",
-    color: "#FFFFFF",
-    backgroundColor: "#120D24",
+    color: colors.textPrimary,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "#392B6A",
+    borderColor: colors.border,
   },
   otpHint: {
     fontSize: 11,
-    color: "#7A70A6",
-    marginTop: 4,
+    color: colors.textTertiary,
+    marginTop: spacing.xs,
   },
   bottomSection: {
-    gap: 12,
+    gap: spacing.md,
   },
   primaryButton: {
-    borderRadius: 999,
+    borderRadius: radius.md,
     paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: PRIMARY,
+    backgroundColor: colors.primary,
   },
   primaryButtonText: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#FFFFFF",
+    color: colors.surface,
   },
   buttonDisabled: {
-    backgroundColor: "rgba(118, 95, 186, 0.45)",
+    backgroundColor: colors.primaryDark,
+    opacity: 0.7,
   },
   resendRow: {
     flexDirection: "row",
@@ -368,23 +398,24 @@ const styles = StyleSheet.create({
   },
   resendText: {
     fontSize: 12,
-    color: "#7A70A6",
+    color: colors.textTertiary,
   },
   resendTimer: {
     fontSize: 12,
-    color: "#C4BDEA",
+    color: colors.textSecondary,
   },
   resendLink: {
     fontSize: 12,
-    color: "#FFFFFF",
-    fontWeight: "500",
+    color: colors.primary,
+    fontWeight: "600",
   },
   backRow: {
     alignItems: "center",
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
   backText: {
     fontSize: 12,
-    color: "#C4BDEA",
+    color: colors.primary,
+    fontWeight: "500",
   },
 });

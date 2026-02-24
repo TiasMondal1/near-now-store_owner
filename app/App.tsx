@@ -12,10 +12,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import { config } from "../lib/config";
+import { colors, radius, spacing } from "../lib/theme";
 
-const PRIMARY = "#765fba";
-const BG = "#05030A";
-const API_BASE = "http://192.168.1.117:3001";
+const API_BASE = config.API_BASE;
 
 export default function StoreOwnerPhoneScreen() {
   const router = useRouter();
@@ -38,38 +38,49 @@ export default function StoreOwnerPhoneScreen() {
     let res: Response | null = null;
     let json: any = null;
 
-
     try {
       setLoading(true);
-
-      res = await fetch(`${API_BASE}/auth/phone/start`, {
+      const url = `${API_BASE}/api/auth/send-otp`;
+      res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: fullPhone }),
       });
-
-
-      json = await res.json();
-    } catch (e) {
-      Alert.alert("Error", "Network or parsing error before navigation.");
+      const raw = await res.text();
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        json = null;
+      }
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      const isNetwork = msg.includes("Network") || msg.includes("fetch") || msg.includes("connect");
+      Alert.alert(
+        "Cannot reach server",
+        isNetwork
+          ? `App is using: ${API_BASE}\n\n• Backend must be running and listen on 0.0.0.0:3000.\n• Phone and computer on same Wi‑Fi.\n• Try: npx expo start -c (clear cache), then reload the app.`
+          : "Network or parsing error. Please try again."
+      );
       setLoading(false);
       return;
     }
 
-    if (!res.ok || !json.success) {
-      Alert.alert("Error", json.error || "Unable to start verification.");
+    if (!res!.ok || !json?.success) {
+      Alert.alert(
+        "Error",
+        json?.error || json?.message || "Unable to send OTP. Check that the near-and-now backend is running and Twilio is configured."
+      );
       setLoading(false);
       return;
     }
 
     try {
-
       router.push({
         pathname: "/otp",
         params: {
           phone: fullPhone,
-          sessionId: json.sessionId,
-          exists: json.exists ? "true" : "false",
+          sessionId: "twilio",
+          exists: "false",
           role: "store_owner",
         },
       });
@@ -80,18 +91,6 @@ export default function StoreOwnerPhoneScreen() {
     }
   };
 
-  const handleContinueWithPassword = () => {
-    if (!isValid) return;
-    const fullPhone = `+91${phone}`;
-    router.push({
-      pathname: "/password-login",
-      params: {
-        phone: fullPhone,
-        role: "store_owner",
-      },
-    });
-  };
-
   return (
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
@@ -100,12 +99,18 @@ export default function StoreOwnerPhoneScreen() {
         keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
       >
         <View style={styles.container}>
+          <TouchableOpacity
+            onPress={() => router.replace("/landing")}
+            style={styles.backButton}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.backButtonText}>← Back</Text>
+          </TouchableOpacity>
           <View style={styles.topSection}>
             <Text style={styles.appTag}>Near&Now · Store Owner</Text>
             <Text style={styles.title}>Let&apos;s get your store in</Text>
             <Text style={styles.subtitle}>
-              Login with your phone number to manage orders, inventory and
-              availability.
+              Login with your phone number to manage orders, inventory and availability.
             </Text>
           </View>
 
@@ -120,7 +125,7 @@ export default function StoreOwnerPhoneScreen() {
                 value={phone}
                 onChangeText={handleChange}
                 placeholder="XXXXXXXXXX"
-                placeholderTextColor="#8278A6"
+                placeholderTextColor={colors.textTertiary}
                 keyboardType="number-pad"
                 maxLength={10}
               />
@@ -141,31 +146,17 @@ export default function StoreOwnerPhoneScreen() {
               ]}
             >
               {loading ? (
-                <ActivityIndicator color="#FFFFFF" />
+                <ActivityIndicator color={colors.surface} />
               ) : (
                 <Text style={styles.primaryButtonText}>Continue with OTP</Text>
               )}
             </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={handleContinueWithPassword}
-              activeOpacity={isValid ? 0.85 : 1}
-              disabled={!isValid}
-              style={styles.secondaryButton}
-            >
-              <Text
-                style={[
-                  styles.secondaryButtonText,
-                  !isValid && styles.secondaryButtonTextDisabled,
-                ]}
-              >
-                Login with password
-              </Text>
-            </TouchableOpacity>
-
             <Text style={styles.termsText}>
-              By continuing as a store owner, you agree to manage live inventory
-              and orders responsibly.
+              By continuing as a store owner, you agree to manage live inventory and orders responsibly.
+            </Text>
+            <Text style={styles.apiUrlText} numberOfLines={1}>
+              API: {API_BASE}
             </Text>
           </View>
         </View>
@@ -177,116 +168,119 @@ export default function StoreOwnerPhoneScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: colors.background,
   },
   flex: {
     flex: 1,
   },
   container: {
     flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 24,
-    paddingBottom: 24,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xl,
     justifyContent: "space-between",
   },
+  backButton: {
+    alignSelf: "flex-start",
+    paddingVertical: spacing.sm,
+    paddingRight: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  backButtonText: {
+    fontSize: 15,
+    color: colors.primary,
+    fontWeight: "600",
+  },
   topSection: {
-    paddingTop: 24,
-    gap: 8,
+    gap: spacing.sm,
   },
   appTag: {
     fontSize: 11,
-    color: "#9C94D7",
+    color: colors.textTertiary,
     textTransform: "uppercase",
     letterSpacing: 1.4,
   },
   title: {
     fontSize: 28,
     fontWeight: "700",
-    color: "#FFFFFF",
+    color: colors.textPrimary,
     letterSpacing: 0.5,
   },
   subtitle: {
-    fontSize: 13,
-    color: "#C4BDEA",
-    marginTop: 4,
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginTop: spacing.xs,
   },
   inputBlock: {
-    marginTop: 16,
+    marginTop: spacing.lg,
   },
   label: {
     fontSize: 13,
-    color: "#B3A9E6",
-    marginBottom: 8,
+    color: colors.textSecondary,
+    marginBottom: spacing.sm,
   },
   phoneRow: {
     flexDirection: "row",
     alignItems: "center",
-    borderRadius: 16,
-    backgroundColor: "#120D24",
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "#392B6A",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
   countryCodeContainer: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: "#1A1234",
-    borderWidth: 1,
-    borderColor: "#4A3A80",
-    marginRight: 8,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceVariant,
+    marginRight: spacing.sm,
   },
   countryCodeText: {
-    color: "#FFFFFF",
+    color: colors.textPrimary,
     fontSize: 14,
     fontWeight: "600",
   },
   phoneInput: {
     flex: 1,
-    paddingVertical: 8,
+    paddingVertical: spacing.sm,
     fontSize: 16,
-    color: "#FFFFFF",
+    color: colors.textPrimary,
   },
   helperText: {
-    marginTop: 8,
+    marginTop: spacing.sm,
     fontSize: 12,
-    color: "#7A70A6",
+    color: colors.textTertiary,
   },
   bottomSection: {
-    gap: 12,
+    gap: spacing.md,
   },
   primaryButton: {
-    borderRadius: 999,
+    borderRadius: radius.md,
     paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: PRIMARY,
+    backgroundColor: colors.primary,
   },
   primaryButtonText: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#FFFFFF",
+    color: colors.surface,
   },
   buttonDisabled: {
-    backgroundColor: "rgba(118, 95, 186, 0.45)",
-  },
-  secondaryButton: {
-    alignItems: "center",
-    paddingVertical: 6,
-  },
-  secondaryButtonText: {
-    fontSize: 13,
-    color: "#C4BDEA",
-    fontWeight: "500",
-  },
-  secondaryButtonTextDisabled: {
-    opacity: 0.4,
+    backgroundColor: colors.primaryDark,
+    opacity: 0.7,
   },
   termsText: {
     fontSize: 11,
-    color: "#7A70A6",
+    color: colors.textTertiary,
     textAlign: "center",
     lineHeight: 16,
+  },
+  apiUrlText: {
+    fontSize: 10,
+    color: colors.textTertiary,
+    marginTop: spacing.sm,
+    textAlign: "center",
   },
 });
