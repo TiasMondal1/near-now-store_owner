@@ -13,16 +13,21 @@ import {
   Animated,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { getSession, clearSession } from "../session";
 import { CameraView } from "expo-camera";
 import { Camera, useCameraPermissions } from "expo-camera";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { config } from "../lib/config";
 import { colors, radius, spacing } from "../lib/theme";
+import { getStockListFromDb } from "../lib/storeProducts";
 
 const API_BASE = config.API_BASE;
+const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
+const INVENTORY_CACHE_KEY = "inventory_products_cache";
 const ORDER_TIMEOUT_SECONDS = 20;
 
 
@@ -65,6 +70,8 @@ export default function OwnerHomeScreen() {
   const [paymentsLoading, setPaymentsLoading] = useState(false);
   const [paymentsDayTotal, setPaymentsDayTotal] = useState(0);
 
+  const [storeProducts, setStoreProducts] = useState<Array<{ id: string; name: string; quantity: number }>>([]);
+  const [storeProductsLoading, setStoreProductsLoading] = useState(false);
 
   const [exportError, setExportError] = useState<string | null>(null);
 
@@ -95,9 +102,166 @@ export default function OwnerHomeScreen() {
     if (!session || !selectedStore) return;
 
     fetchOrders();
+    fetchStoreProducts();
     const interval = setInterval(fetchOrders, 10000);
     return () => clearInterval(interval);
   }, [session, selectedStore]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (session?.token && selectedStore?.id) {
+        fetchStoreProducts(true);
+      }
+    }, [session?.token, selectedStore?.id])
+  );
+
+  const fetchStoreProducts = async (silent = false) => {
+    if (!session?.token || !selectedStore?.id) return;
+    if (!silent) setStoreProductsLoading(true);
+
+    const applyInventoryCache = (raw: string | null): boolean => {
+      if (!raw) return false;
+      try {
+        const p = JSON.parse(raw);
+        const list = p?.products;
+        if (!Array.isArray(list) || list.length === 0) return false;
+        const out = list
+          .map((x: any) => ({
+            id: x.id,
+            name: x.name || "Product",
+            quantity: Number(x.quantity ?? 0),
+          }))
+          .sort((a: any, b: any) => (b.quantity ?? 0) - (a.quantity ?? 0));
+        setStoreProducts(out);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const applyProductsArrayCache = (raw: string | null): boolean => {
+      if (!raw) return false;
+      try {
+        const list = JSON.parse(raw);
+        if (!Array.isArray(list) || list.length === 0) return false;
+        const out = list
+          .map((x: any) => ({
+            id: x.id,
+            name: x.name || "Product",
+            quantity: Number(x.quantity ?? 0),
+          }))
+          .sort((a: any, b: any) => (b.quantity ?? 0) - (a.quantity ?? 0));
+        setStoreProducts(out);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    try {
+      const [cacheRaw, arrayCacheRaw] = await Promise.all([
+        AsyncStorage.getItem(INVENTORY_PERSISTED_KEY),
+        AsyncStorage.getItem(INVENTORY_CACHE_KEY),
+      ]);
+      const fromCache = applyInventoryCache(cacheRaw) || applyProductsArrayCache(arrayCacheRaw);
+
+      const fromDb = await getStockListFromDb(selectedStore.id);
+      if (Array.isArray(fromDb) && fromDb.length > 0) {
+        setStoreProducts(fromDb);
+        if (!silent) setStoreProductsLoading(false);
+        return;
+      }
+
+      if (fromCache) {
+        if (!silent) setStoreProductsLoading(false);
+        return;
+      }
+
+      const storeRes = await fetch(
+        `${API_BASE}/store-owner/stores/${selectedStore.id}/products`,
+        { headers: { Authorization: `Bearer ${session.token}` } }
+      );
+      const storeRaw = await storeRes.text();
+      let storeList: any[] = [];
+      try {
+        const storeJson = storeRaw ? JSON.parse(storeRaw) : null;
+        storeList =
+          storeJson?.products ??
+          storeJson?.data ??
+          (Array.isArray(storeJson) ? storeJson : []);
+      } catch {
+        storeList = [];
+      }
+      if (!Array.isArray(storeList)) storeList = [];
+
+      const masterRes = await fetch(
+        `${API_BASE}/api/products/master-products?isActive=true`
+      );
+      const masterRaw = await masterRes.text();
+      let masterList: any[] = [];
+      try {
+        masterList = masterRaw ? JSON.parse(masterRaw) : [];
+      } catch {
+        masterList = [];
+      }
+      if (!Array.isArray(masterList)) masterList = [];
+
+      const byMasterId: Record<string, { quantity: number; name?: string }> = {};
+      storeList.forEach((sp: any) => {
+        const mid =
+          sp.master_product_id ??
+          sp.masterProductId ??
+          sp.master_product?.id ??
+          sp.product_id;
+        if (mid) {
+          const qty = Number(sp.quantity ?? 0);
+          const name =
+            sp.name ??
+            sp.product_name ??
+            sp.master_product?.name ??
+            "Product";
+          byMasterId[mid] = { quantity: qty, name };
+        }
+      });
+
+      let merged: Array<{ id: string; name: string; quantity: number }>;
+      if (Object.keys(byMasterId).length === 0) {
+        merged = [];
+      } else {
+        const fromMaster = masterList
+          .filter((mp: any) => byMasterId[mp.id] !== undefined)
+          .map((mp: any) => ({
+            id: mp.id,
+            name: mp.name || byMasterId[mp.id]?.name || "Product",
+            quantity: byMasterId[mp.id]?.quantity ?? 0,
+          }));
+        const matchedIds = new Set(fromMaster.map((m) => m.id));
+        const storeOnly = Object.entries(byMasterId)
+          .filter(([id]) => !matchedIds.has(id))
+          .map(([id, v]) => ({
+            id,
+            name: v.name || "Product",
+            quantity: v.quantity ?? 0,
+          }));
+        merged = [...fromMaster, ...storeOnly].sort(
+          (a, b) => (b.quantity ?? 0) - (a.quantity ?? 0)
+        );
+      }
+
+      if (merged.length > 0) {
+        setStoreProducts(merged);
+      }
+    } catch {
+      const [cacheRaw, arrayCacheRaw] = await Promise.all([
+        AsyncStorage.getItem(INVENTORY_PERSISTED_KEY),
+        AsyncStorage.getItem(INVENTORY_CACHE_KEY),
+      ]);
+      const fromCache = applyInventoryCache(cacheRaw) || applyProductsArrayCache(arrayCacheRaw);
+      if (!fromCache && !silent) setStoreProducts([]);
+    } finally {
+      if (!silent) setStoreProductsLoading(false);
+    }
+  };
 
 
   const fetchStores = async (token: string) => {
@@ -659,27 +823,40 @@ export default function OwnerHomeScreen() {
         )}
 
         {activeTab === "orders" && (
-          orders.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <Text style={styles.emptyTitle}>Waiting for orders</Text>
-              <Text style={styles.emptyText}>New orders will appear automatically</Text>
-
+          <>
+            <View style={styles.stockSection}>
+              <Text style={styles.stockTitle}>Your stock (quantity stored)</Text>
+              {storeProductsLoading ? (
+                <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.md }} />
+              ) : storeProducts.length === 0 ? (
+                <Text style={styles.stockEmpty}>No products in inventory yet. Add from Inventory or Catalog.</Text>
+              ) : (
+                storeProducts.map((p) => (
+                  <View key={p.id} style={styles.stockRow}>
+                    <Text style={styles.stockName} numberOfLines={1}>{p.name}</Text>
+                    <Text style={styles.stockQty}>Qty: {p.quantity}</Text>
+                  </View>
+                ))
+              )}
             </View>
-          ) : (
-            orders.map((o) => (
-              <TouchableOpacity
-                key={o.id}
-                style={styles.orderRow}
-                onPress={() => openOrderDetails(o.id)}
-              >
-                <Text style={styles.orderCode}>#{o.order_code}</Text>
-                <Text style={styles.orderStatus}>{o.status}</Text>
-
-              </TouchableOpacity>
-
-            ))
-
-          )
+            {orders.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Text style={styles.emptyTitle}>Waiting for orders</Text>
+                <Text style={styles.emptyText}>New orders will appear automatically</Text>
+              </View>
+            ) : (
+              orders.map((o) => (
+                <TouchableOpacity
+                  key={o.id}
+                  style={styles.orderRow}
+                  onPress={() => openOrderDetails(o.id)}
+                >
+                  <Text style={styles.orderCode}>#{o.order_code}</Text>
+                  <Text style={styles.orderStatus}>{o.status}</Text>
+                </TouchableOpacity>
+              ))
+            )}
+          </>
         )}
       </ScrollView>
 
@@ -791,6 +968,27 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: "700" },
   emptyText: { color: colors.textTertiary, fontSize: 12, marginTop: 6 },
+
+  stockSection: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.lg,
+  },
+  stockTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: "700", marginBottom: spacing.sm },
+  stockEmpty: { color: colors.textTertiary, fontSize: 12 },
+  stockRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  stockName: { color: colors.textPrimary, fontSize: 13, flex: 1 },
+  stockQty: { color: colors.textSecondary, fontSize: 13, fontWeight: "600", marginLeft: spacing.sm },
 
   orderRow: {
     backgroundColor: colors.surface,

@@ -38,6 +38,45 @@ npm run dev
 
 Server runs at `http://0.0.0.0:3000` so your phone can reach it. Same Wi‑Fi and `EXPO_PUBLIC_API_BASE_URL=http://YOUR_LAN_IP:3000` in the store owner app `.env`.
 
+## Inventory → products table (DB + API)
+
+The app **writes to and reads from the Supabase `products` table directly** via `lib/storeProducts.ts` (Supabase client with anon key). Inventory and "Your stock" on the main page use this so data is persisted in the DB.
+
+- **Run RLS (required for anon access):** In Supabase → SQL Editor, run `supabase/products-rls-anon.sql` so the app can SELECT/INSERT/UPDATE `products` and SELECT `master_products`. Without this, reads will be empty and writes will fail with permission denied.
+- **Env:** Set `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` in `.env` so the Supabase client is configured.
+- If Supabase is unavailable or returns no data, the app falls back to the backend API and local cache.
+
+## Inventory → products table (required flow – backend API)
+
+**Flow:** `master_products` holds the full catalog. The store owner selects which products are available and sets stock quantity in **Inventory** (and in Add product → Catalog). That data must be stored in a **products** table linked to the store via **stores.id**, so the same products appear in Inventory and anywhere else the store’s products are shown.
+
+- **master_products** – All products (catalog). Filled by admin/seed; store owner does not create rows here.
+- **products** – Store-level availability and stock. One row per (store, master_product) (or per custom product). Must be linked to **stores.id** (`store_id`).
+- When the store owner sets quantity in Inventory (or adds from Catalog), the backend must **insert or update** rows in **products** with that `store_id`, so those products show up in the products table for that store.
+
+### API contract (backend must implement)
+
+All of these must read/write the **products** table (linked to `stores.id`):
+
+| Method | Endpoint | Purpose |
+|--------|----------|--------|
+| GET | `{API_BASE}/api/products/master-products?isActive=true` | List all master products (catalog). No auth. |
+| GET | `{API_BASE}/store-owner/stores/:storeId/products` | List **products** for that store (join with master_products for name, image, etc.). Return `{ products: [ { id, master_product_id, quantity, is_active, in_stock, ... } ] }`. Price can come from master_products. |
+| POST | `{API_BASE}/store-owner/stores/:storeId/products/bulk-from-master` | Body: `{ items: [ { masterProductId, price, quantity } ] }`. For each item, **upsert** into **products** with `store_id = storeId`, `master_product_id`, `quantity` (set `is_active = true`, `in_stock` as needed). So products added from Inventory or Catalog appear in the products table. |
+| PATCH | `{API_BASE}/store-owner/products/:id` | Body: `{ quantity }`. Update the **products** row so Inventory and product list stay in sync. Optionally set `in_stock` from `quantity > 0`. |
+| POST | `{API_BASE}/store-owner/stores/:storeId/products/custom` | Custom products (no master) may use a different table or flow; your **products** table has `master_product_id` NOT NULL. |
+
+The app sends `storeId` and expects the backend to persist and return data from the **products** table keyed by **stores.id**.
+
+### Current Supabase schema (products table)
+
+Your existing **products** table (linked to **stores.id**):
+
+- **products**: `id` (uuid, PK), `store_id` (uuid, FK → stores.id), `master_product_id` (uuid, FK → master_products.id, NOT NULL), `quantity` (numeric, ≥ 0), `is_active` (boolean, default true), `in_stock` (boolean, default true), `created_at`, `updated_at`. Unique on `(store_id, master_product_id)`. Trigger updates `updated_at`.
+- Indexes: `store_id`, `master_product_id`, `is_active`, `(store_id, is_active)` where `is_active = true`.
+
+Backend should read/write this table for Inventory and Catalog flows. Price for display can come from **master_products** (e.g. `base_price`).
+
 ## Other store-owner APIs (stores, orders, inventory)
 
-Routes like `/store-owner/stores`, `/store-owner/orders`, etc. are **not** in the near-and-now backend yet. When you add them, host them on the same backend (or another) and keep using the same `API_BASE` (or a separate env var) in the app.
+Routes like `/store-owner/stores`, `/store-owner/orders`, etc. are **not** in the near-and-now backend yet. When you add them, host them on the same backend (or another) and keep using the same `API_BASE` (or a separate env var) in the app. Implement the **Inventory → products table** endpoints above so products set in Inventory are stored in the products table linked to **stores.id**.

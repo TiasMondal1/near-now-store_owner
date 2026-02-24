@@ -15,18 +15,46 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../session";
 import { config } from "../lib/config";
 import { colors, radius, spacing } from "../lib/theme";
+import {
+  getMergedInventoryFromDb,
+  upsertStoreProduct,
+  updateStoreProductQuantity,
+} from "../lib/storeProducts";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
+const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
+
+let persistedProducts: any[] = [];
+let persistedStoreId: string | null = null;
+let persistedSearch = "";
 
 export default function InventoryScreen() {
-  const [loading, setLoading] = useState(true);
-  const [products, setProducts] = useState<any[]>([]);
-  const [storeId, setStoreId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(() => !(persistedProducts.length > 0));
+  const [products, setProducts] = useState<any[]>(() =>
+    persistedProducts.length > 0 ? [...persistedProducts] : []
+  );
+  const [storeId, setStoreId] = useState<string | null>(() => persistedStoreId);
   const [token, setToken] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => persistedSearch);
   const [editingQty, setEditingQty] = useState<{ id: string; value: string } | null>(null);
   const editingValueRef = useRef("");
+
+  useEffect(() => {
+    if (products.length > 0) persistedProducts = products;
+    if (storeId) persistedStoreId = storeId;
+    persistedSearch = search;
+    AsyncStorage.setItem(
+      INVENTORY_PERSISTED_KEY,
+      JSON.stringify({ products, storeId, search })
+    ).catch(() => {});
+  }, [products, storeId, search]);
+  useEffect(() => {
+    if (storeId) persistedStoreId = storeId;
+  }, [storeId]);
+  useEffect(() => {
+    persistedSearch = search;
+  }, [search]);
 
   const fetchInventory = async (authToken: string, storeIdVal: string) => {
     const [masterRes, storeProductsRes] = await Promise.all([
@@ -90,7 +118,46 @@ export default function InventoryScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const cached = await AsyncStorage.getItem(INVENTORY_CACHE_KEY);
+        const [persistedRaw, cached, s] = await Promise.all([
+          AsyncStorage.getItem(INVENTORY_PERSISTED_KEY),
+          AsyncStorage.getItem(INVENTORY_CACHE_KEY),
+          getSession(),
+        ]);
+        const session: any = s;
+        if (!session?.token) {
+          setLoading(false);
+          return;
+        }
+        setToken(session.token);
+
+        const fromPersisted =
+          persistedRaw &&
+          (() => {
+            try {
+              const p = JSON.parse(persistedRaw);
+              if (p && Array.isArray(p.products) && p.products.length > 0) {
+                persistedProducts = p.products;
+                persistedStoreId = p.storeId ?? null;
+                persistedSearch = p.search ?? "";
+                setProducts(p.products);
+                if (p.storeId) setStoreId(p.storeId);
+                setSearch(p.search ?? "");
+                setLoading(false);
+                return true;
+              }
+            } catch {
+              //
+            }
+            return false;
+          })();
+        if (fromPersisted) return;
+
+        if (persistedProducts.length > 0 && persistedStoreId) {
+          setStoreId(persistedStoreId);
+          setLoading(false);
+          return;
+        }
+
         if (cached) {
           try {
             const parsed = JSON.parse(cached);
@@ -103,14 +170,7 @@ export default function InventoryScreen() {
           }
         }
 
-        const s: any = await getSession();
-        if (!s?.token) {
-          setLoading(false);
-          return;
-        }
-        setToken(s.token);
-
-        const auth = { Authorization: `Bearer ${s.token}` };
+        const auth = { Authorization: `Bearer ${session.token}` };
         const [storeRes, masterRes] = await Promise.all([
           fetch(`${API_BASE}/store-owner/stores`, { headers: auth }),
           fetch(`${API_BASE}/api/products/master-products?isActive=true`),
@@ -151,6 +211,14 @@ export default function InventoryScreen() {
         const id = storeJson.stores[0].id;
         setStoreId(id);
 
+        const fromDb = await getMergedInventoryFromDb(id);
+        if (Array.isArray(fromDb) && fromDb.length > 0) {
+          setProducts(fromDb);
+          await AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(fromDb));
+          setLoading(false);
+          return;
+        }
+
         const storeProductsRes = await fetch(
           `${API_BASE}/store-owner/stores/${id}/products`,
           { headers: auth },
@@ -188,6 +256,15 @@ export default function InventoryScreen() {
     if (!token || !storeId) return;
 
     if (row.storeProductId) {
+      const ok = await updateStoreProductQuantity(row.storeProductId, qty);
+      if (ok) {
+        setProducts((prev) => {
+          const next = prev.map((p) => (p.id === row.id ? { ...p, quantity: qty } : p));
+          AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(next)).catch(() => {});
+          return next;
+        });
+        return;
+      }
       const res = await fetch(`${API_BASE}/store-owner/products/${row.storeProductId}`, {
         method: "PATCH",
         headers: {
@@ -199,11 +276,32 @@ export default function InventoryScreen() {
       if (!res.ok) {
         setQuantityOptimistic(row.id, prevQty);
         Alert.alert("Error", "Failed to update quantity");
+        return;
       }
+      setProducts((prev) => {
+        const next = prev.map((p) => (p.id === row.id ? { ...p, quantity: qty } : p));
+        AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(next)).catch(() => {});
+        return next;
+      });
       return;
     }
 
     if (qty === 0) return;
+    const inserted = await upsertStoreProduct(storeId, row.id, qty);
+    if (inserted && "id" in inserted && inserted.id) {
+      setProducts((prev) => {
+        const next = prev.map((p) =>
+          p.id === row.id ? { ...p, quantity: qty, storeProductId: inserted.id } : p
+        );
+        AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(next)).catch(() => {});
+        return next;
+      });
+      return;
+    }
+    if (inserted && "error" in inserted) {
+      console.warn("[inventory] DB upsert failed:", inserted.error);
+      Alert.alert("DB save failed", inserted.error + "\nTrying backend API…");
+    }
     const res = await fetch(
       `${API_BASE}/store-owner/stores/${storeId}/products/bulk-from-master`,
       {
@@ -229,9 +327,16 @@ export default function InventoryScreen() {
       Alert.alert("Error", json?.error || "Failed to add product");
       return;
     }
-    const merged = await fetchInventory(token, storeId);
-    setProducts(merged);
-    AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(merged)).catch(() => {});
+    const newStoreProductId = json?.product?.id ?? json?.products?.[0]?.id ?? null;
+    setProducts((prev) => {
+      const next = prev.map((p) =>
+        p.id === row.id
+          ? { ...p, quantity: qty, storeProductId: newStoreProductId ?? p.storeProductId }
+          : p
+      );
+      AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
   };
 
   const commitQtyEdit = (row: any, value: string) => {
@@ -251,14 +356,6 @@ export default function InventoryScreen() {
       ? [...filtered].sort((a, b) => (b.quantity ?? 0) - (a.quantity ?? 0))
       : filtered;
 
-  if (loading && products.length === 0) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <ActivityIndicator color={colors.primary} />
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
@@ -275,15 +372,19 @@ export default function InventoryScreen() {
           style={styles.search}
         />
 
-        {sorted.length === 0 && (
+        {loading && products.length === 0 ? (
+          <View style={styles.loadingBlock}>
+            <ActivityIndicator color={colors.primary} size="large" />
+            <Text style={styles.loadingText}>Loading products...</Text>
+          </View>
+        ) : sorted.length === 0 ? (
           <Text style={styles.emptyText}>
             {products.length === 0
               ? "Could not load products. Check your connection and that the backend is running."
               : "No products match your search."}
           </Text>
-        )}
-
-        {sorted.map((p) => {
+        ) : (
+          sorted.map((p) => {
           const out = p.quantity === 0;
           const inStore = !!p.storeProductId;
           const isEditing = editingQty?.id === p.id;
@@ -367,7 +468,8 @@ export default function InventoryScreen() {
               </View>
             </View>
           );
-        })}
+        })
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -392,6 +494,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginBottom: spacing.lg,
     textAlign: "center",
+  },
+  loadingBlock: {
+    paddingVertical: spacing.xl,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  loadingText: {
+    color: colors.textTertiary,
+    fontSize: 14,
+    marginTop: spacing.sm,
   },
 
   search: {
