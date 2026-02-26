@@ -81,7 +81,7 @@ export default function StoreOwnerOtpScreen() {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone, otp, role: "store_owner" }),
+        body: JSON.stringify({ phone, otp, role: "shopkeeper" }),
       });
 
       const raw = await res.text();
@@ -113,30 +113,31 @@ export default function StoreOwnerOtpScreen() {
         return;
       }
 
-      const token = json.token ?? json.data?.token ?? json.access_token;
-      const user = json.user ?? json.data?.user;
-      const isStoreOwnerRole =
-        user && (user.role === "store_owner" || user.role === "shopkeeper");
-
-      // Existing user: we have token + user (and store-owner role) → always go to dashboard
-      if (token && user && isStoreOwnerRole) {
-        await saveSession({
-          token,
-          user: {
-            id: user.id,
-            name: user.name ?? user.full_name ?? "Store Owner",
-            role: user.role ?? "store_owner",
-            isActivated: user.isActivated ?? user.is_activated ?? true,
-            phone: user.phone ?? phone,
-            email: user.email ?? undefined,
-          },
-        });
-        router.replace("/owner-home");
-        return;
+      if (__DEV__) {
+        const keys = json ? Object.keys(json) : [];
+        const dataKeys = json?.data && typeof json.data === "object" ? Object.keys(json.data) : [];
+        console.log("[otp] verify keys:", keys, "data:", dataKeys, "token?", !!(json?.token ?? json?.data?.token ?? json?.access_token));
       }
 
-      // New user: backend said signup or no token/user → show setup store
-      if (json.mode === "signup" || !token || !user) {
+      // Extract token from common response shapes (backend may use different keys)
+      const token =
+        json.token ??
+        json.data?.token ??
+        json.access_token ??
+        json.data?.access_token ??
+        json.accessToken ??
+        json.data?.accessToken;
+      const user = json.user ?? json.data?.user ?? json.data;
+      const mode = (json.mode ?? json.data?.mode ?? "").toLowerCase();
+      const isStoreOwnerRole =
+        user && (user.role === "shopkeeper" || user.role === "store_owner");
+
+      // Backend decides by phone + role: same number can exist with different roles (e.g. customer vs shopkeeper).
+      // Only signup when backend says signup (no token). If we have a token, user is registered as shopkeeper → dashboard.
+      const explicitlySignup = mode === "signup";
+      const hasToken = !!token;
+
+      if (explicitlySignup && !hasToken) {
         router.replace({
           pathname: "/store-owner-signup",
           params: { phone },
@@ -144,7 +145,27 @@ export default function StoreOwnerOtpScreen() {
         return;
       }
 
-      Alert.alert("Error", json?.error || json?.message || "Unexpected response from server.");
+      if (hasToken) {
+        await saveSession({
+          token,
+          user: {
+            id: user?.id ?? json.userId ?? json.data?.userId ?? "",
+            name: user?.name ?? user?.full_name ?? "Shopkeeper",
+            role: user?.role ?? "shopkeeper",
+            isActivated: user?.isActivated ?? user?.is_activated ?? true,
+            phone: user?.phone ?? phone,
+            email: user?.email ?? undefined,
+          },
+        });
+        router.replace("/owner-home");
+        return;
+      }
+
+      // No token and not explicitly signup — shouldn't happen for valid verify; show error
+      Alert.alert(
+        "Error",
+        json?.error || json?.message || "Server did not return a session. If your number is already registered, check the backend returns a token and mode: 'login' for existing users."
+      );
     } catch (e: any) {
       const msg =
         e?.message || String(e);
@@ -207,7 +228,7 @@ export default function StoreOwnerOtpScreen() {
       >
         <View style={styles.container}>
           <View style={styles.topSection}>
-            <Text style={styles.appTag}>Near&Now · Store Owner</Text>
+            <Text style={styles.appTag}>Near&Now · Shopkeeper</Text>
             <Text style={styles.title}>Enter the 6-digit code</Text>
             <Text style={styles.subtitle}>
               We sent a code to{" "}

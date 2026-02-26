@@ -189,6 +189,7 @@ export default function StoreOwnerSignupScreen() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           phone,
+          role: "shopkeeper",
           ownerName: ownerName.trim(),
           storeName: storeName.trim(),
           storeAddress: addressString,
@@ -223,7 +224,7 @@ export default function StoreOwnerSignupScreen() {
         user: {
           id: json.user.id,
           name: json.user.name,
-          role: json.user.role ?? "store_owner",
+          role: json.user.role ?? "shopkeeper",
           isActivated: json.user.isActivated ?? json.user.is_activated ?? true,
           phone: json.user.phone ?? phone,
         },
@@ -249,7 +250,7 @@ export default function StoreOwnerSignupScreen() {
         <View style={styles.container}>
           <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" scrollEnabled={scrollEnabled} nestedScrollEnabled={true}>
             <View style={styles.header}>
-              <Text style={styles.tag}>Near&Now · Store Owner</Text>
+              <Text style={styles.tag}>Near&Now · Shopkeeper</Text>
               <Text style={styles.title}>Set up your store</Text>
               <Text style={styles.subtitle}>Drag the pin to your shop entrance — address fields autofill.</Text>
             </View>
@@ -359,7 +360,7 @@ export default function StoreOwnerSignupScreen() {
               <Text style={styles.buttonText}>{loading ? "Saving..." : "Complete registration"}</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.backRow} onPress={() => router.back()}>
+            <TouchableOpacity style={styles.backRow} onPress={() => router.replace("/landing")}>
               <Text style={styles.backText}>Go back</Text>
             </TouchableOpacity>
           </View>

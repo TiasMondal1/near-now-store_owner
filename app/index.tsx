@@ -1,7 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { View, Text, StyleSheet, Animated, Easing } from "react-native";
 import { useRouter } from "expo-router";
-import { getSession } from "../session";
 import { colors } from "../lib/theme";
 
 const SPLASH_DURATION_MS = 2200;
@@ -46,14 +45,9 @@ export default function SplashScreen() {
     );
     pulseLoop.start();
 
-    const t = setTimeout(async () => {
+    const t = setTimeout(() => {
       pulseLoop.stop();
-      const session = await getSession();
-      if (session?.token) {
-        router.replace("/owner-home");
-      } else {
-        router.replace("/landing");
-      }
+      router.replace("/landing");
     }, SPLASH_DURATION_MS);
 
     return () => clearTimeout(t);
@@ -74,7 +68,7 @@ export default function SplashScreen() {
           <Text style={styles.iconText}>N&N</Text>
         </View>
       </Animated.View>
-      <Text style={styles.tagline}>Store Owner</Text>
+      <Text style={styles.tagline}>Shopkeeper</Text>
       <Text style={styles.sub}>Near & Now</Text>
     </View>
   );

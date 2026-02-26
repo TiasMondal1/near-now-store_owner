@@ -11,6 +11,7 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { router, useLocalSearchParams } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../session";
 import { config } from "../lib/config";
@@ -30,15 +31,21 @@ let persistedStoreId: string | null = null;
 let persistedSearch = "";
 
 export default function InventoryScreen() {
+  const params = useLocalSearchParams<{ storeId?: string }>();
   const [loading, setLoading] = useState(() => !(persistedProducts.length > 0));
   const [products, setProducts] = useState<any[]>(() =>
     persistedProducts.length > 0 ? [...persistedProducts] : []
   );
-  const [storeId, setStoreId] = useState<string | null>(() => persistedStoreId);
+  const [storeId, setStoreId] = useState<string | null>(() => persistedStoreId ?? params.storeId ?? null);
   const [token, setToken] = useState<string | null>(null);
   const [search, setSearch] = useState(() => persistedSearch);
   const [editingQty, setEditingQty] = useState<{ id: string; value: string } | null>(null);
   const editingValueRef = useRef("");
+
+  useEffect(() => {
+    const fromParams = typeof params.storeId === "string" && params.storeId.length > 0 ? params.storeId : null;
+    if (fromParams && fromParams !== storeId) setStoreId(fromParams);
+  }, [params.storeId]);
 
   useEffect(() => {
     if (products.length > 0) persistedProducts = products;
@@ -253,7 +260,10 @@ export default function InventoryScreen() {
     const prevQty = row.quantity;
     setQuantityOptimistic(row.id, qty);
 
-    if (!token || !storeId) return;
+    if (!token || !storeId) {
+      if (!storeId) Alert.alert("No store", "Store not loaded. Open Inventory from the dashboard again.");
+      return;
+    }
 
     if (row.storeProductId) {
       const ok = await updateStoreProductQuantity(row.storeProductId, qty);
@@ -287,6 +297,8 @@ export default function InventoryScreen() {
     }
 
     if (qty === 0) return;
+
+    // Add new product: write directly to Supabase products table only
     const inserted = await upsertStoreProduct(storeId, row.id, qty);
     if (inserted && "id" in inserted && inserted.id) {
       setProducts((prev) => {
@@ -299,44 +311,20 @@ export default function InventoryScreen() {
       return;
     }
     if (inserted && "error" in inserted) {
-      console.warn("[inventory] DB upsert failed:", inserted.error);
-      Alert.alert("DB save failed", inserted.error + "\nTrying backend API…");
-    }
-    const res = await fetch(
-      `${API_BASE}/store-owner/stores/${storeId}/products/bulk-from-master`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          items: [{ masterProductId: row.id, price: row.base_price ?? row.price, quantity: qty }],
-        }),
-      }
-    );
-    const raw = await res.text();
-    let json: any = null;
-    try {
-      json = raw ? JSON.parse(raw) : null;
-    } catch {
-      json = null;
-    }
-    if (!res.ok || !json?.success) {
+      const errMsg = inserted.error;
+      console.warn("[inventory] Supabase upsert failed:", errMsg);
+      const hint =
+        /foreign key|violates|23503/i.test(errMsg)
+          ? " Your store may not exist in Supabase. Ensure the store is in the stores table and run supabase/products-rls-anon.sql."
+          : /permission|denied|RLS/i.test(errMsg)
+            ? " Run supabase/products-rls-anon.sql in Supabase SQL Editor."
+            : "";
       setQuantityOptimistic(row.id, prevQty);
-      Alert.alert("Error", json?.error || "Failed to add product");
+      Alert.alert("Could not add to stock", errMsg + hint);
       return;
     }
-    const newStoreProductId = json?.product?.id ?? json?.products?.[0]?.id ?? null;
-    setProducts((prev) => {
-      const next = prev.map((p) =>
-        p.id === row.id
-          ? { ...p, quantity: qty, storeProductId: newStoreProductId ?? p.storeProductId }
-          : p
-      );
-      AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(next)).catch(() => {});
-      return next;
-    });
+    setQuantityOptimistic(row.id, prevQty);
+    Alert.alert("Could not add to stock", "Supabase not configured or no id returned.");
   };
 
   const commitQtyEdit = (row: any, value: string) => {
@@ -356,9 +344,16 @@ export default function InventoryScreen() {
       ? [...filtered].sort((a, b) => (b.quantity ?? 0) - (a.quantity ?? 0))
       : filtered;
 
+  const goToDashboard = () => router.replace("/owner-home");
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
+        <View style={styles.headerRow}>
+          <TouchableOpacity onPress={goToDashboard} style={styles.backBtn} activeOpacity={0.7}>
+            <Text style={styles.backBtnText}>← Back</Text>
+          </TouchableOpacity>
+        </View>
         <Text style={styles.title}>Inventory</Text>
         <Text style={styles.subtitle}>
           Master products and stock. Set quantities here—customers see these when ordering. You can also set quantities when adding from Catalog.
@@ -478,6 +473,9 @@ export default function InventoryScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   container: { padding: spacing.lg },
+  headerRow: { flexDirection: "row", alignItems: "center", marginBottom: spacing.md },
+  backBtn: { paddingVertical: 8, paddingRight: 12 },
+  backBtnText: { color: colors.primary, fontSize: 16, fontWeight: "600" },
   title: {
     color: colors.textPrimary,
     fontSize: 22,

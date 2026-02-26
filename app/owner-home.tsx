@@ -97,7 +97,6 @@ export default function OwnerHomeScreen() {
     })();
   }, []);
 
-
   useEffect(() => {
     if (!session || !selectedStore) return;
 
@@ -125,13 +124,16 @@ export default function OwnerHomeScreen() {
         const p = JSON.parse(raw);
         const list = p?.products;
         if (!Array.isArray(list) || list.length === 0) return false;
+        if (p.storeId && selectedStore?.id && p.storeId !== selectedStore.id) return false;
         const out = list
           .map((x: any) => ({
             id: x.id,
             name: x.name || "Product",
             quantity: Number(x.quantity ?? 0),
           }))
+          .filter((x: any) => x.quantity > 0)
           .sort((a: any, b: any) => (b.quantity ?? 0) - (a.quantity ?? 0));
+        if (out.length === 0) return false;
         setStoreProducts(out);
         return true;
       } catch {
@@ -150,7 +152,9 @@ export default function OwnerHomeScreen() {
             name: x.name || "Product",
             quantity: Number(x.quantity ?? 0),
           }))
+          .filter((x: any) => x.quantity > 0)
           .sort((a: any, b: any) => (b.quantity ?? 0) - (a.quantity ?? 0));
+        if (out.length === 0) return false;
         setStoreProducts(out);
         return true;
       } catch {

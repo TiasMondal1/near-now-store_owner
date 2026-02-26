@@ -72,7 +72,7 @@ export async function getStockListFromDb(
 
 export type UpsertResult = { id: string } | { error: string };
 
-/** Upsert one product row (store_id, master_product_id, quantity). Used when adding from inventory. */
+/** Insert or update one product row. Used when adding from inventory. */
 export async function upsertStoreProduct(
   storeId: string,
   masterProductId: string,
@@ -80,32 +80,48 @@ export async function upsertStoreProduct(
 ): Promise<UpsertResult | null> {
   if (!supabase) return { error: "Supabase not configured" };
   if (!storeId || !masterProductId) return { error: "Missing store_id or master_product_id" };
-  const payload = {
-    store_id: storeId,
-    master_product_id: masterProductId,
-    quantity: Math.max(0, quantity),
-    is_active: true,
-    in_stock: quantity > 0,
-  };
-  const { data, error } = await supabase
-    .from("products")
-    .upsert(payload, { onConflict: "store_id,master_product_id" })
-    .select("id")
-    .maybeSingle();
-  if (error) {
-    console.warn("[storeProducts] upsert error:", error.message, error.code, error.details);
-    return { error: error.message };
-  }
-  if (data?.id) return { id: data.id };
-  const byId = await supabase
+  const qty = Math.max(0, quantity);
+
+  const existing = await supabase
     .from("products")
     .select("id")
     .eq("store_id", storeId)
     .eq("master_product_id", masterProductId)
     .maybeSingle();
-  if (byId.data?.id) return { id: byId.data.id };
-  if (byId.error) return { error: byId.error.message };
-  return { error: "No row returned after upsert" };
+
+  if (existing.data?.id) {
+    const { error: updateErr } = await supabase
+      .from("products")
+      .update({ quantity: qty, in_stock: qty > 0 })
+      .eq("id", existing.data.id);
+    if (updateErr) {
+      console.warn("[storeProducts] update error:", updateErr.message);
+      return { error: updateErr.message };
+    }
+    return { id: existing.data.id };
+  }
+
+  const insertPayload = {
+    store_id: storeId,
+    master_product_id: masterProductId,
+    quantity: qty,
+    is_active: true,
+    in_stock: qty > 0,
+  };
+  if (typeof (global as any).__DEV__ !== "undefined" && (global as any).__DEV__) {
+    console.log("[storeProducts] insert payload", { store_id: storeId, master_product_id: masterProductId, quantity: qty });
+  }
+  const { data: insertData, error: insertErr } = await supabase
+    .from("products")
+    .insert(insertPayload)
+    .select("id")
+    .maybeSingle();
+  if (insertErr) {
+    console.warn("[storeProducts] insert error:", insertErr.message, insertErr.code, insertErr.details);
+    return { error: insertErr.message };
+  }
+  if (insertData?.id) return { id: insertData.id };
+  return { error: "No id returned after insert" };
 }
 
 /** Update quantity (and in_stock) for an existing product row */

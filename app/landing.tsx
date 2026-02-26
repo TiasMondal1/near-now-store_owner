@@ -1,47 +1,17 @@
-import React, { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-} from "react-native";
+import React from "react";
+import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { getSession } from "../session";
 import { colors, radius, spacing } from "../lib/theme";
 
 export default function LandingScreen() {
   const router = useRouter();
-  const [checkingSession, setCheckingSession] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      const session = await getSession();
-      if (session?.token) {
-        router.replace("/owner-home");
-        return;
-      }
-      setCheckingSession(false);
-    })();
-  }, []);
-
-  if (checkingSession) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Loading…</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
         <View style={styles.topSection}>
-          <Text style={styles.appTag}>Near&Now · Store Owner</Text>
+          <Text style={styles.appTag}>Near&Now · Shopkeeper</Text>
           <Text style={styles.title}>Welcome</Text>
           <Text style={styles.subtitle}>
             Manage orders, inventory and availability for your store.

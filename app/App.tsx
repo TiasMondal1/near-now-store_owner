@@ -81,7 +81,7 @@ export default function StoreOwnerPhoneScreen() {
           phone: fullPhone,
           sessionId: "twilio",
           exists: "false",
-          role: "store_owner",
+          role: "shopkeeper",
         },
       });
     } catch (e) {
@@ -107,7 +107,7 @@ export default function StoreOwnerPhoneScreen() {
             <Text style={styles.backButtonText}>← Back</Text>
           </TouchableOpacity>
           <View style={styles.topSection}>
-            <Text style={styles.appTag}>Near&Now · Store Owner</Text>
+            <Text style={styles.appTag}>Near&Now · Shopkeeper</Text>
             <Text style={styles.title}>Let&apos;s get your store in</Text>
             <Text style={styles.subtitle}>
               Login with your phone number to manage orders, inventory and availability.
@@ -153,7 +153,7 @@ export default function StoreOwnerPhoneScreen() {
             </TouchableOpacity>
 
             <Text style={styles.termsText}>
-              By continuing as a store owner, you agree to manage live inventory and orders responsibly.
+              By continuing as a shopkeeper, you agree to manage live inventory and orders responsibly.
             </Text>
             <Text style={styles.apiUrlText} numberOfLines={1}>
               API: {API_BASE}

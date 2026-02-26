@@ -7,14 +7,15 @@ The **Store Owner** app uses the **near-and-now** backend for **OTP (Twilio)**.
 ## OTP (already wired)
 
 - **Send OTP:** `POST {API_BASE}/api/auth/send-otp` with `{ phone }` (Twilio).
-- **Verify OTP:** `POST {API_BASE}/api/auth/verify-otp` with `{ phone, otp, role: "store_owner" }`.  
-  Backend returns `mode: "login"` (token + user) or `mode: "signup"` (go to store signup).
+- **Verify OTP:** `POST {API_BASE}/api/auth/verify-otp` with `{ phone, otp, role: "shopkeeper" }`.
+  Backend returns `mode: "login"` (token + user) or `mode: "signup"` (go to store signup). App expects `app_users.role` to be `shopkeeper`.
+- **Same number, different roles:** One phone number can exist with different roles (e.g. customer, shopkeeper). For this app, treat as **existing user** (return token, `mode: "login"`) **only** when the number is already registered **with role `shopkeeper`**. If the number exists with another role (e.g. only as customer), return **`mode: "signup"` and no token** so the user goes through shopkeeper registration. The app will also redirect to signup if the user has a token but no stores (e.g. backend returned token for a customer).
 
 ## Store owner registration
 
 - **Complete registration:** `POST {API_BASE}/store-owner/signup/complete` with body:  
-  `phone`, `ownerName`, `storeName`, `storeAddress`, `radiusKm`, `email`, `latitude`, `longitude`.  
-  Backend creates an **app_users** row with **role `store_owner`** and a **stores** row in Supabase, then returns `{ success, token, user }`.
+  `phone`, **`role: "shopkeeper"`** (app always sends this), `ownerName`, `storeName`, `storeAddress`, `radiusKm`, `email`, `latitude`, `longitude`.  
+  Backend must persist **`role: "shopkeeper"`** in `app_users` (not `store_owner`). From the app the role is always **shopkeeper**; from website/localhost it may be **customer**. Create a **stores** row in Supabase. Return `{ success, token, user }` with `user.role === "shopkeeper"`.
 
 **Supabase (run in SQL Editor if needed):**
 
