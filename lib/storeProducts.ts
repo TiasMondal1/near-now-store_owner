@@ -4,6 +4,7 @@
  */
 
 import { supabase } from "./supabase";
+import { config } from "./config";
 
 export type StoreProductRow = {
   id: string;
@@ -164,7 +165,7 @@ export async function updateStoreProductQuantity(
 ): Promise<boolean> {
   console.log("[updateStoreProductQuantity] START", { productId, quantity });
   
-  const API_BASE = "http://192.168.0.111:3000"; // Match your config
+  const API_BASE = config.API_BASE;
   
   try {
     const qty = Math.max(0, quantity);

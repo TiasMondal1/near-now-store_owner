@@ -8,10 +8,10 @@ const getEnv = (key: string, fallback: string = ""): string => {
   return typeof value === "string" ? value : fallback;
 };
 
-const defaultApi = "http://192.168.0.111:3000";
+const defaultApi = "http://localhost:3000";
 
 export const config = {
-  /** Store owner API base URL - set EXPO_PUBLIC_API_BASE_URL in .env to your LAN IP */
+  /** Store owner API base URL - set EXPO_PUBLIC_API_BASE_URL in .env */
   API_BASE: getEnv("EXPO_PUBLIC_API_BASE_URL") || defaultApi,
 
   /** Supabase project URL */
