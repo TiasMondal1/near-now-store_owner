@@ -22,7 +22,9 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.nearandnowstoreowner"
+      "package": "com.anonymous.nearandnowstoreowner",
+      "jsEngine": "hermes",
+      "enableDangerousExperimentalLeanBuilds": true
     },
     "web": {
       "favicon": "./assets/favicon.png"

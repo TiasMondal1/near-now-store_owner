@@ -21,6 +21,7 @@ import {
   upsertStoreProduct,
   updateStoreProductQuantity,
 } from "../lib/storeProducts";
+import { testSupabaseConnection, testProductInsert } from "../lib/testSupabase";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
@@ -178,8 +179,9 @@ export default function InventoryScreen() {
         }
 
         const auth = { Authorization: `Bearer ${session.token}` };
+        const userId = session.user?.id;
         const [storeRes, masterRes] = await Promise.all([
-          fetch(`${API_BASE}/store-owner/stores`, { headers: auth }),
+          fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, { headers: auth }),
           fetch(`${API_BASE}/api/products/master-products?isActive=true`),
         ]);
         const [storeRaw, masterRaw] = await Promise.all([
@@ -208,6 +210,21 @@ export default function InventoryScreen() {
           }));
 
         if (!storeJson?.stores?.length) {
+          console.log("[inventory] ❌ No stores found for this user");
+          Alert.alert(
+            "No Store Found",
+            "You don't have a store set up yet. Would you like to create one?",
+            [
+              {
+                text: "Set Up Store",
+                onPress: () => router.replace("/store-owner-signup")
+              },
+              {
+                text: "Go Back",
+                onPress: () => router.back()
+              }
+            ]
+          );
           const list = toProducts(masterList);
           setProducts(list);
           await AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(list));
@@ -255,26 +272,91 @@ export default function InventoryScreen() {
     );
   };
 
+  const invalidateMainPageCache = async () => {
+    try {
+      await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
+      await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
+    } catch (err) {
+      console.warn("Failed to invalidate cache:", err);
+    }
+  };
+
   const updateQuantity = async (row: any, newQty: number) => {
     const qty = Math.max(0, newQty);
     const prevQty = row.quantity;
+    
+    console.log("======================================");
+    console.log("[inventory] updateQuantity START");
+    console.log("  Row:", { id: row.id, name: row.name, quantity: row.quantity, storeProductId: row.storeProductId });
+    console.log("  New quantity:", qty);
+    console.log("  Store ID:", storeId);
+    console.log("  Token exists:", !!token);
+    console.log("======================================");
+    
     setQuantityOptimistic(row.id, qty);
 
     if (!token || !storeId) {
-      if (!storeId) Alert.alert("No store", "Store not loaded. Open Inventory from the dashboard again.");
+      console.error("[inventory] MISSING token or storeId!", { token: !!token, storeId });
+      
+      // Try to fetch store ID if missing
+      if (!storeId && token) {
+        Alert.alert(
+          "Loading Store",
+          "Store information is loading. Please wait a moment and try again.",
+          [
+            {
+              text: "OK",
+              onPress: async () => {
+                // Trigger a refetch
+                try {
+                  const res = await fetch(`${API_BASE}/store-owner/stores`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                  });
+                  const data = await res.json();
+                  if (data?.stores?.[0]?.id) {
+                    setStoreId(data.stores[0].id);
+                    console.log("✅ Store loaded successfully");
+                  } else {
+                    console.log("⚠️ No store found");
+                    router.back();
+                  }
+                } catch (err) {
+                  console.error("Failed to load store:", err);
+                }
+              }
+            }
+          ]
+        );
+      } else if (!storeId) {
+        console.log("⚠️ No store loaded");
+      }
+      
+      // Revert optimistic update
+      setQuantityOptimistic(row.id, prevQty);
       return;
     }
 
+    // Update existing product
     if (row.storeProductId) {
+      console.log("[inventory] Updating existing product via Supabase");
+      console.log("  storeProductId:", row.storeProductId);
+      
       const ok = await updateStoreProductQuantity(row.storeProductId, qty);
+      console.log("[inventory] updateStoreProductQuantity result:", ok);
+      
       if (ok) {
         setProducts((prev) => {
           const next = prev.map((p) => (p.id === row.id ? { ...p, quantity: qty } : p));
           AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(next)).catch(() => {});
           return next;
         });
+        await invalidateMainPageCache();
+        console.log("[inventory] ✅ Update completed successfully");
         return;
       }
+      
+      // Fallback to API
+      console.log("[inventory] Supabase update failed, trying API fallback");
       const res = await fetch(`${API_BASE}/store-owner/products/${row.storeProductId}`, {
         method: "PATCH",
         headers: {
@@ -284,8 +366,8 @@ export default function InventoryScreen() {
         body: JSON.stringify({ quantity: qty }),
       });
       if (!res.ok) {
+        console.error("[inventory] API update also failed:", res.status);
         setQuantityOptimistic(row.id, prevQty);
-        Alert.alert("Error", "Failed to update quantity");
         return;
       }
       setProducts((prev) => {
@@ -293,14 +375,28 @@ export default function InventoryScreen() {
         AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(next)).catch(() => {});
         return next;
       });
+      await invalidateMainPageCache();
+      console.log("[inventory] ✅ API update completed successfully");
       return;
     }
 
-    if (qty === 0) return;
+    // Don't add product with 0 quantity
+    if (qty === 0) {
+      console.log("[inventory] Skipping - quantity is 0");
+      return;
+    }
 
-    // Add new product: write directly to Supabase products table only
+    // Add new product: write directly to Supabase products table
+    console.log("[inventory] ⭐ ADDING NEW PRODUCT TO DATABASE");
+    console.log("  storeId:", storeId);
+    console.log("  masterProductId (row.id):", row.id);
+    console.log("  quantity:", qty);
+    
     const inserted = await upsertStoreProduct(storeId, row.id, qty);
+    console.log("[inventory] upsertStoreProduct result:", inserted);
+    
     if (inserted && "id" in inserted && inserted.id) {
+      console.log("[inventory] ✅ SUCCESS! Product inserted with ID:", inserted.id);
       setProducts((prev) => {
         const next = prev.map((p) =>
           p.id === row.id ? { ...p, quantity: qty, storeProductId: inserted.id } : p
@@ -308,23 +404,27 @@ export default function InventoryScreen() {
         AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(next)).catch(() => {});
         return next;
       });
+      await invalidateMainPageCache();
+      console.log("✅ Product added to stock successfully");
       return;
     }
+    
     if (inserted && "error" in inserted) {
       const errMsg = inserted.error;
-      console.warn("[inventory] Supabase upsert failed:", errMsg);
+      console.error("[inventory] ❌ Supabase upsert FAILED:", errMsg);
       const hint =
         /foreign key|violates|23503/i.test(errMsg)
-          ? " Your store may not exist in Supabase. Ensure the store is in the stores table and run supabase/products-rls-anon.sql."
+          ? "\n\nYour store may not exist in Supabase stores table. Check stores table."
           : /permission|denied|RLS/i.test(errMsg)
-            ? " Run supabase/products-rls-anon.sql in Supabase SQL Editor."
+            ? "\n\nRun: supabase/products-rls-anon-v2.sql in Supabase SQL Editor."
             : "";
       setQuantityOptimistic(row.id, prevQty);
-      Alert.alert("Could not add to stock", errMsg + hint);
+      console.error("[inventory] Could not add to stock:", errMsg + hint);
       return;
     }
+    
+    console.error("[inventory] ❌ UNKNOWN ERROR - No id and no error returned");
     setQuantityOptimistic(row.id, prevQty);
-    Alert.alert("Could not add to stock", "Supabase not configured or no id returned.");
   };
 
   const commitQtyEdit = (row: any, value: string) => {
@@ -334,17 +434,41 @@ export default function InventoryScreen() {
   };
 
   const q = search.trim().toLowerCase();
-  const filtered = products.filter((p) =>
+  
+  // Filter out products already in stock (quantity > 0)
+  const availableToAdd = products.filter((p) => p.quantity === 0);
+  
+  // Apply search filter
+  const filtered = availableToAdd.filter((p) =>
     [p.name, p.brand, p.category]
       .filter(Boolean)
       .some((x: string) => x.toLowerCase().includes(q))
   );
-  const sorted =
-    q === ""
-      ? [...filtered].sort((a, b) => (b.quantity ?? 0) - (a.quantity ?? 0))
-      : filtered;
+  
+  // Limit results to prevent memory issues
+  const sorted = filtered.slice(0, q === "" ? 100 : 50);
 
   const goToDashboard = () => router.replace("/owner-home");
+
+  const runDiagnostics = async () => {
+    console.log("🔍 Running diagnostics...");
+    
+    const connectionTest = await testSupabaseConnection();
+    console.log("Connection test result:", connectionTest);
+    
+    if (connectionTest.success && storeId) {
+      const insertTest = await testProductInsert(storeId);
+      console.log("Insert test result:", insertTest);
+      
+      if (insertTest.success) {
+        console.log("✅ All tests passed");
+      } else {
+        console.log("❌ Insert test failed:", insertTest.error);
+      }
+    } else {
+      console.log("❌ Connection test failed:", connectionTest.error);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -353,10 +477,19 @@ export default function InventoryScreen() {
           <TouchableOpacity onPress={goToDashboard} style={styles.backBtn} activeOpacity={0.7}>
             <Text style={styles.backBtnText}>← Back</Text>
           </TouchableOpacity>
+          {__DEV__ && (
+            <TouchableOpacity 
+              onPress={runDiagnostics} 
+              style={[styles.backBtn, { backgroundColor: colors.error, paddingHorizontal: 12, borderRadius: 8 }]} 
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.backBtnText, { color: colors.surface }]}>Test DB</Text>
+            </TouchableOpacity>
+          )}
         </View>
         <Text style={styles.title}>Inventory</Text>
         <Text style={styles.subtitle}>
-          Master products and stock. Set quantities here—customers see these when ordering. You can also set quantities when adding from Catalog.
+          Products not yet in stock. Add quantities to make them available to customers. Items with stock will appear in "Your Stock" on the dashboard.
         </Text>
 
         <TextInput
@@ -373,11 +506,22 @@ export default function InventoryScreen() {
             <Text style={styles.loadingText}>Loading products...</Text>
           </View>
         ) : sorted.length === 0 ? (
-          <Text style={styles.emptyText}>
-            {products.length === 0
-              ? "Could not load products. Check your connection and that the backend is running."
-              : "No products match your search."}
-          </Text>
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>
+              {products.length === 0
+                ? "No products available"
+                : availableToAdd.length === 0
+                ? "🎉 All products added!"
+                : "No matches"}
+            </Text>
+            <Text style={styles.emptyText}>
+              {products.length === 0
+                ? "Could not load products. Check your connection."
+                : availableToAdd.length === 0
+                ? "All products have stock. Manage quantities in 'Your Stock' on the dashboard."
+                : "No products match your search. Try different keywords."}
+            </Text>
+          </View>
         ) : (
           sorted.map((p) => {
           const out = p.quantity === 0;
@@ -392,6 +536,7 @@ export default function InventoryScreen() {
               <Image
                 source={{ uri: p.image_url }}
                 style={styles.image}
+                resizeMode="cover"
               />
 
               <View style={{ flex: 1 }}>
@@ -473,7 +618,7 @@ export default function InventoryScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   container: { padding: spacing.lg },
-  headerRow: { flexDirection: "row", alignItems: "center", marginBottom: spacing.md },
+  headerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
   backBtn: { paddingVertical: 8, paddingRight: 12 },
   backBtnText: { color: colors.primary, fontSize: 16, fontWeight: "600" },
   title: {
@@ -491,6 +636,22 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     fontSize: 14,
     marginBottom: spacing.lg,
+    textAlign: "center",
+  },
+  emptyState: {
+    padding: spacing.xl,
+    alignItems: "center",
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginTop: spacing.lg,
+  },
+  emptyTitle: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: spacing.xs,
     textAlign: "center",
   },
   loadingBlock: {

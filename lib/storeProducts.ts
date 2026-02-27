@@ -25,7 +25,7 @@ export async function getStoreProductsFromDb(
     .from("products")
     .select("id, store_id, master_product_id, quantity, is_active, in_stock")
     .eq("store_id", storeId)
-    .order("quantity", { ascending: false });
+    .order("created_at", { ascending: true }); // Order by when they were added
   if (error) return [];
   return (data ?? []) as StoreProductRow[];
 }
@@ -61,10 +61,11 @@ export async function getStoreProductsWithNames(
 /** Your stock list: id, name, quantity for main page */
 export async function getStockListFromDb(
   storeId: string
-): Promise<Array<{ id: string; name: string; quantity: number }>> {
+): Promise<Array<{ id: string; name: string; quantity: number; storeProductId: string }>> {
   const rows = await getStoreProductsWithNames(storeId);
   return rows.map((r) => ({
     id: r.master_product_id,
+    storeProductId: r.id, // This is the products table id
     name: r.name,
     quantity: Number(r.quantity ?? 0),
   }));
@@ -78,29 +79,50 @@ export async function upsertStoreProduct(
   masterProductId: string,
   quantity: number
 ): Promise<UpsertResult | null> {
-  if (!supabase) return { error: "Supabase not configured" };
-  if (!storeId || !masterProductId) return { error: "Missing store_id or master_product_id" };
+  if (!supabase) {
+    console.error("[storeProducts] Supabase client not initialized");
+    return { error: "Supabase not configured" };
+  }
+  if (!storeId || !masterProductId) {
+    console.error("[storeProducts] Missing required fields", { storeId, masterProductId });
+    return { error: "Missing store_id or master_product_id" };
+  }
   const qty = Math.max(0, quantity);
 
-  const existing = await supabase
+  console.log("[storeProducts] upsertStoreProduct called", {
+    storeId,
+    masterProductId,
+    quantity: qty,
+  });
+
+  // Check if product already exists
+  const { data: existing, error: selectErr } = await supabase
     .from("products")
     .select("id")
     .eq("store_id", storeId)
     .eq("master_product_id", masterProductId)
     .maybeSingle();
 
-  if (existing.data?.id) {
-    const { error: updateErr } = await supabase
-      .from("products")
-      .update({ quantity: qty, in_stock: qty > 0 })
-      .eq("id", existing.data.id);
-    if (updateErr) {
-      console.warn("[storeProducts] update error:", updateErr.message);
-      return { error: updateErr.message };
-    }
-    return { id: existing.data.id };
+  if (selectErr) {
+    console.error("[storeProducts] select error:", selectErr);
+    return { error: selectErr.message };
   }
 
+  if (existing?.id) {
+    console.log("[storeProducts] Updating existing product", existing.id);
+    const { error: updateErr } = await supabase
+      .from("products")
+      .update({ quantity: qty, in_stock: qty > 0, updated_at: new Date().toISOString() })
+      .eq("id", existing.id);
+    if (updateErr) {
+      console.error("[storeProducts] update error:", updateErr.message, updateErr);
+      return { error: updateErr.message };
+    }
+    console.log("[storeProducts] Successfully updated product", existing.id);
+    return { id: existing.id };
+  }
+
+  // Insert new product
   const insertPayload = {
     store_id: storeId,
     master_product_id: masterProductId,
@@ -108,34 +130,68 @@ export async function upsertStoreProduct(
     is_active: true,
     in_stock: qty > 0,
   };
-  if (typeof (global as any).__DEV__ !== "undefined" && (global as any).__DEV__) {
-    console.log("[storeProducts] insert payload", { store_id: storeId, master_product_id: masterProductId, quantity: qty });
-  }
+  console.log("[storeProducts] Inserting new product", insertPayload);
+  
   const { data: insertData, error: insertErr } = await supabase
     .from("products")
     .insert(insertPayload)
     .select("id")
-    .maybeSingle();
+    .single();
+    
   if (insertErr) {
-    console.warn("[storeProducts] insert error:", insertErr.message, insertErr.code, insertErr.details);
+    console.error("[storeProducts] insert error:", {
+      message: insertErr.message,
+      code: insertErr.code,
+      details: insertErr.details,
+      hint: insertErr.hint,
+    });
     return { error: insertErr.message };
   }
-  if (insertData?.id) return { id: insertData.id };
+  
+  if (insertData?.id) {
+    console.log("[storeProducts] Successfully inserted product", insertData.id);
+    return { id: insertData.id };
+  }
+  
+  console.error("[storeProducts] No id returned after insert");
   return { error: "No id returned after insert" };
 }
 
-/** Update quantity (and in_stock) for an existing product row */
+/** Update quantity (and in_stock) for an existing product row via backend API */
 export async function updateStoreProductQuantity(
   productId: string,
   quantity: number
 ): Promise<boolean> {
-  if (!supabase) return false;
-  const qty = Math.max(0, quantity);
-  const { error } = await supabase
-    .from("products")
-    .update({ quantity: qty, in_stock: qty > 0 })
-    .eq("id", productId);
-  return !error;
+  console.log("[updateStoreProductQuantity] START", { productId, quantity });
+  
+  const API_BASE = "http://192.168.0.111:3000"; // Match your config
+  
+  try {
+    const qty = Math.max(0, quantity);
+    console.log("[updateStoreProductQuantity] Calling backend API...");
+    
+    const response = await fetch(`${API_BASE}/store-owner/products/${productId}/quantity`, {
+      method: "PATCH",
+      headers: {
+        "Authorization": "Bearer dummy-token", // You should pass real token
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ quantity: qty })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok || !data.success) {
+      console.error("[updateStoreProductQuantity] Backend error:", data);
+      return false;
+    }
+    
+    console.log("[updateStoreProductQuantity] SUCCESS via backend:", data.product);
+    return true;
+  } catch (error) {
+    console.error("[updateStoreProductQuantity] Exception:", error);
+    return false;
+  }
 }
 
 /** Fetch master_products full list from DB (id, name, image_url, base_price, etc.) */

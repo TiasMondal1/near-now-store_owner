@@ -114,9 +114,15 @@ export default function StoreOwnerOtpScreen() {
       }
 
       if (__DEV__) {
-        const keys = json ? Object.keys(json) : [];
-        const dataKeys = json?.data && typeof json.data === "object" ? Object.keys(json.data) : [];
-        console.log("[otp] verify keys:", keys, "data:", dataKeys, "token?", !!(json?.token ?? json?.data?.token ?? json?.access_token));
+        console.log("======================================");
+        console.log("[otp] OTP Verification Response:");
+        console.log("  Response keys:", json ? Object.keys(json) : []);
+        console.log("  Success:", json?.success);
+        console.log("  Mode:", mode);
+        console.log("  Token exists:", !!token);
+        console.log("  User:", user);
+        console.log("  User role:", user?.role);
+        console.log("======================================");
       }
 
       // Extract token from common response shapes (backend may use different keys)
@@ -129,24 +135,52 @@ export default function StoreOwnerOtpScreen() {
         json.data?.accessToken;
       const user = json.user ?? json.data?.user ?? json.data;
       const mode = (json.mode ?? json.data?.mode ?? "").toLowerCase();
-      const isStoreOwnerRole =
-        user && (user.role === "shopkeeper" || user.role === "store_owner");
+      
+      // IMPORTANT: Same phone can have multiple roles (customer + shopkeeper)
+      // We sent role: "shopkeeper" in the request, so backend should return shopkeeper-specific data
+      // If backend returns mode: "signup", the shopkeeper account doesn't exist yet
+      // If backend returns a token, the shopkeeper account exists
 
-      // Backend decides by phone + role: same number can exist with different roles (e.g. customer vs shopkeeper).
-      // Only signup when backend says signup (no token). If we have a token, user is registered as shopkeeper → dashboard.
+      console.log("[otp] Extracted values:");
+      console.log("  token:", token ? "exists" : "MISSING");
+      console.log("  user:", user ? "exists" : "MISSING");
+      console.log("  user.role:", user?.role);
+      console.log("  user.name:", user?.name);
+      console.log("  mode:", mode || "NONE");
+
       const explicitlySignup = mode === "signup";
       const hasToken = !!token;
 
-      if (explicitlySignup && !hasToken) {
-        router.replace({
-          pathname: "/store-owner-signup",
-          params: { phone },
-        });
+      console.log("[otp] Decision logic:");
+      console.log("  hasToken:", hasToken);
+      console.log("  explicitlySignup:", explicitlySignup);
+      console.log("  → Action:", hasToken ? "LOGIN to dashboard" : explicitlySignup ? "SIGNUP (store setup)" : "ERROR");
+
+      // CRITICAL CHECK: Backend MUST return shopkeeper role, not customer!
+      // We sent role: "shopkeeper" in request, so response should have user.role = "shopkeeper"
+      if (hasToken && user?.role && user.role !== "shopkeeper" && user.role !== "store_owner") {
+        console.error("[otp] ❌ BACKEND ERROR: Returned wrong role!");
+        console.error("[otp] Expected: shopkeeper or store_owner");
+        console.error("[otp] Got:", user.role);
+        console.error("[otp] This means backend is NOT filtering by role correctly!");
+        Alert.alert(
+          "Backend Configuration Error",
+          `Backend returned ${user.role} account instead of shopkeeper account.\n\n` +
+          "This is a backend bug. The backend must query:\n" +
+          "WHERE phone = '${phone}' AND role = 'shopkeeper'\n\n" +
+          `Backend is returning: ${user.name} (${user.role})\n` +
+          "Should return: Your store account (shopkeeper)\n\n" +
+          "Please check backend /api/auth/verify-otp endpoint."
+        );
         return;
       }
 
+      // If we have a token, shopkeeper account exists → login to dashboard
       if (hasToken) {
-        await saveSession({
+        console.log("[otp] ✅ Shopkeeper account exists - saving session and going to dashboard");
+        console.log("[otp] Store name:", user?.name);
+        console.log("[otp] User role:", user?.role);
+        const sessionData = {
           token,
           user: {
             id: user?.id ?? json.userId ?? json.data?.userId ?? "",
@@ -156,15 +190,36 @@ export default function StoreOwnerOtpScreen() {
             phone: user?.phone ?? phone,
             email: user?.email ?? undefined,
           },
-        });
+        };
+        console.log("[otp] Session data:", sessionData);
+        await saveSession(sessionData);
+        console.log("[otp] Session saved, navigating to /owner-home");
         router.replace("/owner-home");
         return;
       }
 
-      // No token and not explicitly signup — shouldn't happen for valid verify; show error
+      // If mode is signup and no token, shopkeeper account doesn't exist yet → store setup
+      if (explicitlySignup && !hasToken) {
+        console.log("[otp] 🆕 Shopkeeper account doesn't exist - redirecting to store setup");
+        console.log("[otp] Note: Phone may have customer account, but needs shopkeeper account");
+        router.replace({
+          pathname: "/store-owner-signup",
+          params: { phone },
+        });
+        return;
+      }
+
+      // Unexpected state - no token and not signup mode
+      console.error("[otp] ❌ Unexpected state - no token and not signup mode");
+      console.error("[otp] Full response:", JSON.stringify(json, null, 2));
       Alert.alert(
-        "Error",
-        json?.error || json?.message || "Server did not return a session. If your number is already registered, check the backend returns a token and mode: 'login' for existing users."
+        "Login Error",
+        "Could not log you in as shopkeeper.\n\n" +
+        "Details:\n" +
+        `• Token: ${hasToken ? "Yes" : "NO"}\n` +
+        `• Mode: ${mode || "NONE"}\n` +
+        `• Phone: ${phone}\n\n` +
+        "Your phone may be registered as customer only. Please complete store setup to become a shopkeeper."
       );
     } catch (e: any) {
       const msg =

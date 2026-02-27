@@ -10,10 +10,15 @@ import { config } from "./config";
 const url = config.SUPABASE_URL;
 const anonKey = config.SUPABASE_ANON_KEY;
 
+console.log("=== Supabase Initialization ===");
+console.log("URL:", url ? `${url.substring(0, 30)}...` : "MISSING");
+console.log("Anon Key:", anonKey ? `${anonKey.substring(0, 20)}...` : "MISSING");
+
 if (!url || !anonKey) {
-  console.warn(
-    "[supabase] Missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY in .env"
+  console.error(
+    "❌ [supabase] Missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY in .env"
   );
+  console.error("Check your .env file has these variables set correctly");
 }
 
 export const supabase =
@@ -26,5 +31,11 @@ export const supabase =
         },
       })
     : null;
+
+if (supabase) {
+  console.log("✅ [supabase] Client initialized successfully");
+} else {
+  console.error("❌ [supabase] Client NOT initialized - check .env variables");
+}
 
 export default supabase;

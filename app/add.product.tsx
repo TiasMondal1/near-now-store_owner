@@ -52,7 +52,8 @@ export default function AddProductScreen() {
       if (!s?.token) return;
       setToken(s.token);
 
-      const res = await fetch(`${API_BASE}/store-owner/stores`, {
+      const userId = s.user?.id;
+      const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
         headers: { Authorization: `Bearer ${s.token}` },
       });
       const raw = await res.text();
@@ -131,39 +132,31 @@ export default function AddProductScreen() {
     try {
       setSaving(true);
 
-      const res = await fetch(
-        `${API_BASE}/store-owner/stores/${storeId}/products/bulk-from-master`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            items: selected.map(({ product, quantity }) => ({
-              masterProductId: product.id,
-              price: product.base_price,
-              quantity: Math.max(0, quantity),
-            })),
-          }),
-        }
-      );
-      const raw = await res.text();
-      let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {
-        json = null;
-      }
-      if (!res.ok || !json?.success) {
-        Alert.alert("Error", "Failed to add products.");
+      // Write directly to Supabase products table
+      const upsertPromises = selected.map(async ({ product, quantity }) => {
+        const { upsertStoreProduct } = await import("../lib/storeProducts");
+        return upsertStoreProduct(storeId, product.id, Math.max(0, quantity));
+      });
+
+      const results = await Promise.all(upsertPromises);
+      const failures = results.filter((r) => r && "error" in r);
+
+      if (failures.length > 0) {
+        const firstError = failures[0] as { error: string };
+        Alert.alert("Error", `Failed to add some products: ${firstError.error}`);
         return;
       }
+
+      // Invalidate cache so main page refreshes from database
+      await AsyncStorage.removeItem("inventory_persisted_state");
+      await AsyncStorage.removeItem("inventory_products_cache");
 
       setSelected([]);
       setQuery("");
       setConfirmOpen(false);
-      Alert.alert("Success", "Products added. You can adjust stock in Inventory.");
+      Alert.alert("Success", "Products added to your inventory. View in Dashboard or Inventory.");
+    } catch (err: any) {
+      Alert.alert("Error", err?.message || "Failed to add products.");
     } finally {
       setSaving(false);
     }
@@ -275,7 +268,8 @@ export default function AddProductScreen() {
                         )
                   )
                 : allCatalogProducts;
-              return filtered.map((p) => {
+              // Limit rendering to prevent memory issues
+              return filtered.slice(0, 50).map((p) => {
               const entry = selected.find((x) => x.product.id === p.id);
               const checked = !!entry;
               const qty = entry?.quantity ?? 0;

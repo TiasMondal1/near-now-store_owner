@@ -23,7 +23,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { config } from "../lib/config";
 import { colors, radius, spacing } from "../lib/theme";
-import { getStockListFromDb } from "../lib/storeProducts";
+import { getStockListFromDb, updateStoreProductQuantity } from "../lib/storeProducts";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
@@ -70,13 +70,22 @@ export default function OwnerHomeScreen() {
   const [paymentsLoading, setPaymentsLoading] = useState(false);
   const [paymentsDayTotal, setPaymentsDayTotal] = useState(0);
 
-  const [storeProducts, setStoreProducts] = useState<Array<{ id: string; name: string; quantity: number }>>([]);
+  const [storeProducts, setStoreProducts] = useState<Array<{ id: string; name: string; quantity: number; storeProductId?: string }>>([]);
   const [storeProductsLoading, setStoreProductsLoading] = useState(false);
+  const [updatingProductId, setUpdatingProductId] = useState<string | null>(null);
 
   const [exportError, setExportError] = useState<string | null>(null);
 
 
   const selectedStore = stores[0];
+  
+  // Debug logging
+  console.log(`[owner-home] stores array length: ${stores.length}`);
+  console.log(`[owner-home] selectedStore:`, selectedStore ? {
+    id: selectedStore.id,
+    name: selectedStore.name,
+    is_active: selectedStore.is_active
+  } : 'null');
 
   useEffect(() => {
     if (activeTab === "payments") {
@@ -93,9 +102,42 @@ export default function OwnerHomeScreen() {
 
       setSession(s);
       await fetchStores(s.token);
+      
+      // Ensure store starts offline - set all quantities to 0
+      const stores = await (async () => {
+        try {
+          const session = await getSession();
+          const userId = session?.user?.id;
+          const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
+            headers: { Authorization: `Bearer ${s.token}` },
+          });
+          const raw = await res.text();
+          const json = raw ? JSON.parse(raw) : null;
+          return json?.stores || [];
+        } catch {
+          return [];
+        }
+      })();
+      
+      if (stores[0] && !stores[0].is_active) {
+        console.log("⚠️ Store is offline on app start - ensuring all quantities are 0");
+        // Force all quantities to 0 when starting offline
+        await invalidateAllCaches();
+      }
+      
       setLoading(false);
     })();
   }, []);
+
+  const invalidateAllCaches = async () => {
+    try {
+      await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
+      await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
+      console.log("🗑️ Cleared all inventory caches");
+    } catch (error) {
+      console.error("Failed to clear caches:", error);
+    }
+  };
 
   useEffect(() => {
     if (!session || !selectedStore) return;
@@ -105,6 +147,78 @@ export default function OwnerHomeScreen() {
     const interval = setInterval(fetchOrders, 10000);
     return () => clearInterval(interval);
   }, [session, selectedStore]);
+
+  // Realtime subscription for products table
+  useEffect(() => {
+    if (!selectedStore?.id) return;
+
+    console.log("🔴 Setting up realtime subscription for products, store:", selectedStore.id);
+
+    const { supabase } = require("../lib/supabase");
+    
+    const channel = supabase
+      .channel(`products-${selectedStore.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "products",
+          filter: `store_id=eq.${selectedStore.id}`,
+        },
+        (payload: any) => {
+          console.log("🔴 Realtime update received:", payload);
+          
+          // Refresh products from database
+          fetchStoreProducts(true);
+        }
+      )
+      .subscribe((status: string) => {
+        console.log("🔴 Realtime subscription status:", status);
+      });
+
+    return () => {
+      console.log("🔴 Cleaning up realtime subscription");
+      supabase.removeChannel(channel);
+    };
+  }, [selectedStore?.id]);
+
+  // Realtime subscription for stores table (for online/offline status)
+  useEffect(() => {
+    if (!selectedStore?.id || !session?.token) return;
+
+    console.log("🟢 Setting up realtime subscription for store status");
+
+    const { supabase } = require("../lib/supabase");
+    
+    const channel = supabase
+      .channel(`store-${selectedStore.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "stores",
+          filter: `id=eq.${selectedStore.id}`,
+        },
+        (payload: any) => {
+          console.log("🟢 Store status changed:", payload.new);
+          
+          // Refresh store data
+          if (session?.token) {
+            fetchStores(session.token);
+          }
+        }
+      )
+      .subscribe((status: string) => {
+        console.log("🟢 Store subscription status:", status);
+      });
+
+    return () => {
+      console.log("🟢 Cleaning up store subscription");
+      supabase.removeChannel(channel);
+    };
+  }, [selectedStore?.id, session?.token]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -130,9 +244,8 @@ export default function OwnerHomeScreen() {
             id: x.id,
             name: x.name || "Product",
             quantity: Number(x.quantity ?? 0),
-          }))
-          .filter((x: any) => x.quantity > 0)
-          .sort((a: any, b: any) => (b.quantity ?? 0) - (a.quantity ?? 0));
+          }));
+          // Keep products in order they were added (no sorting by quantity)
         if (out.length === 0) return false;
         setStoreProducts(out);
         return true;
@@ -151,9 +264,8 @@ export default function OwnerHomeScreen() {
             id: x.id,
             name: x.name || "Product",
             quantity: Number(x.quantity ?? 0),
-          }))
-          .filter((x: any) => x.quantity > 0)
-          .sort((a: any, b: any) => (b.quantity ?? 0) - (a.quantity ?? 0));
+          }));
+          // Keep products in order they were added (no sorting by quantity)
         if (out.length === 0) return false;
         setStoreProducts(out);
         return true;
@@ -163,18 +275,26 @@ export default function OwnerHomeScreen() {
     };
 
     try {
+      // ALWAYS try database first for real-time updates
+      const fromDb = await getStockListFromDb(selectedStore.id);
+      if (Array.isArray(fromDb) && fromDb.length > 0) {
+        const mapped = fromDb.map((item: any) => ({
+          id: item.id, // master_product_id
+          name: item.name || "Product",
+          quantity: item.quantity || 0,
+          storeProductId: item.storeProductId, // products table id
+        }));
+        setStoreProducts(mapped);
+        if (!silent) setStoreProductsLoading(false);
+        return;
+      }
+
+      // Only use cache if database returns nothing
       const [cacheRaw, arrayCacheRaw] = await Promise.all([
         AsyncStorage.getItem(INVENTORY_PERSISTED_KEY),
         AsyncStorage.getItem(INVENTORY_CACHE_KEY),
       ]);
       const fromCache = applyInventoryCache(cacheRaw) || applyProductsArrayCache(arrayCacheRaw);
-
-      const fromDb = await getStockListFromDb(selectedStore.id);
-      if (Array.isArray(fromDb) && fromDb.length > 0) {
-        setStoreProducts(fromDb);
-        if (!silent) setStoreProductsLoading(false);
-        return;
-      }
 
       if (fromCache) {
         if (!silent) setStoreProductsLoading(false);
@@ -270,18 +390,26 @@ export default function OwnerHomeScreen() {
 
   const fetchStores = async (token: string) => {
     try {
-      const res = await fetch(`${API_BASE}/store-owner/stores`, {
+      const session = await getSession();
+      const userId = session?.user?.id;
+      console.log(`[fetchStores] Fetching stores for userId: ${userId}`);
+      const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const raw = await res.text();
+      console.log(`[fetchStores] Response status: ${res.status}`);
+      console.log(`[fetchStores] Response raw (first 200 chars): ${raw.substring(0, 200)}`);
       let json: any = null;
       try {
         json = raw ? JSON.parse(raw) : null;
-      } catch {
+      } catch (e) {
+        console.error(`[fetchStores] Failed to parse JSON:`, e);
         // HTML or non-JSON response
       }
+      console.log(`[fetchStores] Parsed stores:`, json?.stores);
       setStores(json?.stores || []);
-    } catch {
+    } catch (e) {
+      console.error(`[fetchStores] Error:`, e);
       setStores([]);
     }
   };
@@ -478,16 +606,103 @@ export default function OwnerHomeScreen() {
   const toggleOnline = async (value: boolean) => {
     if (!session || !selectedStore) return;
 
-    await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${session.token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ is_active: value }),
-    });
+    try {
+      if (value) {
+        // Going ONLINE - just enable quantity editing, start from 0
+        Alert.alert(
+          "Go Online?",
+          "Your store will become visible to customers. You can set product quantities starting from 0.",
+          [
+            {
+              text: "Cancel",
+              style: "cancel"
+            },
+            {
+              text: "Go Online",
+              onPress: async () => {
+                // Just update store status - quantities stay at 0
+                await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
+                  method: "PATCH",
+                  headers: {
+                    Authorization: `Bearer ${session.token}`,
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({ is_active: true }),
+                });
 
-    fetchStores(session.token);
+                await fetchStores(session.token);
+                await fetchStoreProducts(true);
+                
+                Alert.alert(
+                  "Store Online", 
+                  "You can now set product quantities. Use +/- buttons to add stock."
+                );
+              }
+            }
+          ]
+        );
+      } else {
+        // Going OFFLINE - reset everything to 0
+        Alert.alert(
+          "Go Offline?",
+          "Your store will be hidden from customers. All product quantities will be reset to 0.",
+          [
+            {
+              text: "Cancel",
+              style: "cancel"
+            },
+            {
+              text: "Go Offline",
+              style: "destructive",
+              onPress: async () => {
+                setStoreProductsLoading(true);
+                
+                try {
+                  console.log("🔴 Going offline - resetting all quantities to 0");
+                  
+                  // Set all products to quantity 0
+                  const productsToReset = storeProducts.filter(p => p.storeProductId && p.quantity > 0);
+                  console.log(`Resetting ${productsToReset.length} products to 0`);
+                  
+                  for (const product of productsToReset) {
+                    await updateStoreProductQuantity(product.storeProductId, 0);
+                  }
+
+                  // Update store status
+                  await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
+                    method: "PATCH",
+                    headers: {
+                      Authorization: `Bearer ${session.token}`,
+                      "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ is_active: false }),
+                  });
+
+                  // Clear all caches
+                  await invalidateAllCaches();
+                  
+                  // Refresh store and products
+                  await fetchStores(session.token);
+                  await fetchStoreProducts(true);
+                  
+                  // Force UI to show 0
+                  setStoreProducts(prev => prev.map(p => ({ ...p, quantity: 0 })));
+                  
+                  setStoreProductsLoading(false);
+                  
+                  Alert.alert("Store Offline", "All quantities reset to 0. Store hidden from customers.");
+                } catch (error) {
+                  console.error("Error going offline:", error);
+                  setStoreProductsLoading(false);
+                }
+              }
+            }
+          ]
+        );
+      }
+    } catch (error) {
+      console.error("Error toggling store status:", error);
+    }
   };
 
 
@@ -600,6 +815,92 @@ export default function OwnerHomeScreen() {
   };
 
 
+  const updateProductQuantity = async (product: any, newQty: number) => {
+    console.log("🔵 updateProductQuantity called", { productId: product.id, storeProductId: product.storeProductId, oldQty: product.quantity, newQty });
+    
+    // Check if store is online
+    if (!selectedStore?.is_active) {
+      console.log("❌ Store is offline, cannot update");
+      return;
+    }
+
+    if (!product.storeProductId) {
+      console.log("❌ No storeProductId found for product", product);
+      return;
+    }
+
+    const qty = Math.max(0, newQty);
+    setUpdatingProductId(product.id);
+
+    // Optimistic update
+    setStoreProducts((prev) =>
+      prev.map((p) => (p.id === product.id ? { ...p, quantity: qty } : p))
+    );
+    console.log("✅ Optimistic UI update applied, quantity:", qty);
+
+    try {
+      console.log("📡 Calling updateStoreProductQuantity...");
+      const success = await updateStoreProductQuantity(product.storeProductId, qty);
+      console.log("📡 updateStoreProductQuantity result:", success);
+      
+      if (!success) {
+        console.log("❌ Update failed, reverting");
+        // Revert on failure
+        setStoreProducts((prev) =>
+          prev.map((p) => (p.id === product.id ? { ...p, quantity: product.quantity } : p))
+        );
+      } else {
+        console.log("✅ Update successful, clearing caches");
+        // Invalidate cache to refresh data
+        await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
+        await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
+        console.log("✅ Quantity updated successfully");
+      }
+    } catch (error) {
+      console.error("❌ Exception in updateProductQuantity:", error);
+      // Revert on error
+      setStoreProducts((prev) =>
+        prev.map((p) => (p.id === product.id ? { ...p, quantity: product.quantity } : p))
+      );
+    } finally {
+      setUpdatingProductId(null);
+    }
+  };
+
+  const deleteProduct = async (product: any) => {
+    if (!product.storeProductId) {
+      console.log("❌ No storeProductId found for delete");
+      return;
+    }
+
+    try {
+      console.log("🗑️ Deleting product from store:", product.storeProductId);
+      
+      // Delete from products table
+      const { supabase } = require("../lib/supabase");
+      const { error } = await supabase
+        .from("products")
+        .delete()
+        .eq("id", product.storeProductId);
+
+      if (error) {
+        console.error("Failed to delete product:", error);
+        return;
+      }
+
+      // Update UI
+      setStoreProducts((prev) => prev.filter((p) => p.id !== product.id));
+      
+      // Clear caches
+      await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
+      await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
+      
+      console.log("✅ Product removed successfully");
+    } catch (error) {
+      console.error("Error deleting product:", error);
+    }
+  };
+
   const logout = async () => {
     await clearSession();
     router.replace("/landing");
@@ -617,13 +918,22 @@ export default function OwnerHomeScreen() {
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.header}>
-          <View>
-            <Text style={styles.brand}>Near&Now</Text>
-            <Text style={styles.subtitle}>Store Dashboard</Text>
+          <View style={styles.headerLeft}>
+            <Ionicons name="storefront" size={24} color={colors.primary} />
+            <View>
+              <Text style={styles.brand}>Near&Now</Text>
+              <Text style={styles.subtitle}>Store Owner</Text>
+            </View>
           </View>
-          <TouchableOpacity onPress={logout}>
-            <Text style={styles.logout}>Logout</Text>
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            <TouchableOpacity onPress={() => router.push("/profile")} style={styles.iconBtn}>
+              <Ionicons name="person-circle-outline" size={24} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={logout} style={styles.logoutBtn}>
+              <Ionicons name="log-out-outline" size={18} color={colors.error} />
+              <Text style={styles.logoutText}>Logout</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <Modal visible={!!selectedOrder} transparent animationType="fade">
@@ -747,9 +1057,19 @@ export default function OwnerHomeScreen() {
         </Modal>
 
         {selectedStore && (
-          <View style={styles.storeCard}>
+          <View style={[
+            styles.storeCard,
+            !selectedStore.is_active && styles.storeCardOffline
+          ]}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.storeName}>{selectedStore.name}</Text>
+              <View style={styles.storeHeader}>
+                <Text style={styles.storeName}>{selectedStore.name}</Text>
+                {!selectedStore.is_active && (
+                  <View style={styles.offlineBadge}>
+                    <Text style={styles.offlineBadgeText}>OFFLINE</Text>
+                  </View>
+                )}
+              </View>
               <Text style={styles.storeAddress}>
                 {selectedStore.address || "No address"}
               </Text>
@@ -758,14 +1078,21 @@ export default function OwnerHomeScreen() {
               </Text>
             </View>
             <View style={{ alignItems: "flex-end" }}>
-              <Text style={styles.switchLabel}>
+              <Text style={[
+                styles.switchLabel,
+                { color: selectedStore.is_active ? colors.success : colors.error }
+              ]}>
                 {selectedStore.is_active ? "Online" : "Offline"}
               </Text>
               <Switch
                 value={selectedStore.is_active}
                 onValueChange={toggleOnline}
-                trackColor={{ false: colors.border, true: colors.primary }}
-                thumbColor="#FFF"
+                trackColor={{ 
+                  false: colors.error + "40", 
+                  true: colors.success + "40" 
+                }}
+                thumbColor={selectedStore.is_active ? colors.success : colors.error}
+                ios_backgroundColor={colors.error + "40"}
               />
             </View>
           </View>
@@ -829,18 +1156,114 @@ export default function OwnerHomeScreen() {
         {activeTab === "orders" && (
           <>
             <View style={styles.stockSection}>
-              <Text style={styles.stockTitle}>Your stock (quantity stored)</Text>
+              <View style={styles.stockHeader}>
+                <View>
+                  <Text style={styles.stockTitle}>Your Stock</Text>
+                  <Text style={styles.stockSubtitle}>
+                    {storeProducts.length} products in inventory
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.manageBtn}
+                  onPress={() => router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })}
+                >
+                  <Ionicons name="settings-outline" size={16} color={colors.primary} />
+                  <Text style={styles.manageBtnText}>Manage</Text>
+                </TouchableOpacity>
+              </View>
+
               {storeProductsLoading ? (
-                <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.md }} />
+                <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.lg }} />
               ) : storeProducts.length === 0 ? (
-                <Text style={styles.stockEmpty}>No products in inventory yet. Add from Inventory or Catalog.</Text>
+                <View style={styles.emptyStock}>
+                  <Ionicons name="cube-outline" size={48} color={colors.textTertiary} />
+                  <Text style={styles.emptyStockTitle}>
+                    {selectedStore?.is_active 
+                      ? "No products yet" 
+                      : "Store is Offline"}
+                  </Text>
+                  <Text style={styles.emptyStockText}>
+                    {selectedStore?.is_active
+                      ? "Add products from Inventory to start tracking stock"
+                      : "Go online to set product quantities and accept orders"}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.addStockBtn}
+                    onPress={() => 
+                      selectedStore?.is_active 
+                        ? router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })
+                        : toggleOnline(true)
+                    }
+                  >
+                    <Text style={styles.addStockBtnText}>
+                      {selectedStore?.is_active ? "Go to Inventory" : "Go Online"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               ) : (
-                storeProducts.map((p) => (
-                  <View key={p.id} style={styles.stockRow}>
-                    <Text style={styles.stockName} numberOfLines={1}>{p.name}</Text>
-                    <Text style={styles.stockQty}>Qty: {p.quantity}</Text>
-                  </View>
-                ))
+                <View style={styles.stockList}>
+                  {storeProducts.slice(0, 20).map((p, index) => {
+                    // Always show actual quantity from database
+                    const displayQty = p.quantity;
+                    
+                    return (
+                      <View key={p.id} style={[styles.stockItemCard, index === storeProducts.slice(0, 20).length - 1 && { marginBottom: 0 }]}>
+                        <TouchableOpacity
+                          style={styles.deleteBtn}
+                          onPress={() => deleteProduct(p)}
+                        >
+                          <Ionicons name="close-circle" size={24} color={colors.error} />
+                        </TouchableOpacity>
+                        <View style={styles.stockItemInfo}>
+                          <Text style={styles.stockItemName} numberOfLines={1}>
+                            {p.name}
+                          </Text>
+                          <Text style={styles.stockItemQty}>
+                            {displayQty} units in stock
+                          </Text>
+                        </View>
+                        <View style={styles.stockControls}>
+                          <TouchableOpacity
+                            style={[styles.stockBtn, styles.stockBtnMinus]}
+                            onPress={() => updateProductQuantity(p, p.quantity - 1)}
+                            disabled={updatingProductId === p.id || !selectedStore?.is_active || p.quantity <= 0}
+                          >
+                            {updatingProductId === p.id ? (
+                              <ActivityIndicator size="small" color={colors.textSecondary} />
+                            ) : (
+                              <Ionicons 
+                                name="remove" 
+                                size={18} 
+                                color={!selectedStore?.is_active || p.quantity <= 0 ? colors.textDisabled : colors.textSecondary} 
+                              />
+                            )}
+                          </TouchableOpacity>
+                          <Text style={styles.stockQtyNum}>{displayQty}</Text>
+                          <TouchableOpacity
+                            style={[styles.stockBtn, styles.stockBtnPlus]}
+                            onPress={() => updateProductQuantity(p, p.quantity + 1)}
+                            disabled={updatingProductId === p.id || !selectedStore?.is_active}
+                          >
+                            {updatingProductId === p.id ? (
+                              <ActivityIndicator size="small" color={colors.primary} />
+                            ) : (
+                              <Ionicons 
+                                name="add" 
+                                size={18} 
+                                color={!selectedStore?.is_active ? colors.textDisabled : colors.primary} 
+                              />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })}
+                  {storeProducts.length > 20 && (
+                    <Text style={styles.stockShowingText}>
+                      Showing 20 of {storeProducts.length} products
+                    </Text>
+                  )}
+                </View>
               )}
             </View>
             {orders.length === 0 ? (
@@ -929,10 +1352,62 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   container: { padding: spacing.lg },
 
-  header: { flexDirection: "row", justifyContent: "space-between", marginBottom: spacing.lg },
-  brand: { color: colors.textPrimary, fontSize: 20, fontWeight: "800" },
-  subtitle: { color: colors.textTertiary, fontSize: 11 },
-  logout: { color: colors.primary, fontSize: 12, fontWeight: "600" },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: spacing.xl,
+    alignItems: "center",
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+  },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  headerActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    alignItems: "center",
+  },
+  brand: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+  },
+  subtitle: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    marginTop: -2,
+  },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  logoutBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.error + "30",
+  },
+  logoutText: {
+    color: colors.error,
+    fontSize: 12,
+    fontWeight: "600",
+  },
 
   storeCard: {
     flexDirection: "row",
@@ -940,14 +1415,60 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderWidth: 2,
+    borderColor: colors.success + "30",
     marginBottom: spacing.lg,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  storeName: { color: colors.textPrimary, fontSize: 17, fontWeight: "700" },
-  storeAddress: { color: colors.textSecondary, fontSize: 12 },
-  storeMeta: { color: colors.textTertiary, fontSize: 11, marginTop: 6 },
-  switchLabel: { color: colors.textSecondary, fontSize: 12, marginBottom: 4 },
+  storeCardOffline: {
+    backgroundColor: colors.error + "08",
+    borderColor: colors.error + "60",
+    shadowColor: colors.error,
+  },
+  storeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: 4,
+  },
+  offlineBadge: {
+    backgroundColor: colors.error,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+  },
+  offlineBadgeText: {
+    color: colors.surface,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  storeName: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    fontWeight: "700",
+    letterSpacing: -0.3,
+  },
+  storeAddress: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  storeMeta: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    marginTop: 6,
+  },
+  switchLabel: {
+    fontSize: 13,
+    marginBottom: 6,
+    fontWeight: "600",
+  },
 
   tabs: {
     flexDirection: "row",
@@ -980,19 +1501,145 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     marginBottom: spacing.lg,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  stockTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: "700", marginBottom: spacing.sm },
-  stockEmpty: { color: colors.textTertiary, fontSize: 12 },
-  stockRow: {
+  stockHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: spacing.xs,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    marginBottom: spacing.lg,
   },
-  stockName: { color: colors.textPrimary, fontSize: 13, flex: 1 },
-  stockQty: { color: colors.textSecondary, fontSize: 13, fontWeight: "600", marginLeft: spacing.sm },
+  stockTitle: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    fontWeight: "700",
+    letterSpacing: -0.3,
+  },
+  stockSubtitle: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  manageBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  manageBtnText: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  emptyStock: {
+    alignItems: "center",
+    paddingVertical: spacing.xl,
+  },
+  emptyStockTitle: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: spacing.md,
+  },
+  emptyStockText: {
+    color: colors.textTertiary,
+    fontSize: 13,
+    textAlign: "center",
+    marginTop: spacing.xs,
+    marginBottom: spacing.lg,
+    paddingHorizontal: spacing.lg,
+  },
+  addStockBtn: {
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+  },
+  addStockBtnText: {
+    color: colors.surface,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  stockList: {
+    gap: spacing.sm,
+  },
+  stockItemCard: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: spacing.md,
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    position: "relative",
+  },
+  deleteBtn: {
+    position: "absolute",
+    left: -8,
+    top: "50%",
+    transform: [{ translateY: -12 }],
+    zIndex: 10,
+    padding: 4,
+  },
+  stockItemInfo: {
+    flex: 1,
+    marginRight: spacing.md,
+    marginLeft: 20,
+  },
+  stockItemName: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  stockItemQty: {
+    color: colors.textSecondary,
+    fontSize: 12,
+  },
+  stockControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  stockBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.sm,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+  },
+  stockBtnMinus: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+  },
+  stockBtnPlus: {
+    backgroundColor: colors.surface,
+    borderColor: colors.primary,
+  },
+  stockQtyNum: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontWeight: "700",
+    minWidth: 32,
+    textAlign: "center",
+  },
+  stockShowingText: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    textAlign: "center",
+    marginTop: spacing.sm,
+  },
 
   orderRow: {
     backgroundColor: colors.surface,

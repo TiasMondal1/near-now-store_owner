@@ -1,11 +1,68 @@
-import React from "react";
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import React, { useEffect, useState } from "react";
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import { getSession, clearSession } from "../session";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { colors, radius, spacing } from "../lib/theme";
 
 export default function LandingScreen() {
   const router = useRouter();
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      console.log("[landing] Checking for existing session...");
+      const session = await getSession();
+      console.log("[landing] Session check result:", {
+        exists: !!session,
+        hasToken: !!session?.token,
+        hasUserId: !!session?.user?.id,
+        userRole: session?.user?.role,
+      });
+      
+      // CRITICAL: Store Owner app should NEVER have a customer session
+      if (session?.user?.role === "customer") {
+        console.error("[landing] ❌ WRONG SESSION TYPE: customer session in store owner app!");
+        Alert.alert(
+          "Wrong Account Type",
+          "You're logged in as a customer, but this is the Store Owner app. Please clear the session and log in with your shopkeeper account.",
+          [
+            {
+              text: "Clear & Retry",
+              onPress: async () => {
+                await clearSession();
+                await AsyncStorage.removeItem("inventory_persisted_state");
+                await AsyncStorage.removeItem("inventory_products_cache");
+                setChecking(false);
+              },
+            },
+            { text: "Cancel", onPress: () => setChecking(false) },
+          ]
+        );
+        return;
+      }
+      
+      if (session?.token && session?.user?.id) {
+        console.log("[landing] ✅ Valid session found, redirecting to dashboard");
+        router.replace("/owner-home");
+      } else {
+        console.log("[landing] No valid session, showing login screen");
+        setChecking(false);
+      }
+    })();
+  }, []);
+
+  if (checking) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Checking session...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -41,6 +98,33 @@ export default function LandingScreen() {
         <Text style={styles.footer}>
           Same verification as the main Near&Now app — phone & OTP only.
         </Text>
+
+        {__DEV__ && (
+          <TouchableOpacity
+            style={styles.devButton}
+            onPress={async () => {
+              Alert.alert(
+                "Clear All Cache",
+                "This will clear session, inventory, and all cached data. You'll need to log in again.",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Clear",
+                    style: "destructive",
+                    onPress: async () => {
+                      await clearSession();
+                      await AsyncStorage.removeItem("inventory_persisted_state");
+                      await AsyncStorage.removeItem("inventory_products_cache");
+                      Alert.alert("Success", "All cache cleared. Please reload the app.");
+                    },
+                  },
+                ]
+              );
+            }}
+          >
+            <Text style={styles.devButtonText}>🧹 Clear Cache (Dev)</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -132,5 +216,18 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     textAlign: "center",
     lineHeight: 16,
+  },
+  devButton: {
+    backgroundColor: "#ff4444",
+    borderRadius: radius.md,
+    paddingVertical: 12,
+    paddingHorizontal: spacing.lg,
+    marginTop: spacing.lg,
+    alignItems: "center",
+  },
+  devButtonText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#fff",
   },
 });
