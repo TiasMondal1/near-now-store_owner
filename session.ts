@@ -50,5 +50,8 @@ export async function getSession(): Promise<UserSession | null> {
 export async function clearSession() {
   console.log("[session] Clearing session...");
   await AsyncStorage.removeItem(SESSION_KEY);
-  console.log("[session] ✅ Session cleared");
+  // Also clear inventory cache to prevent cross-user contamination
+  await AsyncStorage.removeItem("inventory_persisted_state");
+  await AsyncStorage.removeItem("inventory_products_cache");
+  console.log("[session] ✅ Session and inventory cache cleared");
 }
