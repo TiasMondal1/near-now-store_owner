@@ -37,15 +37,28 @@ export default function InventoryScreen() {
   const [products, setProducts] = useState<any[]>(() =>
     persistedProducts.length > 0 ? [...persistedProducts] : []
   );
-  const [storeId, setStoreId] = useState<string | null>(() => persistedStoreId ?? params.storeId ?? null);
+  // CRITICAL: Always use storeId from params first, ignore cached value
+  const [storeId, setStoreId] = useState<string | null>(() => params.storeId ?? null);
   const [token, setToken] = useState<string | null>(null);
   const [search, setSearch] = useState(() => persistedSearch);
   const [editingQty, setEditingQty] = useState<{ id: string; value: string } | null>(null);
   const editingValueRef = useRef("");
 
+  // Always update storeId if params change
   useEffect(() => {
     const fromParams = typeof params.storeId === "string" && params.storeId.length > 0 ? params.storeId : null;
-    if (fromParams && fromParams !== storeId) setStoreId(fromParams);
+    if (fromParams) {
+      console.log("[inventory] Setting storeId from params:", fromParams);
+      setStoreId(fromParams);
+      // Clear cache when storeId changes (different user)
+      if (persistedStoreId && persistedStoreId !== fromParams) {
+        console.log("[inventory] StoreId changed - clearing cache");
+        persistedStoreId = null;
+        persistedProducts = [];
+        persistedSearch = "";
+        AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY).catch(() => {});
+      }
+    }
   }, [params.storeId]);
 
   useEffect(() => {
@@ -137,6 +150,15 @@ export default function InventoryScreen() {
           return;
         }
         setToken(session.token);
+
+        // CRITICAL: If we have a storeId from params, ignore cache and use that
+        if (storeId) {
+          console.log("[inventory] Using storeId from params, fetching fresh data:", storeId);
+          const list = await fetchInventory(session.token, storeId);
+          setProducts(list);
+          setLoading(false);
+          return;
+        }
 
         const fromPersisted =
           persistedRaw &&
