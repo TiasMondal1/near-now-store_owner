@@ -17,8 +17,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { getSession, clearSession } from "../session";
-import { CameraView } from "expo-camera";
-import { Camera, useCameraPermissions } from "expo-camera";
+import { CameraView, useCameraPermissions } from "expo-camera";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { config } from "../lib/config";
@@ -47,7 +46,7 @@ type StoreRow = {
 
 
 export default function OwnerHomeScreen() {
-  const [permission, requestPermission] = useCameraPermissions();
+  const [, requestPermission] = useCameraPermissions();
   const [scannerVisible, setScannerVisible] = useState(false);
   const [exportState, setExportState] = useState<"idle" | "scanning" | "success">("idle");;
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
@@ -61,7 +60,7 @@ export default function OwnerHomeScreen() {
   const [stores, setStores] = useState<StoreRow[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
   const [incomingOrder, setIncomingOrder] = useState<any | null>(null);
-  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [, setDetailsLoading] = useState(false);
   const [countdown, setCountdown] = useState(20);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<
@@ -70,14 +69,49 @@ export default function OwnerHomeScreen() {
   const [paymentsLoading, setPaymentsLoading] = useState(false);
   const [paymentsDayTotal, setPaymentsDayTotal] = useState(0);
 
-  const [storeProducts, setStoreProducts] = useState<Array<{ id: string; name: string; quantity: number; storeProductId?: string }>>([]);
+  const [storeProducts, setStoreProducts] = useState<
+    Array<{ id: string; name: string; quantity: number; storeProductId?: string }>
+  >([]);
   const [storeProductsLoading, setStoreProductsLoading] = useState(false);
   const [updatingProductId, setUpdatingProductId] = useState<string | null>(null);
-
-  const [exportError, setExportError] = useState<string | null>(null);
+  const [stockExpanded, setStockExpanded] = useState(false);
 
 
   const selectedStore = stores[0];
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "pending_store":
+        return "#F59E0B";
+      case "accepted":
+        return colors.success;
+      case "rejected":
+        return colors.error;
+      case "ready":
+        return "#3B82F6";
+      case "delivered":
+        return colors.textTertiary;
+      default:
+        return colors.textTertiary;
+    }
+  };
+
+  const formatStatus = (status: string) => {
+    switch (status) {
+      case "pending_store":
+        return "Pending";
+      case "accepted":
+        return "Accepted";
+      case "rejected":
+        return "Rejected";
+      case "ready":
+        return "Ready";
+      case "delivered":
+        return "Delivered";
+      default:
+        return status;
+    }
+  };
 
   // Debug logging
   console.log(`[owner-home] stores array length: ${stores.length}`);
@@ -92,8 +126,6 @@ export default function OwnerHomeScreen() {
       fetchPayments();
     }
   }, [activeTab]);
-
-
 
   useEffect(() => {
     (async () => {
@@ -245,7 +277,7 @@ export default function OwnerHomeScreen() {
             name: x.name || "Product",
             quantity: Number(x.quantity ?? 0),
           }));
-          // Keep products in order they were added (no sorting by quantity)
+        // Keep products in order they were added (no sorting by quantity)
         if (out.length === 0) return false;
         setStoreProducts(out);
         return true;
@@ -265,7 +297,7 @@ export default function OwnerHomeScreen() {
             name: x.name || "Product",
             quantity: Number(x.quantity ?? 0),
           }));
-          // Keep products in order they were added (no sorting by quantity)
+        // Keep products in order they were added (no sorting by quantity)
         if (out.length === 0) return false;
         setStoreProducts(out);
         return true;
@@ -387,7 +419,6 @@ export default function OwnerHomeScreen() {
     }
   };
 
-
   const fetchStores = async (token: string) => {
     try {
       const session = await getSession();
@@ -473,7 +504,6 @@ export default function OwnerHomeScreen() {
     }
   };
 
-
   const openOrderDetails = async (orderId: string) => {
     if (!session) return;
 
@@ -509,7 +539,6 @@ export default function OwnerHomeScreen() {
       setDetailsLoading(false);
     }
   };
-
 
   const onQrScanned = async ({ data }: { data: string }) => {
     if (exportState !== "scanning" || !selectedOrder || !session) return;
@@ -577,9 +606,6 @@ export default function OwnerHomeScreen() {
     }
   };
 
-
-
-
   const handleExportPress = async (order: any) => {
     const { granted } = await requestPermission();
     if (!granted) {
@@ -589,7 +615,6 @@ export default function OwnerHomeScreen() {
       );
       return;
     }
-
 
     setSelectedOrder(order);
     setExportState("scanning");
@@ -601,7 +626,6 @@ export default function OwnerHomeScreen() {
     setExportState("idle");
     setSelectedOrder(null);
   };
-
 
   const toggleOnline = async (value: boolean) => {
     if (!session || !selectedStore) return;
@@ -735,7 +759,6 @@ export default function OwnerHomeScreen() {
     }
   };
 
-
   const openIncomingOrder = async (order: any) => {
     if (incomingOrder?.id === order.id) return;
 
@@ -754,7 +777,6 @@ export default function OwnerHomeScreen() {
     await Haptics.notificationAsync(
       Haptics.NotificationFeedbackType.Warning
     );
-
 
     Animated.parallel([
       Animated.spring(slideAnim, {
@@ -799,7 +821,6 @@ export default function OwnerHomeScreen() {
     setIncomingOrder(null);
   };
 
-
   const acceptOrder = async () => {
     if (!incomingOrder || !session) return;
 
@@ -821,7 +842,6 @@ export default function OwnerHomeScreen() {
     closePopup();
   };
 
-
   const rejectOrder = async () => {
     if (!incomingOrder || !session) return;
 
@@ -842,7 +862,6 @@ export default function OwnerHomeScreen() {
 
     closePopup();
   };
-
 
   const updateProductQuantity = async (product: any, newQty: number) => {
     console.log("🔵 updateProductQuantity called", { productId: product.id, storeProductId: product.storeProductId, oldQty: product.quantity, newQty });
@@ -907,6 +926,7 @@ export default function OwnerHomeScreen() {
 
       // Delete from products table
       const { supabase } = require("../lib/supabase");
+
       const { error } = await supabase
         .from("products")
         .delete()
@@ -1024,7 +1044,6 @@ export default function OwnerHomeScreen() {
           </View>
         </Modal>
 
-
         <Modal visible={scannerVisible} animationType="slide">
           <View style={{ flex: 1, backgroundColor: "#000" }}>
             <CameraView
@@ -1133,7 +1152,7 @@ export default function OwnerHomeScreen() {
           contentContainerStyle={styles.tabs}
         >
           <Tab label="Orders" active={activeTab === "orders"} onPress={() => setActiveTab("orders")} />
-          <Tab label="Add product" active={false} onPress={() => router.push({ pathname: "/add.product", params: { storeId: selectedStore?.id } })} />
+          <Tab label="Add Custom" active={false} onPress={() => router.push({ pathname: "/add.product", params: { storeId: selectedStore?.id } })} />
           <Tab label="Payments" active={activeTab === "payments"} onPress={() => setActiveTab("payments")} />
           <Tab label="Payouts" active={activeTab === "payouts"} onPress={() => setActiveTab("payouts")} />
           <Tab label="Inventory" active={false} onPress={() => router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })} />
@@ -1184,72 +1203,161 @@ export default function OwnerHomeScreen() {
 
         {activeTab === "orders" && (
           <>
-            <View style={styles.stockSection}>
-              <View style={styles.stockHeader}>
+            {/* ── ACTIVE ORDERS – always at top ── */}
+            <View style={styles.ordersSection}>
+              <View style={styles.ordersSectionHeader}>
                 <View>
-                  <Text style={styles.stockTitle}>Your Stock</Text>
-                  <Text style={styles.stockSubtitle}>
-                    {storeProducts.length} products in inventory
+                  <Text style={styles.ordersSectionTitle}>Active Orders</Text>
+                  <Text style={styles.ordersSectionSubtitle}>
+                    {orders.length === 0
+                      ? "Waiting for new orders..."
+                      : `${orders.length} order${orders.length > 1 ? "s" : ""}`}
                   </Text>
                 </View>
-                <TouchableOpacity
-                  style={styles.manageBtn}
-                  onPress={() => router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })}
-                >
-                  <Ionicons name="settings-outline" size={16} color={colors.primary} />
-                  <Text style={styles.manageBtnText}>Manage</Text>
+                <TouchableOpacity onPress={fetchOrders} style={styles.refreshBtn}>
+                  <Ionicons name="refresh-outline" size={18} color={colors.primary} />
                 </TouchableOpacity>
               </View>
 
-              {storeProductsLoading ? (
-                <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.lg }} />
-              ) : storeProducts.length === 0 ? (
-                <View style={styles.emptyStock}>
-                  <Ionicons name="cube-outline" size={48} color={colors.textTertiary} />
-                  <Text style={styles.emptyStockTitle}>
-                    {selectedStore?.is_active
-                      ? "No products yet"
-                      : "Store is Offline"}
-                  </Text>
-                  <Text style={styles.emptyStockText}>
-                    {selectedStore?.is_active
-                      ? "Add products from Inventory to start tracking stock"
-                      : "Go online to set product quantities and accept orders"}
-                  </Text>
-                  <TouchableOpacity
-                    style={styles.addStockBtn}
-                    onPress={() =>
-                      selectedStore?.is_active
-                        ? router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })
-                        : toggleOnline(true)
-                    }
-                  >
-                    <Text style={styles.addStockBtnText}>
-                      {selectedStore?.is_active ? "Go to Inventory" : "Go Online"}
-                    </Text>
-                  </TouchableOpacity>
+              {orders.length === 0 ? (
+                <View style={styles.waitingCard}>
+                  <Ionicons name="time-outline" size={36} color={colors.textTertiary} />
+                  <Text style={styles.waitingTitle}>Waiting for orders</Text>
+                  <Text style={styles.waitingText}>New orders appear here automatically every 10s</Text>
                 </View>
               ) : (
-                <View style={styles.stockList}>
-                  {storeProducts.slice(0, 20).map((p, index) => {
-                    // Always show actual quantity from database
-                    const displayQty = p.quantity;
+                orders.map((o) => (
+                  <TouchableOpacity
+                    key={o.id}
+                    style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
+                    onPress={() => openOrderDetails(o.id)}
+                    activeOpacity={0.75}
+                  >
+                    <View style={styles.orderCardLeft}>
+                      <Text style={styles.orderCardCode}>#{o.order_code}</Text>
+                      {o.created_at && (
+                        <Text style={styles.orderCardTime}>
+                          {new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </Text>
+                      )}
+                    </View>
+                    <View style={styles.orderCardRight}>
+                      <View style={[styles.statusBadge, { backgroundColor: getStatusColor(o.status) + "22" }]}>
+                        <Text style={[styles.statusBadgeText, { color: getStatusColor(o.status) }]}>
+                          {formatStatus(o.status)}
+                        </Text>
+                      </View>
+                      {o.total_amount != null && (
+                        <Text style={styles.orderCardAmount}>₹{o.total_amount}</Text>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                ))
+              )}
+            </View>
 
-                    return (
-                      <View key={p.id} style={[styles.stockItemCard, index === storeProducts.slice(0, 20).length - 1 && { marginBottom: 0 }]}>
+            {/* ── YOUR STOCK – collapsible ── */}
+            <View style={styles.stockSection}>
+              <TouchableOpacity
+                style={styles.stockHeader}
+                onPress={() => setStockExpanded(!stockExpanded)}
+                activeOpacity={0.75}
+              >
+                <View>
+                  <Text style={styles.stockTitle}>Your Stock</Text>
+                  <Text style={styles.stockSubtitle}>
+                    {storeProducts.length} product{storeProducts.length !== 1 ? "s" : ""} in store
+                  </Text>
+                </View>
+                <View style={styles.stockHeaderRight}>
+                  <TouchableOpacity
+                    style={styles.manageBtn}
+                    onPress={() => router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })}
+                  >
+                    <Ionicons name="settings-outline" size={14} color={colors.primary} />
+                    <Text style={styles.manageBtnText}>Manage</Text>
+                  </TouchableOpacity>
+                  <Ionicons
+                    name={stockExpanded ? "chevron-up" : "chevron-down"}
+                    size={18}
+                    color={colors.textTertiary}
+                  />
+                </View>
+              </TouchableOpacity>
+
+              {/* Collapsed: horizontal chip scroll */}
+              {!stockExpanded && storeProducts.length > 0 && (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.chipScroll}
+                >
+                  {storeProducts.slice(0, 15).map((p) => (
+                    <View key={p.id} style={styles.productChip}>
+                      <Text style={styles.productChipText} numberOfLines={1}>{p.name}</Text>
+                    </View>
+                  ))}
+                  {storeProducts.length > 15 && (
+                    <TouchableOpacity
+                      style={styles.moreChip}
+                      onPress={() => setStockExpanded(true)}
+                    >
+                      <Text style={styles.moreChipText}>+{storeProducts.length - 15} more</Text>
+                    </TouchableOpacity>
+                  )}
+                </ScrollView>
+              )}
+
+              {/* Collapsed: empty state */}
+              {!stockExpanded && storeProducts.length === 0 && !storeProductsLoading && (
+                <View style={styles.emptyStockCompact}>
+                  <Text style={styles.emptyStockCompactText}>
+                    {selectedStore?.is_active ? "No products yet. Go to Inventory to add some." : "Go online to manage your stock."}
+                  </Text>
+                </View>
+              )}
+
+              {/* Expanded: full list with quantity controls */}
+              {stockExpanded && (
+                storeProductsLoading ? (
+                  <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.lg }} />
+                ) : storeProducts.length === 0 ? (
+                  <View style={styles.emptyStock}>
+                    <Ionicons name="cube-outline" size={40} color={colors.textTertiary} />
+                    <Text style={styles.emptyStockTitle}>
+                      {selectedStore?.is_active ? "No products yet" : "Store is Offline"}
+                    </Text>
+                    <Text style={styles.emptyStockText}>
+                      {selectedStore?.is_active
+                        ? "Add products from Inventory to start tracking stock"
+                        : "Go online to set product quantities and accept orders"}
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.addStockBtn}
+                      onPress={() =>
+                        selectedStore?.is_active
+                          ? router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })
+                          : toggleOnline(true)
+                      }
+                    >
+                      <Text style={styles.addStockBtnText}>
+                        {selectedStore?.is_active ? "Go to Inventory" : "Go Online"}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <View style={styles.stockList}>
+                    {storeProducts.map((p, index) => (
+                      <View key={p.id} style={[styles.stockItemCard, index === storeProducts.length - 1 && { marginBottom: 0 }]}>
                         <TouchableOpacity
                           style={styles.deleteBtn}
                           onPress={() => deleteProduct(p)}
                         >
-                          <Ionicons name="close-circle" size={24} color={colors.error} />
+                          <Ionicons name="close-circle" size={22} color={colors.error} />
                         </TouchableOpacity>
                         <View style={styles.stockItemInfo}>
-                          <Text style={styles.stockItemName} numberOfLines={1}>
-                            {p.name}
-                          </Text>
-                          <Text style={styles.stockItemQty}>
-                            {displayQty} units in stock
-                          </Text>
+                          <Text style={styles.stockItemName} numberOfLines={1}>{p.name}</Text>
+                          <Text style={styles.stockItemQty}>{p.quantity} units</Text>
                         </View>
                         <View style={styles.stockControls}>
                           <TouchableOpacity
@@ -1260,14 +1368,10 @@ export default function OwnerHomeScreen() {
                             {updatingProductId === p.id ? (
                               <ActivityIndicator size="small" color={colors.textSecondary} />
                             ) : (
-                              <Ionicons
-                                name="remove"
-                                size={18}
-                                color={!selectedStore?.is_active || p.quantity <= 0 ? colors.textDisabled : colors.textSecondary}
-                              />
+                              <Ionicons name="remove" size={16} color={!selectedStore?.is_active || p.quantity <= 0 ? colors.textDisabled : colors.textSecondary} />
                             )}
                           </TouchableOpacity>
-                          <Text style={styles.stockQtyNum}>{displayQty}</Text>
+                          <Text style={styles.stockQtyNum}>{p.quantity}</Text>
                           <TouchableOpacity
                             style={[styles.stockBtn, styles.stockBtnPlus]}
                             onPress={() => updateProductQuantity(p, p.quantity + 1)}
@@ -1276,42 +1380,16 @@ export default function OwnerHomeScreen() {
                             {updatingProductId === p.id ? (
                               <ActivityIndicator size="small" color={colors.primary} />
                             ) : (
-                              <Ionicons
-                                name="add"
-                                size={18}
-                                color={!selectedStore?.is_active ? colors.textDisabled : colors.primary}
-                              />
+                              <Ionicons name="add" size={16} color={!selectedStore?.is_active ? colors.textDisabled : colors.primary} />
                             )}
                           </TouchableOpacity>
                         </View>
                       </View>
-                    );
-                  })}
-                  {storeProducts.length > 20 && (
-                    <Text style={styles.stockShowingText}>
-                      Showing 20 of {storeProducts.length} products
-                    </Text>
-                  )}
-                </View>
+                    ))}
+                  </View>
+                )
               )}
             </View>
-            {orders.length === 0 ? (
-              <View style={styles.emptyCard}>
-                <Text style={styles.emptyTitle}>Waiting for orders</Text>
-                <Text style={styles.emptyText}>New orders will appear automatically</Text>
-              </View>
-            ) : (
-              orders.map((o) => (
-                <TouchableOpacity
-                  key={o.id}
-                  style={styles.orderRow}
-                  onPress={() => openOrderDetails(o.id)}
-                >
-                  <Text style={styles.orderCode}>#{o.order_code}</Text>
-                  <Text style={styles.orderStatus}>{o.status}</Text>
-                </TouchableOpacity>
-              ))
-            )}
           </>
         )}
       </ScrollView>
@@ -1782,5 +1860,153 @@ const styles = StyleSheet.create({
     color: colors.success,
     fontSize: 18,
     fontWeight: "800",
+  },
+
+  // ── Active Orders section ──
+  ordersSection: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.lg,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+  },
+  ordersSectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: spacing.md,
+  },
+  ordersSectionTitle: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    fontWeight: "700",
+    letterSpacing: -0.3,
+  },
+  ordersSectionSubtitle: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  refreshBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceVariant,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  waitingCard: {
+    alignItems: "center",
+    paddingVertical: spacing.xl,
+    gap: spacing.sm,
+  },
+  waitingTitle: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: "700",
+    marginTop: spacing.xs,
+  },
+  waitingText: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    textAlign: "center",
+  },
+  orderCard: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: spacing.md,
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    borderLeftWidth: 4,
+    marginBottom: spacing.sm,
+  },
+  orderCardLeft: {
+    gap: 3,
+  },
+  orderCardCode: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  orderCardTime: {
+    color: colors.textTertiary,
+    fontSize: 11,
+  },
+  orderCardRight: {
+    alignItems: "flex-end",
+    gap: 4,
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radius.full,
+  },
+  statusBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+  },
+  orderCardAmount: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+
+  // ── Stock section collapsed/expanded ──
+  stockHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  chipScroll: {
+    paddingBottom: spacing.sm,
+    gap: spacing.xs,
+    flexDirection: "row",
+  },
+  productChip: {
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: colors.border,
+    maxWidth: 120,
+  },
+  productChipText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  moreChip: {
+    backgroundColor: colors.primary + "18",
+    borderRadius: radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: colors.primary + "40",
+  },
+  moreChipText: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  emptyStockCompact: {
+    paddingVertical: spacing.md,
+  },
+  emptyStockCompactText: {
+    color: colors.textTertiary,
+    fontSize: 13,
+    textAlign: "center",
   },
 });

@@ -3,14 +3,40 @@
  * Handles registration, permissions, and notification display
  */
 
-import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
-import { Platform, Alert } from 'react-native';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { apiClient } from './api-client';
 
 const PUSH_TOKEN_KEY = 'push_notification_token';
 const NOTIFICATION_PREFERENCES_KEY = 'notification_preferences';
+
+// expo-notifications push support was removed from Expo Go in SDK 53.
+// Load the module conditionally so the auto-registration side-effect
+// (DevicePushTokenAutoRegistration.fx.js) never runs inside Expo Go.
+const IS_EXPO_GO = Constants.appOwnership === 'expo';
+
+type ExpoNotifications = typeof import('expo-notifications');
+let Notifications: ExpoNotifications | null = null;
+
+if (!IS_EXPO_GO) {
+  try {
+    Notifications = require('expo-notifications') as ExpoNotifications;
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+  } catch (e) {
+    console.warn('[notifications] expo-notifications unavailable:', e);
+    Notifications = null;
+  }
+}
 
 export interface NotificationPreferences {
   newOrders: boolean;
@@ -27,17 +53,6 @@ const DEFAULT_PREFERENCES: NotificationPreferences = {
   payments: true,
   systemAlerts: true,
 };
-
-// Configure notification behavior
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
 
 class NotificationService {
   private static instance: NotificationService;
@@ -62,6 +77,11 @@ class NotificationService {
     try {
       await this.loadPreferences();
 
+      if (IS_EXPO_GO) {
+        console.log('[notifications] Skipping push setup: running in Expo Go');
+        return;
+      }
+
       // Only register on physical devices
       if (Device.isDevice) {
         await this.registerForPushNotifications();
@@ -79,13 +99,17 @@ class NotificationService {
    * Register for push notifications
    */
   async registerForPushNotifications(): Promise<string | null> {
+    if (IS_EXPO_GO || !Notifications) {
+      console.log('[notifications] Push registration skipped: Expo Go or module unavailable');
+      return null;
+    }
+
     if (!Device.isDevice) {
       console.log('Push notifications only work on physical devices');
       return null;
     }
 
     try {
-      // Check permissions
       const { status: existingStatus } = await Notifications.getPermissionsAsync();
       let finalStatus = existingStatus;
 
@@ -99,13 +123,10 @@ class NotificationService {
         return null;
       }
 
-      // Get push token - don't require projectId for Expo Go
       let token;
       try {
-        // Try without projectId first (works in Expo Go)
         token = await Notifications.getExpoPushTokenAsync();
       } catch (error: any) {
-        // If that fails, log but don't crash
         console.warn('Could not get push token:', error?.message || error);
         return null;
       }
@@ -118,7 +139,6 @@ class NotificationService {
       this.pushToken = token.data;
       await AsyncStorage.setItem(PUSH_TOKEN_KEY, token.data);
 
-      // Send token to backend (non-blocking)
       this.registerTokenWithBackend(token.data).catch((err) => {
         console.warn('Failed to register token with backend:', err);
       });
@@ -157,9 +177,9 @@ class NotificationService {
    * Setup notification listeners
    */
   private setupNotificationListeners(): void {
+    if (!Notifications) return;
     try {
-      // Handle notification received while app is in foreground
-      Notifications.addNotificationReceivedListener((notification: Notifications.Notification) => {
+      Notifications.addNotificationReceivedListener((notification) => {
         try {
           console.log('Notification received:', notification);
         } catch (error) {
@@ -167,8 +187,7 @@ class NotificationService {
         }
       });
 
-      // Handle notification tapped
-      Notifications.addNotificationResponseReceivedListener((response: Notifications.NotificationResponse) => {
+      Notifications.addNotificationResponseReceivedListener((response) => {
         try {
           console.log('Notification tapped:', response);
           this.handleNotificationTap(response.notification);
@@ -184,7 +203,7 @@ class NotificationService {
   /**
    * Handle notification tap
    */
-  private handleNotificationTap(notification: Notifications.Notification): void {
+  private handleNotificationTap(notification: any): void {
     const data = notification.request.content.data;
 
     // Navigate based on notification type
@@ -205,14 +224,10 @@ class NotificationService {
     body: string,
     data?: Record<string, any>
   ): Promise<void> {
+    if (!Notifications) return;
     await Notifications.scheduleNotificationAsync({
-      content: {
-        title,
-        body,
-        data,
-        sound: true,
-      },
-      trigger: null, // Show immediately
+      content: { title, body, data, sound: true },
+      trigger: null,
     });
   }
 
@@ -223,19 +238,13 @@ class NotificationService {
   async scheduleNotification(
     title: string,
     body: string,
-    triggerDate: Date,
+    _triggerDate: Date,
     data?: Record<string, any>
   ): Promise<string> {
-    // Simplified: send immediately instead of scheduling
-    // The expo-notifications types have strict requirements that need proper configuration
+    if (!Notifications) return '';
     return await Notifications.scheduleNotificationAsync({
-      content: {
-        title,
-        body,
-        data,
-        sound: true,
-      },
-      trigger: null, // null = immediate
+      content: { title, body, data, sound: true },
+      trigger: null,
     });
   }
 
@@ -243,13 +252,12 @@ class NotificationService {
    * Cancel scheduled notification
    */
   async cancelNotification(notificationId: string): Promise<void> {
+    if (!Notifications) return;
     await Notifications.cancelScheduledNotificationAsync(notificationId);
   }
 
-  /**
-   * Cancel all notifications
-   */
   async cancelAllNotifications(): Promise<void> {
+    if (!Notifications) return;
     await Notifications.cancelAllScheduledNotificationsAsync();
   }
 
@@ -319,28 +327,23 @@ class NotificationService {
    * Check if notifications are enabled
    */
   async areNotificationsEnabled(): Promise<boolean> {
+    if (!Notifications) return false;
     const { status } = await Notifications.getPermissionsAsync();
     return status === 'granted';
   }
 
-  /**
-   * Get badge count
-   */
   async getBadgeCount(): Promise<number> {
+    if (!Notifications) return 0;
     return await Notifications.getBadgeCountAsync();
   }
 
-  /**
-   * Set badge count
-   */
   async setBadgeCount(count: number): Promise<void> {
+    if (!Notifications) return;
     await Notifications.setBadgeCountAsync(count);
   }
 
-  /**
-   * Clear badge
-   */
   async clearBadge(): Promise<void> {
+    if (!Notifications) return;
     await Notifications.setBadgeCountAsync(0);
   }
 }
