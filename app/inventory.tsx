@@ -9,6 +9,7 @@ import {
   Image,
   TouchableOpacity,
   Alert,
+  ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router, useLocalSearchParams } from "expo-router";
@@ -16,32 +17,33 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../session";
 import { config } from "../lib/config";
 import { colors, radius, spacing } from "../lib/theme";
-import {
-  getMergedInventoryFromDb,
-  upsertStoreProduct,
-  updateStoreProductQuantity,
-} from "../lib/storeProducts";
-import { testSupabaseConnection, testProductInsert } from "../lib/testSupabase";
+import { getMergedInventoryFromDb, upsertStoreProduct } from "../lib/storeProducts";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
 
+/** Display category with spaces and title case (e.g. "some-category" → "Some Category") */
+function formatCategoryLabel(raw: string): string {
+  if (!raw || raw === "All") return raw;
+  const withSpaces = String(raw).replace(/-/g, " ").trim();
+  return withSpaces
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
 let persistedProducts: any[] = [];
 let persistedStoreId: string | null = null;
 let persistedSearch = "";
 
-// Memoized product item component for better performance
 const ProductItem = memo(({
   product,
-  out,
-  isEditing,
-  editingQty,
-  editingValueRef,
-  onUpdateQuantity,
-  onSetEditingQty,
-  onCommitQtyEdit
+  toggling,
+  onAdd,
 }: any) => {
+  const displayName = product.name || product.product_name || "Product";
+
   return (
     <View style={styles.card}>
       <Image
@@ -52,71 +54,29 @@ const ProductItem = memo(({
 
       <View style={{ flex: 1 }}>
         <Text style={styles.name} numberOfLines={2}>
-          {product.name}
+          {displayName}
         </Text>
 
         <Text style={styles.meta}>
           {product.brand ? `${product.brand} · ` : ""}
-          {product.category}
+          {product.category ? formatCategoryLabel(product.category) : ""}
         </Text>
 
-        <Text style={styles.price}>₹{product.price ?? product.base_price}</Text>
-
-        <Text
-          style={{
-            color: out ? colors.warning : colors.success,
-            fontSize: 12,
-            marginTop: 2,
-          }}
-        >
-          {out ? "Out of stock" : "In stock"}
-        </Text>
+        <Text style={styles.price}>₹{product.price ?? product.base_price ?? 0}</Text>
       </View>
 
-      <View style={styles.stockCol}>
-        <TouchableOpacity
-          style={styles.qtyBtn}
-          onPress={() => onUpdateQuantity(product, product.quantity - 1)}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.qtyText}>−</Text>
-        </TouchableOpacity>
-
-        {isEditing ? (
-          <TextInput
-            style={styles.qtyInput}
-            value={editingQty && editingQty.id === product.id ? editingQty.value : ""}
-            onChangeText={(v) => {
-              editingValueRef.current = v;
-              onSetEditingQty((e: any) => (e && e.id === product.id ? { id: e.id, value: v } : e));
-            }}
-            onBlur={() => onCommitQtyEdit(product, editingValueRef.current)}
-            onSubmitEditing={() => onCommitQtyEdit(product, editingValueRef.current)}
-            keyboardType="number-pad"
-            selectTextOnFocus
-            autoFocus
-          />
+      <TouchableOpacity
+        style={[styles.activeBtn, styles.activeBtnAdd]}
+        onPress={() => onAdd(product)}
+        disabled={toggling}
+        activeOpacity={0.75}
+      >
+        {toggling ? (
+          <ActivityIndicator size="small" color={colors.surface} />
         ) : (
-          <TouchableOpacity
-            onPress={() => {
-              editingValueRef.current = String(product.quantity);
-              onSetEditingQty({ id: product.id, value: String(product.quantity) });
-            }}
-            style={styles.qtyTouch}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.qty}>{product.quantity}</Text>
-          </TouchableOpacity>
+          <Text style={[styles.activeBtnText, styles.activeBtnTextOn]}>Add</Text>
         )}
-
-        <TouchableOpacity
-          style={styles.qtyBtn}
-          onPress={() => onUpdateQuantity(product, product.quantity + 1)}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.qtyText}>+</Text>
-        </TouchableOpacity>
-      </View>
+      </TouchableOpacity>
     </View>
   );
 });
@@ -127,22 +87,19 @@ export default function InventoryScreen() {
   const [products, setProducts] = useState<any[]>(() =>
     persistedProducts.length > 0 ? [...persistedProducts] : []
   );
-  // CRITICAL: Always use storeId from params first, ignore cached value
   const [storeId, setStoreId] = useState<string | null>(() => params.storeId ?? null);
   const [token, setToken] = useState<string | null>(null);
   const [search, setSearch] = useState(() => persistedSearch);
-  const [editingQty, setEditingQty] = useState<{ id: string; value: string } | null>(null);
-  const editingValueRef = useRef("");
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const categoryScrollRef = useRef<ScrollView>(null);
+  const categoryOffsetsRef = useRef<Record<number, number>>({});
 
-  // Always update storeId if params change
   useEffect(() => {
     const fromParams = typeof params.storeId === "string" && params.storeId.length > 0 ? params.storeId : null;
     if (fromParams) {
-      console.log("[inventory] Setting storeId from params:", fromParams);
       setStoreId(fromParams);
-      // Clear cache when storeId changes (different user)
       if (persistedStoreId && persistedStoreId !== fromParams) {
-        console.log("[inventory] StoreId changed - clearing cache");
         persistedStoreId = null;
         persistedProducts = [];
         persistedSearch = "";
@@ -160,6 +117,7 @@ export default function InventoryScreen() {
       JSON.stringify({ products, storeId, search })
     ).catch(() => {});
   }, [products, storeId, search]);
+
   useEffect(() => {
     if (storeId) persistedStoreId = storeId;
   }, [storeId]);
@@ -178,22 +136,16 @@ export default function InventoryScreen() {
     const storeRaw = await storeProductsRes.text();
     let masterList: any[] = [];
     let storeList: any[] = [];
-    try {
-      masterList = masterRaw ? JSON.parse(masterRaw) : [];
-    } catch {
-      masterList = [];
-    }
+    try { masterList = masterRaw ? JSON.parse(masterRaw) : []; } catch { masterList = []; }
     try {
       const storeJson = storeRaw ? JSON.parse(storeRaw) : null;
       storeList = storeJson?.products || [];
-    } catch {
-      storeList = [];
-    }
+    } catch { storeList = []; }
     if (!Array.isArray(masterList)) masterList = [];
-    const byMasterId: Record<string, { id: string; quantity: number }> = {};
+    const byMasterId: Record<string, { id: string; quantity: number; is_active: boolean }> = {};
     storeList.forEach((sp: any) => {
       const mid = sp.master_product_id ?? sp.masterProductId;
-      if (mid) byMasterId[mid] = { id: sp.id, quantity: sp.quantity ?? 0 };
+      if (mid) byMasterId[mid] = { id: sp.id, quantity: sp.quantity ?? 0, is_active: sp.is_active !== false };
     });
     return masterList.map((mp: any) => {
       const storeRow = byMasterId[mp.id];
@@ -202,6 +154,7 @@ export default function InventoryScreen() {
         price: mp.base_price ?? mp.price,
         quantity: storeRow ? storeRow.quantity : 0,
         storeProductId: storeRow?.id ?? null,
+        is_active: storeRow?.is_active ?? false,
       };
     });
   };
@@ -210,10 +163,10 @@ export default function InventoryScreen() {
     masterList: any[],
     storeList: any[],
   ): any[] => {
-    const byMasterId: Record<string, { id: string; quantity: number }> = {};
+    const byMasterId: Record<string, { id: string; quantity: number; is_active: boolean }> = {};
     storeList.forEach((sp: any) => {
       const mid = sp.master_product_id ?? sp.masterProductId;
-      if (mid) byMasterId[mid] = { id: sp.id, quantity: sp.quantity ?? 0 };
+      if (mid) byMasterId[mid] = { id: sp.id, quantity: sp.quantity ?? 0, is_active: sp.is_active !== false };
     });
     return masterList.map((mp: any) => {
       const storeRow = byMasterId[mp.id];
@@ -222,6 +175,7 @@ export default function InventoryScreen() {
         price: mp.base_price ?? mp.price,
         quantity: storeRow ? storeRow.quantity : 0,
         storeProductId: storeRow?.id ?? null,
+        is_active: storeRow?.is_active ?? false,
       };
     });
   };
@@ -235,15 +189,10 @@ export default function InventoryScreen() {
           getSession(),
         ]);
         const session: any = s;
-        if (!session?.token) {
-          setLoading(false);
-          return;
-        }
+        if (!session?.token) { setLoading(false); return; }
         setToken(session.token);
 
-        // CRITICAL: If we have a storeId from params, ignore cache and use that
         if (storeId) {
-          console.log("[inventory] Using storeId from params, fetching fresh data:", storeId);
           const list = await fetchInventory(session.token, storeId);
           setProducts(list);
           setLoading(false);
@@ -265,9 +214,7 @@ export default function InventoryScreen() {
                 setLoading(false);
                 return true;
               }
-            } catch {
-              //
-            }
+            } catch { /**/ }
             return false;
           })();
         if (fromPersisted) return;
@@ -285,9 +232,7 @@ export default function InventoryScreen() {
               setProducts(parsed);
               setLoading(false);
             }
-          } catch {
-            // ignore invalid cache
-          }
+          } catch { /**/ }
         }
 
         const auth = { Authorization: `Bearer ${session.token}` };
@@ -296,50 +241,22 @@ export default function InventoryScreen() {
           fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, { headers: auth }),
           fetch(`${API_BASE}/api/products/master-products?isActive=true`),
         ]);
-        const [storeRaw, masterRaw] = await Promise.all([
-          storeRes.text(),
-          masterRes.text(),
-        ]);
+        const [storeRaw, masterRaw] = await Promise.all([storeRes.text(), masterRes.text()]);
         let storeJson: any = null;
         let masterList: any[] = [];
-        try {
-          storeJson = storeRaw ? JSON.parse(storeRaw) : null;
-        } catch {
-          storeJson = null;
-        }
-        try {
-          masterList = masterRaw ? JSON.parse(masterRaw) : [];
-        } catch {
-          masterList = [];
-        }
+        try { storeJson = storeRaw ? JSON.parse(storeRaw) : null; } catch { storeJson = null; }
+        try { masterList = masterRaw ? JSON.parse(masterRaw) : []; } catch { masterList = []; }
         if (!Array.isArray(masterList)) masterList = [];
-        const toProducts = (list: any[]) =>
-          list.map((mp: any) => ({
-            ...mp,
-            price: mp.base_price ?? mp.price,
-            quantity: 0,
-            storeProductId: null,
-          }));
 
         if (!storeJson?.stores?.length) {
-          console.log("[inventory] ❌ No stores found for this user");
           Alert.alert(
             "No Store Found",
             "You don't have a store set up yet. Would you like to create one?",
             [
-              {
-                text: "Set Up Store",
-                onPress: () => router.replace("/store-owner-signup")
-              },
-              {
-                text: "Go Back",
-                onPress: () => router.back()
-              }
+              { text: "Set Up Store", onPress: () => router.replace("/store-owner-signup") },
+              { text: "Go Back", onPress: () => router.back() }
             ]
           );
-          const list = toProducts(masterList);
-          setProducts(list);
-          await AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(list));
           setLoading(false);
           return;
         }
@@ -364,9 +281,7 @@ export default function InventoryScreen() {
         try {
           const storeJson2 = storeRaw2 ? JSON.parse(storeRaw2) : null;
           storeList = storeJson2?.products || [];
-        } catch {
-          storeList = [];
-        }
+        } catch { storeList = []; }
         const merged = mergeMasterWithStoreProducts(masterList, storeList);
         setProducts(merged);
         await AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(merged));
@@ -378,12 +293,6 @@ export default function InventoryScreen() {
     })();
   }, []);
 
-  const setQuantityOptimistic = (productId: string, qty: number) => {
-    setProducts((prev) =>
-      prev.map((p) => (p.id === productId ? { ...p, quantity: Math.max(0, qty) } : p))
-    );
-  };
-
   const invalidateMainPageCache = async () => {
     try {
       await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
@@ -393,221 +302,83 @@ export default function InventoryScreen() {
     }
   };
 
-  const updateQuantity = async (row: any, newQty: number) => {
-    const qty = Math.max(0, newQty);
-    const prevQty = row.quantity;
+  const addProduct = async (product: any) => {
+    if (!token || !storeId) return;
+    setTogglingId(product.id);
 
-    console.log("======================================");
-    console.log("[inventory] updateQuantity START");
-    console.log("  Row:", { id: row.id, name: row.name, quantity: row.quantity, storeProductId: row.storeProductId });
-    console.log("  New quantity:", qty);
-    console.log("  Store ID:", storeId);
-    console.log("  Token exists:", !!token);
-    console.log("======================================");
-
-    setQuantityOptimistic(row.id, qty);
-
-    if (!token || !storeId) {
-      console.error("[inventory] MISSING token or storeId!", { token: !!token, storeId });
-
-      // Try to fetch store ID if missing
-      if (!storeId && token) {
-        Alert.alert(
-          "Loading Store",
-          "Store information is loading. Please wait a moment and try again.",
-          [
-            {
-              text: "OK",
-              onPress: async () => {
-                // Trigger a refetch
-                try {
-                  const res = await fetch(`${API_BASE}/store-owner/stores`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                  });
-                  const data = await res.json();
-                  if (data?.stores?.[0]?.id) {
-                    setStoreId(data.stores[0].id);
-                    console.log("✅ Store loaded successfully");
-                  } else {
-                    console.log("⚠️ No store found");
-                    router.back();
-                  }
-                } catch (err) {
-                  console.error("Failed to load store:", err);
-                }
-              }
-            }
-          ]
-        );
-      } else if (!storeId) {
-        console.log("⚠️ No store loaded");
-      }
-
-      // Revert optimistic update
-      setQuantityOptimistic(row.id, prevQty);
-      return;
-    }
-
-    // Update existing product
-    if (row.storeProductId) {
-      console.log("[inventory] Updating existing product via Supabase");
-      console.log("  storeProductId:", row.storeProductId);
-
-      const ok = await updateStoreProductQuantity(row.storeProductId, qty);
-      console.log("[inventory] updateStoreProductQuantity result:", ok);
-
-      if (ok) {
-        setProducts((prev) => {
-          const next = prev.map((p) => (p.id === row.id ? { ...p, quantity: qty } : p));
-          AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(next)).catch(() => {});
-          return next;
-        });
+    try {
+      const inserted = await upsertStoreProduct(storeId, product.id, 100);
+      if (inserted && "id" in inserted && inserted.id) {
+        // Remove from Inventory list – it now lives in "Your Stock"
+        setProducts((prev) => prev.filter((p) => p.id !== product.id));
         await invalidateMainPageCache();
-        console.log("[inventory] ✅ Update completed successfully");
-        return;
+      } else if (inserted && "error" in inserted) {
+        Alert.alert("Error", "Could not add product. Please try again.");
       }
-
-      // Fallback to API
-      console.log("[inventory] Supabase update failed, trying API fallback");
-      const res = await fetch(`${API_BASE}/store-owner/products/${row.storeProductId}`, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ quantity: qty }),
-      });
-      if (!res.ok) {
-        console.error("[inventory] API update also failed:", res.status);
-        setQuantityOptimistic(row.id, prevQty);
-        return;
-      }
-      setProducts((prev) => {
-        const next = prev.map((p) => (p.id === row.id ? { ...p, quantity: qty } : p));
-        AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(next)).catch(() => {});
-        return next;
-      });
-      await invalidateMainPageCache();
-      console.log("[inventory] ✅ API update completed successfully");
-      return;
+    } catch (e) {
+      console.error("[inventory] addProduct error:", e);
+      Alert.alert("Error", "Something went wrong. Please try again.");
+    } finally {
+      setTogglingId(null);
     }
-
-    // Don't add product with 0 quantity
-    if (qty === 0) {
-      console.log("[inventory] Skipping - quantity is 0");
-      return;
-    }
-
-    // Add new product: write directly to Supabase products table
-    console.log("[inventory] ⭐ ADDING NEW PRODUCT TO DATABASE");
-    console.log("  storeId:", storeId);
-    console.log("  masterProductId (row.id):", row.id);
-    console.log("  quantity:", qty);
-
-    const inserted = await upsertStoreProduct(storeId, row.id, qty);
-    console.log("[inventory] upsertStoreProduct result:", inserted);
-
-    if (inserted && "id" in inserted && inserted.id) {
-      console.log("[inventory] ✅ SUCCESS! Product inserted with ID:", inserted.id);
-      setProducts((prev) => {
-        const next = prev.map((p) =>
-          p.id === row.id ? { ...p, quantity: qty, storeProductId: inserted.id } : p
-        );
-        AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(next)).catch(() => {});
-        return next;
-      });
-      await invalidateMainPageCache();
-      console.log("✅ Product added to stock successfully");
-      return;
-    }
-
-    if (inserted && "error" in inserted) {
-      const errMsg = inserted.error;
-      console.error("[inventory] ❌ Supabase upsert FAILED:", errMsg);
-      const hint =
-        /foreign key|violates|23503/i.test(errMsg)
-          ? "\n\nYour store may not exist in Supabase stores table. Check stores table."
-          : /permission|denied|RLS/i.test(errMsg)
-            ? "\n\nRun: supabase/products-rls-anon-v2.sql in Supabase SQL Editor."
-            : "";
-      setQuantityOptimistic(row.id, prevQty);
-      console.error("[inventory] Could not add to stock:", errMsg + hint);
-      return;
-    }
-
-    console.error("[inventory] ❌ UNKNOWN ERROR - No id and no error returned");
-    setQuantityOptimistic(row.id, prevQty);
-  };
-
-  const commitQtyEdit = (row: any, value: string) => {
-    setEditingQty(null);
-    const num = parseInt(value.replace(/\D/g, ""), 10);
-    if (!Number.isNaN(num)) updateQuantity(row, num);
   };
 
   const q = search.trim().toLowerCase();
+  const notInStore = products.filter((p) => !p.storeProductId);
 
-  // Filter out products already in stock (quantity > 0)
-  const availableToAdd = products.filter((p) => p.quantity === 0);
+  const categories = React.useMemo(() => {
+    const set = new Set<string>();
+    notInStore.forEach((p) => {
+      const c = (p.category || "").trim();
+      if (c) set.add(c);
+    });
+    return ["All", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [notInStore]);
 
-  // Apply search filter
-  const filtered = availableToAdd.filter((p) =>
-    [p.name, p.brand, p.category]
+  const filteredBySearch = notInStore.filter((p) =>
+    [p.name, p.product_name, p.brand, p.category]
       .filter(Boolean)
-      .some((x: string) => x.toLowerCase().includes(q))
+      .some((x: string) => String(x).toLowerCase().includes(q))
   );
-
-  // Limit results to prevent memory issues
-  const sorted = filtered.slice(0, q === "" ? 100 : 50);
+  const filtered =
+    !selectedCategory || selectedCategory === "All"
+      ? filteredBySearch
+      : filteredBySearch.filter((p) => (p.category || "").trim() === selectedCategory);
+  const sorted = filtered.slice(0, q === "" ? 200 : 100);
 
   const goToDashboard = () => router.replace("/owner-home");
 
-  const runDiagnostics = async () => {
-    console.log("🔍 Running diagnostics...");
-
-    const connectionTest = await testSupabaseConnection();
-    console.log("Connection test result:", connectionTest);
-
-    if (connectionTest.success && storeId) {
-      const insertTest = await testProductInsert(storeId);
-      console.log("Insert test result:", insertTest);
-
-      if (insertTest.success) {
-        console.log("✅ All tests passed");
-      } else {
-        console.log("❌ Insert test failed:", insertTest.error);
-      }
+  const scrollCategoryToSelected = useCallback(() => {
+    const cat = selectedCategory === null || selectedCategory === "All" ? "All" : selectedCategory;
+    const index = categories.indexOf(cat);
+    if (index < 0) return;
+    const x = categoryOffsetsRef.current[index];
+    if (typeof x === "number") {
+      categoryScrollRef.current?.scrollTo({ x: Math.max(0, x - 24), animated: true });
     } else {
-      console.log("❌ Connection test failed:", connectionTest.error);
+      const approx = index * (92 + spacing.sm);
+      categoryScrollRef.current?.scrollTo({ x: Math.max(0, approx), animated: true });
     }
-  };
+  }, [categories, selectedCategory]);
 
-  const renderItem = useCallback(({ item: p }: { item: any }) => {
-    const out = p.quantity === 0;
-    const isEditing = editingQty?.id === p.id;
+  useEffect(() => {
+    if (categories.length <= 1) return;
+    const t = setTimeout(() => scrollCategoryToSelected(), 50);
+    return () => clearTimeout(t);
+  }, [selectedCategory, categories.length, scrollCategoryToSelected]);
 
-    return (
-      <ProductItem
-        product={p}
-        out={out}
-        isEditing={isEditing}
-        editingQty={editingQty}
-        editingValueRef={editingValueRef}
-        onUpdateQuantity={updateQuantity}
-        onSetEditingQty={setEditingQty}
-        onCommitQtyEdit={commitQtyEdit}
-      />
-    );
-  }, [editingQty, updateQuantity, commitQtyEdit]);
+  const renderItem = useCallback(({ item: p }: { item: any }) => (
+    <ProductItem
+      product={p}
+      toggling={togglingId === p.id}
+      onAdd={addProduct}
+    />
+  ), [togglingId, addProduct]);
 
   const keyExtractor = useCallback((item: any) => item.id, []);
 
   const getItemLayout = useCallback(
-    (_: any, index: number) => ({
-      length: 98, // Approximate height of card + margin
-      offset: 98 * index,
-      index,
-    }),
+    (_: any, index: number) => ({ length: 88, offset: 88 * index, index }),
     []
   );
 
@@ -617,21 +388,11 @@ export default function InventoryScreen() {
         <TouchableOpacity onPress={goToDashboard} style={styles.backBtn} activeOpacity={0.7}>
           <Text style={styles.backBtnText}>← Back</Text>
         </TouchableOpacity>
-        {__DEV__ && (
-          <TouchableOpacity
-            onPress={runDiagnostics}
-            style={[styles.backBtn, { backgroundColor: colors.error, paddingHorizontal: 12, borderRadius: 8 }]}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.backBtnText, { color: colors.surface }]}>Test DB</Text>
-          </TouchableOpacity>
-        )}
       </View>
       <Text style={styles.title}>Inventory</Text>
       <Text style={styles.subtitle}>
-        Products not yet in stock. Add quantities to make them available to customers. Items with stock will appear in "Your Stock" on the dashboard.
+        Add products to your store. After adding, manage them (Active/Inactive) from "Your Stock" on the dashboard.
       </Text>
-
       <TextInput
         value={search}
         onChangeText={setSearch}
@@ -639,8 +400,43 @@ export default function InventoryScreen() {
         placeholderTextColor={colors.textTertiary}
         style={styles.search}
       />
+      {categories.length > 1 && (
+        <View style={styles.categoryRibbonWrap}>
+          <ScrollView
+            ref={categoryScrollRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.categoryRibbon}
+            scrollEventThrottle={16}
+          >
+            {categories.map((cat, index) => {
+              const isAll = cat === "All";
+              const isSelected =
+                isAll ? !selectedCategory || selectedCategory === "All" : selectedCategory === cat;
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  onPress={() => setSelectedCategory(isAll ? null : cat)}
+                  onLayout={(e) => {
+                    categoryOffsetsRef.current[index] = e.nativeEvent.layout.x;
+                  }}
+                  style={[styles.categoryChip, isSelected && styles.categoryChipActive]}
+                  activeOpacity={0.75}
+                >
+                  <Text
+                    style={[styles.categoryChipText, isSelected && styles.categoryChipTextActive]}
+                    numberOfLines={1}
+                  >
+                    {formatCategoryLabel(cat)}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
     </>
-  ), [search, goToDashboard, runDiagnostics]);
+  ), [search, goToDashboard, categories, selectedCategory]);
 
   const ListEmptyComponent = useCallback(() => {
     if (loading && products.length === 0) {
@@ -651,26 +447,32 @@ export default function InventoryScreen() {
         </View>
       );
     }
-
+    const noneLeft = notInStore.length === 0 && products.length > 0;
+    const categorySelected = selectedCategory && selectedCategory !== "All";
+    const noInCategory = categorySelected && filteredBySearch.length === 0 && notInStore.length > 0;
     return (
       <View style={styles.emptyState}>
         <Text style={styles.emptyTitle}>
           {products.length === 0
             ? "No products available"
-            : availableToAdd.length === 0
-            ? "🎉 All products added!"
+            : noneLeft
+            ? "All added"
+            : noInCategory
+            ? `No products in ${formatCategoryLabel(selectedCategory)}`
             : "No matches"}
         </Text>
         <Text style={styles.emptyText}>
           {products.length === 0
             ? "Could not load products. Check your connection."
-            : availableToAdd.length === 0
-            ? "All products have stock. Manage quantities in 'Your Stock' on the dashboard."
+            : noneLeft
+            ? "All products are in Your Stock. Toggle Active/Inactive from the dashboard."
+            : noInCategory
+            ? "Try another category or clear search."
             : "No products match your search. Try different keywords."}
         </Text>
       </View>
     );
-  }, [loading, products.length, availableToAdd.length]);
+  }, [loading, products.length, notInStore.length, selectedCategory, filteredBySearch.length]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -741,7 +543,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: spacing.sm,
   },
-
   search: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
@@ -749,9 +550,36 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     borderWidth: 1,
     borderColor: colors.border,
+    marginBottom: spacing.md,
+  },
+  categoryRibbonWrap: {
     marginBottom: spacing.lg,
   },
-
+  categoryRibbon: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    paddingVertical: 4,
+  },
+  categoryChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceVariant,
+  },
+  categoryChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  categoryChipText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  categoryChipTextActive: {
+    color: colors.surface,
+  },
   card: {
     flexDirection: "row",
     gap: spacing.md,
@@ -763,71 +591,55 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     alignItems: "center",
   },
-
   image: {
     width: 56,
     height: 56,
     borderRadius: radius.md,
     backgroundColor: colors.surfaceVariant,
   },
-
   name: {
     color: colors.textPrimary,
     fontWeight: "700",
   },
-
   meta: {
     color: colors.textTertiary,
     fontSize: 12,
     marginTop: 2,
   },
-
   price: {
     color: colors.success,
     fontWeight: "800",
     marginTop: 4,
   },
-
-  stockCol: {
-    alignItems: "center",
-    gap: 6,
-  },
-
-  qtyBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
+  activeBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: radius.full,
+    borderWidth: 1.5,
+    minWidth: 72,
     alignItems: "center",
     justifyContent: "center",
   },
-
-  qtyText: {
-    color: colors.textPrimary,
-    fontSize: 18,
-    fontWeight: "700",
-  },
-
-  qty: {
-    color: colors.textPrimary,
-    fontWeight: "700",
-  },
-  qtyTouch: {
-    minWidth: 32,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  qtyInput: {
-    minWidth: 40,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderWidth: 1,
+  activeBtnAdd: {
+    backgroundColor: colors.primary,
     borderColor: colors.primary,
-    borderRadius: radius.sm,
-    color: colors.textPrimary,
-    fontSize: 16,
+  },
+  activeBtnOn: {
+    backgroundColor: colors.success,
+    borderColor: colors.success,
+  },
+  activeBtnOff: {
+    backgroundColor: colors.surfaceVariant,
+    borderColor: colors.border,
+  },
+  activeBtnText: {
+    fontSize: 13,
     fontWeight: "700",
-    textAlign: "center",
+  },
+  activeBtnTextOn: {
+    color: colors.surface,
+  },
+  activeBtnTextOff: {
+    color: colors.textTertiary,
   },
 });

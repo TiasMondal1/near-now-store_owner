@@ -22,7 +22,13 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { config } from "../lib/config";
 import { colors, radius, spacing } from "../lib/theme";
-import { getStockListFromDb, updateStoreProductQuantity } from "../lib/storeProducts";
+import {
+  getStockListFromDb,
+  updateProductActiveState,
+  setAllProductsOffline,
+  restoreActiveProductsOnline,
+} from "../lib/storeProducts";
+import { getOrdersFromDb, getOrderByIdFromDb } from "../lib/orders-db";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
@@ -64,62 +70,49 @@ export default function OwnerHomeScreen() {
   const [countdown, setCountdown] = useState(20);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<
-    "orders" | "inventory" | "payments" | "payouts">("orders");
+    "orders" | "previous_orders" | "inventory" | "payments" | "payouts">("orders");
   const [payments, setPayments] = useState<any[]>([]);
   const [paymentsLoading, setPaymentsLoading] = useState(false);
   const [paymentsDayTotal, setPaymentsDayTotal] = useState(0);
 
   const [storeProducts, setStoreProducts] = useState<
-    Array<{ id: string; name: string; quantity: number; storeProductId?: string }>
+    Array<{ id: string; name: string; quantity: number; storeProductId?: string; is_active?: boolean }>
   >([]);
   const [storeProductsLoading, setStoreProductsLoading] = useState(false);
-  const [updatingProductId, setUpdatingProductId] = useState<string | null>(null);
+  const [togglingProductId, setTogglingProductId] = useState<string | null>(null);
   const [stockExpanded, setStockExpanded] = useState(false);
 
 
   const selectedStore = stores[0];
 
   const getStatusColor = (status: string) => {
-    switch (status) {
-      case "pending_store":
-        return "#F59E0B";
-      case "accepted":
-        return colors.success;
-      case "rejected":
-        return colors.error;
-      case "ready":
-        return "#3B82F6";
-      case "delivered":
-        return colors.textTertiary;
-      default:
-        return colors.textTertiary;
-    }
+    const s = (status || "").toLowerCase();
+    if (s === "pending_store" || s === "pending_at_store") return "#F59E0B";
+    if (s === "accepted") return colors.success;
+    if (s === "rejected" || s === "cancelled") return colors.error;
+    if (s === "ready") return "#3B82F6";
+    if (s === "delivered" || s === "order_delivered") return colors.textTertiary;
+    return colors.textTertiary;
   };
 
   const formatStatus = (status: string) => {
-    switch (status) {
-      case "pending_store":
-        return "Pending";
-      case "accepted":
-        return "Accepted";
-      case "rejected":
-        return "Rejected";
-      case "ready":
-        return "Ready";
-      case "delivered":
-        return "Delivered";
-      default:
-        return status;
-    }
+    const s = (status || "").toLowerCase();
+    if (s === "pending_store" || s === "pending_at_store") return "Pending";
+    if (s === "accepted") return "Accepted";
+    if (s === "rejected") return "Rejected";
+    if (s === "ready") return "Ready";
+    if (s === "delivered" || s === "order_delivered") return "Delivered";
+    if (s === "cancelled") return "Cancelled";
+    return status;
   };
 
-  // Debug logging
-  console.log(`[owner-home] stores array length: ${stores.length}`);
-  console.log(`[owner-home] selectedStore:`, selectedStore ? {
-    id: selectedStore.id,
-    name: selectedStore.name,
-    is_active: selectedStore.is_active
-  } : 'null');
+  // Active = any order not yet delivered. Previous = only when status is order_delivered/delivered.
+  const DELIVERED_STATUSES = ["delivered", "order_delivered"];
+  const isDelivered = (o: any) =>
+    DELIVERED_STATUSES.includes((o.status || "").toLowerCase().replace(/-/g, "_"));
+  const activeOrders = orders.filter((o: any) => !isDelivered(o));
+  const previousOrders = orders.filter((o: any) => isDelivered(o));
+
 
   useEffect(() => {
     if (activeTab === "payments") {
@@ -274,7 +267,7 @@ export default function OwnerHomeScreen() {
         const out = list
           .map((x: any) => ({
             id: x.id,
-            name: x.name || "Product",
+            name: x.name || x.product_name || "Product",
             quantity: Number(x.quantity ?? 0),
           }));
         // Keep products in order they were added (no sorting by quantity)
@@ -294,7 +287,7 @@ export default function OwnerHomeScreen() {
         const out = list
           .map((x: any) => ({
             id: x.id,
-            name: x.name || "Product",
+            name: x.name || x.product_name || "Product",
             quantity: Number(x.quantity ?? 0),
           }));
         // Keep products in order they were added (no sorting by quantity)
@@ -311,10 +304,11 @@ export default function OwnerHomeScreen() {
       const fromDb = await getStockListFromDb(selectedStore.id);
       if (Array.isArray(fromDb) && fromDb.length > 0) {
         const mapped = fromDb.map((item: any) => ({
-          id: item.id, // master_product_id
-          name: item.name || "Product",
+          id: item.id,
+          name: (item.name || item.product_name || "").trim() || "Product",
           quantity: item.quantity || 0,
-          storeProductId: item.storeProductId, // products table id
+          storeProductId: item.storeProductId,
+          is_active: item.is_active !== false,
         }));
         setStoreProducts(mapped);
         if (!silent) setStoreProductsLoading(false);
@@ -449,6 +443,18 @@ export default function OwnerHomeScreen() {
     if (!session || !selectedStore) return;
 
     try {
+      const fromDb = await getOrdersFromDb(selectedStore.id);
+      if (Array.isArray(fromDb) && fromDb.length > 0) {
+        setOrders(fromDb);
+        const pending = fromDb.find((o: any) => o.status === "pending_store");
+        if (pending && !incomingOrder) openIncomingOrder(pending);
+        return;
+      }
+    } catch (e) {
+      console.warn("[fetchOrders] DB failed:", e);
+    }
+
+    try {
       const res = await fetch(
         `${API_BASE}/store-owner/stores/${selectedStore.id}/orders`,
         { headers: { Authorization: `Bearer ${session.token}` } }
@@ -510,6 +516,13 @@ export default function OwnerHomeScreen() {
     try {
       setDetailsLoading(true);
       setSelectedOrder(null);
+
+      const fromDb = await getOrderByIdFromDb(orderId);
+      if (fromDb) {
+        setSelectedOrder(fromDb);
+        setDetailsLoading(false);
+        return;
+      }
 
       const res = await fetch(
         `${API_BASE}/store-owner/orders/${orderId}`,
@@ -638,24 +651,20 @@ export default function OwnerHomeScreen() {
 
     try {
       if (value) {
-        // Going ONLINE - just enable quantity editing, start from 0
+        // Going ONLINE
         Alert.alert(
           "Go Online?",
-          "Your store will become visible to customers. You can set product quantities starting from 0.",
+          "Your store will become visible to customers. All active products will be available with stock of 100.",
           [
             {
               text: "Cancel",
               style: "cancel",
-              onPress: () => {
-                // Force re-render to reset switch visually
-                fetchStores(session.token);
-              }
+              onPress: () => fetchStores(session.token),
             },
             {
               text: "Go Online",
               onPress: async () => {
                 try {
-                  // Update store status
                   const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
                     method: "PATCH",
                     headers: {
@@ -664,56 +673,44 @@ export default function OwnerHomeScreen() {
                     },
                     body: JSON.stringify({ is_active: true }),
                   });
+                  if (!response.ok) throw new Error(`Failed: ${response.status}`);
 
-                  if (!response.ok) {
-                    throw new Error(`Failed to update store status: ${response.status}`);
-                  }
+                  // Restore qty=100 for all active products in DB
+                  await restoreActiveProductsOnline(selectedStore.id);
 
-                  // Refresh store data
                   await fetchStores(session.token);
                   await fetchStoreProducts(true);
 
-                  Alert.alert(
-                    "Store Online",
-                    "You can now set product quantities. Use +/- buttons to add stock."
-                  );
+                  Alert.alert("Store Online", "Your store is now visible to customers.");
                 } catch (error) {
                   console.error("Error going online:", error);
                   Alert.alert("Error", "Failed to update store status. Please try again.");
-                  // Revert on error
                   fetchStores(session.token);
                 }
-              }
-            }
+              },
+            },
           ]
         );
       } else {
-        // Going OFFLINE - reset everything to 0
+        // Going OFFLINE
         Alert.alert(
           "Go Offline?",
-          "Your store will be hidden from customers.",
+          "Your store will be hidden from customers. Product list is preserved.",
           [
             {
               text: "Cancel",
               style: "cancel",
-              onPress: () => {
-                // Force re-render to reset switch visually
-                fetchStores(session.token);
-              }
+              onPress: () => fetchStores(session.token),
             },
             {
               text: "Go Offline",
               style: "destructive",
               onPress: async () => {
                 setStoreProductsLoading(true);
-
                 try {
-                  console.log("🔴 Going offline - updating store status");
+                  // Set all product quantities to 0 in DB (preserve is_active flags)
+                  await setAllProductsOffline(selectedStore.id);
 
-                  // Immediately update UI to show 0 quantities (optimistic)
-                  setStoreProducts(prev => prev.map(p => ({ ...p, quantity: 0 })));
-
-                  // Update store status
                   const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
                     method: "PATCH",
                     headers: {
@@ -722,34 +719,23 @@ export default function OwnerHomeScreen() {
                     },
                     body: JSON.stringify({ is_active: false }),
                   });
+                  if (!response.ok) throw new Error(`Failed: ${response.status}`);
 
-                  if (!response.ok) {
-                    throw new Error(`Failed to update store status: ${response.status}`);
-                  }
-
-                  // Clear all caches
                   await invalidateAllCaches();
-
-                  // Refresh store data
                   await fetchStores(session.token);
+                  fetchStoreProducts(true).catch(() => {});
 
-                  // Background refresh of products (non-blocking)
-                  fetchStoreProducts(true).catch(err => {
-                    console.warn("Background product refresh failed:", err);
-                  });
-
-                  Alert.alert("Store Offline", "Store is now hidden from customers.");
+                  Alert.alert("Store Offline", "Store is now hidden from customers. Your products are saved.");
                 } catch (error) {
                   console.error("Error going offline:", error);
                   Alert.alert("Error", "Failed to update store status. Please try again.");
-                  // Revert on error
                   fetchStores(session.token);
                   fetchStoreProducts(true);
                 } finally {
                   setStoreProductsLoading(false);
                 }
-              }
-            }
+              },
+            },
           ]
         );
       }
@@ -819,6 +805,10 @@ export default function OwnerHomeScreen() {
     scaleAnim.setValue(1);
 
     setIncomingOrder(null);
+
+    // Show main page: switch to Orders tab and refresh so active orders list is populated
+    setActiveTab("orders");
+    fetchOrders();
   };
 
   const acceptOrder = async () => {
@@ -863,55 +853,53 @@ export default function OwnerHomeScreen() {
     closePopup();
   };
 
-  const updateProductQuantity = async (product: any, newQty: number) => {
-    console.log("🔵 updateProductQuantity called", { productId: product.id, storeProductId: product.storeProductId, oldQty: product.quantity, newQty });
+  const toggleProductActive = async (product: any) => {
+    if (!product.storeProductId) return;
 
-    // Check if store is online
-    if (!selectedStore?.is_active) {
-      console.log("❌ Store is offline, cannot update");
-      return;
-    }
+    const wasActive = product.is_active !== false;
+    const nowActive = !wasActive;
 
-    if (!product.storeProductId) {
-      console.log("❌ No storeProductId found for product", product);
-      return;
-    }
-
-    const qty = Math.max(0, newQty);
-    setUpdatingProductId(product.id);
+    setTogglingProductId(product.id);
 
     // Optimistic update
     setStoreProducts((prev) =>
-      prev.map((p) => (p.id === product.id ? { ...p, quantity: qty } : p))
+      prev.map((p) =>
+        p.id === product.id
+          ? { ...p, is_active: nowActive, quantity: nowActive ? 100 : 0 }
+          : p
+      )
     );
-    console.log("✅ Optimistic UI update applied, quantity:", qty);
 
     try {
-      console.log("📡 Calling updateStoreProductQuantity...");
-      const success = await updateStoreProductQuantity(product.storeProductId, qty);
-      console.log("📡 updateStoreProductQuantity result:", success);
-
+      const success = await updateProductActiveState(
+        product.storeProductId,
+        nowActive,
+        session?.token ?? null
+      );
       if (!success) {
-        console.log("❌ Update failed, reverting");
-        // Revert on failure
         setStoreProducts((prev) =>
-          prev.map((p) => (p.id === product.id ? { ...p, quantity: product.quantity } : p))
+          prev.map((p) =>
+            p.id === product.id
+              ? { ...p, is_active: wasActive, quantity: product.quantity }
+              : p
+          )
         );
       } else {
-        console.log("✅ Update successful, clearing caches");
-        // Invalidate cache to refresh data
         await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
         await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
-        console.log("✅ Quantity updated successfully");
+        fetchStoreProducts(true);
       }
     } catch (error) {
-      console.error("❌ Exception in updateProductQuantity:", error);
-      // Revert on error
+      console.error("Exception in toggleProductActive:", error);
       setStoreProducts((prev) =>
-        prev.map((p) => (p.id === product.id ? { ...p, quantity: product.quantity } : p))
+        prev.map((p) =>
+          p.id === product.id
+            ? { ...p, is_active: wasActive, quantity: product.quantity }
+            : p
+        )
       );
     } finally {
-      setUpdatingProductId(null);
+      setTogglingProductId(null);
     }
   };
 
@@ -1152,11 +1140,11 @@ export default function OwnerHomeScreen() {
           contentContainerStyle={styles.tabs}
         >
           <Tab label="Orders" active={activeTab === "orders"} onPress={() => setActiveTab("orders")} />
+          <Tab label="Previous Orders" active={activeTab === "previous_orders"} onPress={() => setActiveTab("previous_orders")} />
           <Tab label="Add Custom" active={false} onPress={() => router.push({ pathname: "/add.product", params: { storeId: selectedStore?.id } })} />
           <Tab label="Payments" active={activeTab === "payments"} onPress={() => setActiveTab("payments")} />
           <Tab label="Payouts" active={activeTab === "payouts"} onPress={() => setActiveTab("payouts")} />
           <Tab label="Inventory" active={false} onPress={() => router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })} />
-
         </ScrollView>
 
         {activeTab === "payments" && (
@@ -1201,6 +1189,61 @@ export default function OwnerHomeScreen() {
           )
         )}
 
+        {activeTab === "previous_orders" && (
+          <View style={styles.ordersSection}>
+            <View style={styles.ordersSectionHeader}>
+              <View>
+                <Text style={styles.ordersSectionTitle}>Previous Orders</Text>
+                <Text style={styles.ordersSectionSubtitle}>
+                  {previousOrders.length === 0
+                    ? "No past orders yet"
+                    : `${previousOrders.length} order${previousOrders.length > 1 ? "s" : ""}`}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={fetchOrders} style={styles.refreshBtn}>
+                <Ionicons name="refresh-outline" size={18} color={colors.primary} />
+              </TouchableOpacity>
+            </View>
+            {previousOrders.length === 0 ? (
+              <View style={styles.waitingCard}>
+                <Ionicons name="receipt-outline" size={36} color={colors.textTertiary} />
+                <Text style={styles.waitingTitle}>No previous orders</Text>
+                <Text style={styles.waitingText}>Orders that have been delivered will appear here</Text>
+              </View>
+            ) : (
+              previousOrders.map((o) => (
+                <TouchableOpacity
+                  key={o.id}
+                  style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
+                  onPress={() => openOrderDetails(o.id)}
+                  activeOpacity={0.75}
+                >
+                  <View style={styles.orderCardLeft}>
+                    <Text style={styles.orderCardCode}>#{o.order_code}</Text>
+                    {o.created_at && (
+                      <Text style={styles.orderCardTime}>
+                        {new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        {" · "}
+                        {new Date(o.created_at).toLocaleDateString()}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={styles.orderCardRight}>
+                    <View style={[styles.statusBadge, { backgroundColor: getStatusColor(o.status) + "22" }]}>
+                      <Text style={[styles.statusBadgeText, { color: getStatusColor(o.status) }]}>
+                        {formatStatus(o.status)}
+                      </Text>
+                    </View>
+                    {o.total_amount != null && (
+                      <Text style={styles.orderCardAmount}>₹{o.total_amount}</Text>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+        )}
+
         {activeTab === "orders" && (
           <>
             {/* ── ACTIVE ORDERS – always at top ── */}
@@ -1209,9 +1252,9 @@ export default function OwnerHomeScreen() {
                 <View>
                   <Text style={styles.ordersSectionTitle}>Active Orders</Text>
                   <Text style={styles.ordersSectionSubtitle}>
-                    {orders.length === 0
+                    {activeOrders.length === 0
                       ? "Waiting for new orders..."
-                      : `${orders.length} order${orders.length > 1 ? "s" : ""}`}
+                      : `${activeOrders.length} order${activeOrders.length > 1 ? "s" : ""}`}
                   </Text>
                 </View>
                 <TouchableOpacity onPress={fetchOrders} style={styles.refreshBtn}>
@@ -1219,14 +1262,14 @@ export default function OwnerHomeScreen() {
                 </TouchableOpacity>
               </View>
 
-              {orders.length === 0 ? (
+              {activeOrders.length === 0 ? (
                 <View style={styles.waitingCard}>
                   <Ionicons name="time-outline" size={36} color={colors.textTertiary} />
                   <Text style={styles.waitingTitle}>Waiting for orders</Text>
                   <Text style={styles.waitingText}>New orders appear here automatically every 10s</Text>
                 </View>
               ) : (
-                orders.map((o) => (
+                activeOrders.map((o) => (
                   <TouchableOpacity
                     key={o.id}
                     style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
@@ -1293,8 +1336,22 @@ export default function OwnerHomeScreen() {
                   contentContainerStyle={styles.chipScroll}
                 >
                   {storeProducts.slice(0, 15).map((p) => (
-                    <View key={p.id} style={styles.productChip}>
-                      <Text style={styles.productChipText} numberOfLines={1}>{p.name}</Text>
+                    <View
+                      key={p.id}
+                      style={[
+                        styles.productChip,
+                        p.is_active !== false && styles.productChipActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.productChipText,
+                          p.is_active !== false && styles.productChipTextActive,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {p.name || p.product_name || "Product"}
+                      </Text>
                     </View>
                   ))}
                   {storeProducts.length > 15 && (
@@ -1356,34 +1413,30 @@ export default function OwnerHomeScreen() {
                           <Ionicons name="close-circle" size={22} color={colors.error} />
                         </TouchableOpacity>
                         <View style={styles.stockItemInfo}>
-                          <Text style={styles.stockItemName} numberOfLines={1}>{p.name}</Text>
-                          <Text style={styles.stockItemQty}>{p.quantity} units</Text>
+                          <Text style={styles.stockItemName} numberOfLines={1}>
+                            {p.name || p.product_name || "Product"}
+                          </Text>
                         </View>
-                        <View style={styles.stockControls}>
-                          <TouchableOpacity
-                            style={[styles.stockBtn, styles.stockBtnMinus]}
-                            onPress={() => updateProductQuantity(p, p.quantity - 1)}
-                            disabled={updatingProductId === p.id || !selectedStore?.is_active || p.quantity <= 0}
-                          >
-                            {updatingProductId === p.id ? (
-                              <ActivityIndicator size="small" color={colors.textSecondary} />
-                            ) : (
-                              <Ionicons name="remove" size={16} color={!selectedStore?.is_active || p.quantity <= 0 ? colors.textDisabled : colors.textSecondary} />
-                            )}
-                          </TouchableOpacity>
-                          <Text style={styles.stockQtyNum}>{p.quantity}</Text>
-                          <TouchableOpacity
-                            style={[styles.stockBtn, styles.stockBtnPlus]}
-                            onPress={() => updateProductQuantity(p, p.quantity + 1)}
-                            disabled={updatingProductId === p.id || !selectedStore?.is_active}
-                          >
-                            {updatingProductId === p.id ? (
-                              <ActivityIndicator size="small" color={colors.primary} />
-                            ) : (
-                              <Ionicons name="add" size={16} color={!selectedStore?.is_active ? colors.textDisabled : colors.primary} />
-                            )}
-                          </TouchableOpacity>
-                        </View>
+                        <TouchableOpacity
+                          style={[
+                            styles.activeToggleBtn,
+                            p.is_active !== false ? styles.activeToggleBtnOn : styles.activeToggleBtnOff,
+                          ]}
+                          onPress={() => toggleProductActive(p)}
+                          disabled={togglingProductId === p.id || !selectedStore?.is_active}
+                          activeOpacity={0.75}
+                        >
+                          {togglingProductId === p.id ? (
+                            <ActivityIndicator
+                              size="small"
+                              color={p.is_active !== false ? colors.surface : colors.textSecondary}
+                            />
+                          ) : (
+                            <Text style={p.is_active !== false ? styles.activeToggleTextOn : styles.activeToggleTextOff}>
+                              {p.is_active !== false ? "Active" : "Inactive"}
+                            </Text>
+                          )}
+                        </TouchableOpacity>
                       </View>
                     ))}
                   </View>
@@ -1709,43 +1762,32 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginBottom: 2,
   },
-  stockItemQty: {
-    color: colors.textSecondary,
-    fontSize: 12,
-  },
-  stockControls: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  stockBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: radius.sm,
+  activeToggleBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: radius.full,
+    borderWidth: 1.5,
+    minWidth: 80,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
   },
-  stockBtnMinus: {
-    backgroundColor: colors.surface,
+  activeToggleBtnOn: {
+    backgroundColor: colors.success,
+    borderColor: colors.success,
+  },
+  activeToggleBtnOff: {
+    backgroundColor: colors.surfaceVariant,
     borderColor: colors.border,
   },
-  stockBtnPlus: {
-    backgroundColor: colors.surface,
-    borderColor: colors.primary,
-  },
-  stockQtyNum: {
-    color: colors.textPrimary,
-    fontSize: 16,
+  activeToggleTextOn: {
+    color: colors.surface,
+    fontSize: 13,
     fontWeight: "700",
-    minWidth: 32,
-    textAlign: "center",
   },
-  stockShowingText: {
+  activeToggleTextOff: {
     color: colors.textTertiary,
-    fontSize: 11,
-    textAlign: "center",
-    marginTop: spacing.sm,
+    fontSize: 13,
+    fontWeight: "600",
   },
 
   orderRow: {
@@ -1983,10 +2025,18 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     maxWidth: 120,
   },
+  productChipActive: {
+    backgroundColor: colors.success + "20",
+    borderColor: colors.success + "60",
+  },
   productChipText: {
     color: colors.textSecondary,
     fontSize: 12,
     fontWeight: "500",
+  },
+  productChipTextActive: {
+    color: colors.success,
+    fontWeight: "600",
   },
   moreChip: {
     backgroundColor: colors.primary + "18",

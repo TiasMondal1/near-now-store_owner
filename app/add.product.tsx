@@ -30,7 +30,6 @@ export default function AddCustomProductScreen() {
   const [subcategory, setSubcategory] = useState("");
   const [unit, setUnit] = useState("");
   const [price, setPrice] = useState("");
-  const [quantity, setQuantity] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -83,15 +82,7 @@ export default function AddCustomProductScreen() {
   };
 
   const addCustom = async () => {
-    if (
-      !name ||
-      !category ||
-      !unit ||
-      !price ||
-      !quantity ||
-      !imageUri ||
-      !imageBase64
-    ) {
+    if (!name || !category || !unit || !price || !imageUri || !imageBase64) {
       Alert.alert("Missing fields", "All fields are required.");
       return;
     }
@@ -115,7 +106,7 @@ export default function AddCustomProductScreen() {
             unit,
             image_url: `data:image/jpeg;base64,${imageBase64}`,
             price: Number(price),
-            quantity: Number(quantity),
+            quantity: 100,
           }),
         }
       );
@@ -138,7 +129,6 @@ export default function AddCustomProductScreen() {
       setSubcategory("");
       setUnit("");
       setPrice("");
-      setQuantity("");
       setImageUri(null);
       setImageBase64(null);
 
@@ -207,9 +197,9 @@ export default function AddCustomProductScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Pricing & Stock</Text>
+          <Text style={styles.cardTitle}>Pricing</Text>
           <Field label="Price (₹) *" value={price} onChange={setPrice} keyboardType="numeric" placeholder="0" />
-          <Field label="Initial Quantity *" value={quantity} onChange={setQuantity} keyboardType="numeric" placeholder="0" />
+          <Text style={styles.stockNote}>Stock is automatically set to 100 when the product is active.</Text>
         </View>
 
         <View style={{ height: 20 }} />
@@ -359,6 +349,12 @@ const styles = StyleSheet.create({
   removeBtn: { paddingVertical: 9, paddingHorizontal: 12 },
   removeBtnText: { color: colors.error, fontSize: 13, fontWeight: "500" },
 
+  stockNote: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    marginTop: 4,
+    fontStyle: "italic",
+  },
   submitBtn: {
     backgroundColor: colors.primary,
     margin: spacing.lg,
