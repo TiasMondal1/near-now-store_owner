@@ -78,7 +78,7 @@ export default function OwnerHomeScreen() {
 
 
   const selectedStore = stores[0];
-  
+
   // Debug logging
   console.log(`[owner-home] stores array length: ${stores.length}`);
   console.log(`[owner-home] selectedStore:`, selectedStore ? {
@@ -102,7 +102,7 @@ export default function OwnerHomeScreen() {
 
       setSession(s);
       await fetchStores(s.token);
-      
+
       // Ensure store starts offline - set all quantities to 0
       const stores = await (async () => {
         try {
@@ -118,13 +118,13 @@ export default function OwnerHomeScreen() {
           return [];
         }
       })();
-      
+
       if (stores[0] && !stores[0].is_active) {
         console.log("⚠️ Store is offline on app start - ensuring all quantities are 0");
         // Force all quantities to 0 when starting offline
         await invalidateAllCaches();
       }
-      
+
       setLoading(false);
     })();
   }, []);
@@ -155,7 +155,7 @@ export default function OwnerHomeScreen() {
     console.log("🔴 Setting up realtime subscription for products, store:", selectedStore.id);
 
     const { supabase } = require("../lib/supabase");
-    
+
     const channel = supabase
       .channel(`products-${selectedStore.id}`)
       .on(
@@ -168,7 +168,7 @@ export default function OwnerHomeScreen() {
         },
         (payload: any) => {
           console.log("🔴 Realtime update received:", payload);
-          
+
           // Refresh products from database
           fetchStoreProducts(true);
         }
@@ -190,7 +190,7 @@ export default function OwnerHomeScreen() {
     console.log("🟢 Setting up realtime subscription for store status");
 
     const { supabase } = require("../lib/supabase");
-    
+
     const channel = supabase
       .channel(`store-${selectedStore.id}`)
       .on(
@@ -203,7 +203,7 @@ export default function OwnerHomeScreen() {
         },
         (payload: any) => {
           console.log("🟢 Store status changed:", payload.new);
-          
+
           // Refresh store data
           if (session?.token) {
             fetchStores(session.token);
@@ -632,9 +632,9 @@ export default function OwnerHomeScreen() {
 
                 await fetchStores(session.token);
                 await fetchStoreProducts(true);
-                
+
                 Alert.alert(
-                  "Store Online", 
+                  "Store Online",
                   "You can now set product quantities. Use +/- buttons to add stock."
                 );
               }
@@ -656,16 +656,18 @@ export default function OwnerHomeScreen() {
               style: "destructive",
               onPress: async () => {
                 setStoreProductsLoading(true);
-                
+
                 try {
                   console.log("🔴 Going offline - resetting all quantities to 0");
-                  
+
                   // Set all products to quantity 0
                   const productsToReset = storeProducts.filter(p => p.storeProductId && p.quantity > 0);
                   console.log(`Resetting ${productsToReset.length} products to 0`);
-                  
+
                   for (const product of productsToReset) {
-                    await updateStoreProductQuantity(product.storeProductId, 0);
+                    if (product.storeProductId) {
+                      await updateStoreProductQuantity(product.storeProductId, 0);
+                    }
                   }
 
                   // Update store status
@@ -680,16 +682,16 @@ export default function OwnerHomeScreen() {
 
                   // Clear all caches
                   await invalidateAllCaches();
-                  
+
                   // Refresh store and products
                   await fetchStores(session.token);
                   await fetchStoreProducts(true);
-                  
+
                   // Force UI to show 0
                   setStoreProducts(prev => prev.map(p => ({ ...p, quantity: 0 })));
-                  
+
                   setStoreProductsLoading(false);
-                  
+
                   Alert.alert("Store Offline", "All quantities reset to 0. Store hidden from customers.");
                 } catch (error) {
                   console.error("Error going offline:", error);
@@ -817,7 +819,7 @@ export default function OwnerHomeScreen() {
 
   const updateProductQuantity = async (product: any, newQty: number) => {
     console.log("🔵 updateProductQuantity called", { productId: product.id, storeProductId: product.storeProductId, oldQty: product.quantity, newQty });
-    
+
     // Check if store is online
     if (!selectedStore?.is_active) {
       console.log("❌ Store is offline, cannot update");
@@ -842,7 +844,7 @@ export default function OwnerHomeScreen() {
       console.log("📡 Calling updateStoreProductQuantity...");
       const success = await updateStoreProductQuantity(product.storeProductId, qty);
       console.log("📡 updateStoreProductQuantity result:", success);
-      
+
       if (!success) {
         console.log("❌ Update failed, reverting");
         // Revert on failure
@@ -875,7 +877,7 @@ export default function OwnerHomeScreen() {
 
     try {
       console.log("🗑️ Deleting product from store:", product.storeProductId);
-      
+
       // Delete from products table
       const { supabase } = require("../lib/supabase");
       const { error } = await supabase
@@ -890,11 +892,11 @@ export default function OwnerHomeScreen() {
 
       // Update UI
       setStoreProducts((prev) => prev.filter((p) => p.id !== product.id));
-      
+
       // Clear caches
       await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
       await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
-      
+
       console.log("✅ Product removed successfully");
     } catch (error) {
       console.error("Error deleting product:", error);
@@ -1087,9 +1089,9 @@ export default function OwnerHomeScreen() {
               <Switch
                 value={selectedStore.is_active}
                 onValueChange={toggleOnline}
-                trackColor={{ 
-                  false: colors.error + "40", 
-                  true: colors.success + "40" 
+                trackColor={{
+                  false: colors.error + "40",
+                  true: colors.success + "40"
                 }}
                 thumbColor={selectedStore.is_active ? colors.success : colors.error}
                 ios_backgroundColor={colors.error + "40"}
@@ -1178,8 +1180,8 @@ export default function OwnerHomeScreen() {
                 <View style={styles.emptyStock}>
                   <Ionicons name="cube-outline" size={48} color={colors.textTertiary} />
                   <Text style={styles.emptyStockTitle}>
-                    {selectedStore?.is_active 
-                      ? "No products yet" 
+                    {selectedStore?.is_active
+                      ? "No products yet"
                       : "Store is Offline"}
                   </Text>
                   <Text style={styles.emptyStockText}>
@@ -1189,8 +1191,8 @@ export default function OwnerHomeScreen() {
                   </Text>
                   <TouchableOpacity
                     style={styles.addStockBtn}
-                    onPress={() => 
-                      selectedStore?.is_active 
+                    onPress={() =>
+                      selectedStore?.is_active
                         ? router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })
                         : toggleOnline(true)
                     }
@@ -1205,7 +1207,7 @@ export default function OwnerHomeScreen() {
                   {storeProducts.slice(0, 20).map((p, index) => {
                     // Always show actual quantity from database
                     const displayQty = p.quantity;
-                    
+
                     return (
                       <View key={p.id} style={[styles.stockItemCard, index === storeProducts.slice(0, 20).length - 1 && { marginBottom: 0 }]}>
                         <TouchableOpacity
@@ -1231,10 +1233,10 @@ export default function OwnerHomeScreen() {
                             {updatingProductId === p.id ? (
                               <ActivityIndicator size="small" color={colors.textSecondary} />
                             ) : (
-                              <Ionicons 
-                                name="remove" 
-                                size={18} 
-                                color={!selectedStore?.is_active || p.quantity <= 0 ? colors.textDisabled : colors.textSecondary} 
+                              <Ionicons
+                                name="remove"
+                                size={18}
+                                color={!selectedStore?.is_active || p.quantity <= 0 ? colors.textDisabled : colors.textSecondary}
                               />
                             )}
                           </TouchableOpacity>
@@ -1247,10 +1249,10 @@ export default function OwnerHomeScreen() {
                             {updatingProductId === p.id ? (
                               <ActivityIndicator size="small" color={colors.primary} />
                             ) : (
-                              <Ionicons 
-                                name="add" 
-                                size={18} 
-                                color={!selectedStore?.is_active ? colors.textDisabled : colors.primary} 
+                              <Ionicons
+                                name="add"
+                                size={18}
+                                color={!selectedStore?.is_active ? colors.textDisabled : colors.primary}
                               />
                             )}
                           </TouchableOpacity>

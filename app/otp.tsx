@@ -114,15 +114,22 @@ export default function StoreOwnerOtpScreen() {
       }
 
       if (__DEV__) {
-        console.log("======================================");
-        console.log("[otp] OTP Verification Response:");
-        console.log("  Response keys:", json ? Object.keys(json) : []);
-        console.log("  Success:", json?.success);
+        const token =
+          json.token ?? json.data?.token ?? json.access_token ?? null;
+        const user = json.user ?? json.data?.user ?? json.data;
+        const mode = (json.mode ?? json.data?.mode ?? "").toLowerCase();
+
+        console.log("[OTP] ✅ Login successful");
         console.log("  Mode:", mode);
         console.log("  Token exists:", !!token);
         console.log("  User:", user);
         console.log("  User role:", user?.role);
-        console.log("======================================");
+
+        if (!token) {
+          console.error("[OTP] ❌ No token in response");
+          Alert.alert("Error", "Invalid server response (missing token)");
+          return;
+        }
       }
 
       // Extract token from common response shapes (backend may use different keys)
@@ -135,7 +142,7 @@ export default function StoreOwnerOtpScreen() {
         json.data?.accessToken;
       const user = json.user ?? json.data?.user ?? json.data;
       const mode = (json.mode ?? json.data?.mode ?? "").toLowerCase();
-      
+
       // IMPORTANT: Same phone can have multiple roles (customer + shopkeeper)
       // We sent role: "shopkeeper" in the request, so backend should return shopkeeper-specific data
       // If backend returns mode: "signup", the shopkeeper account doesn't exist yet

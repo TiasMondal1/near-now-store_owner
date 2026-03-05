@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback, memo } from "react";
 import {
   View,
   Text,
-  ScrollView,
+  FlatList,
   TextInput,
   StyleSheet,
   ActivityIndicator,
@@ -30,6 +30,96 @@ const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
 let persistedProducts: any[] = [];
 let persistedStoreId: string | null = null;
 let persistedSearch = "";
+
+// Memoized product item component for better performance
+const ProductItem = memo(({
+  product,
+  out,
+  isEditing,
+  editingQty,
+  editingValueRef,
+  onUpdateQuantity,
+  onSetEditingQty,
+  onCommitQtyEdit
+}: any) => {
+  return (
+    <View style={styles.card}>
+      <Image
+        source={{ uri: product.image_url }}
+        style={styles.image}
+        resizeMode="cover"
+      />
+
+      <View style={{ flex: 1 }}>
+        <Text style={styles.name} numberOfLines={2}>
+          {product.name}
+        </Text>
+
+        <Text style={styles.meta}>
+          {product.brand ? `${product.brand} · ` : ""}
+          {product.category}
+        </Text>
+
+        <Text style={styles.price}>₹{product.price ?? product.base_price}</Text>
+
+        <Text
+          style={{
+            color: out ? colors.warning : colors.success,
+            fontSize: 12,
+            marginTop: 2,
+          }}
+        >
+          {out ? "Out of stock" : "In stock"}
+        </Text>
+      </View>
+
+      <View style={styles.stockCol}>
+        <TouchableOpacity
+          style={styles.qtyBtn}
+          onPress={() => onUpdateQuantity(product, product.quantity - 1)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.qtyText}>−</Text>
+        </TouchableOpacity>
+
+        {isEditing ? (
+          <TextInput
+            style={styles.qtyInput}
+            value={editingQty && editingQty.id === product.id ? editingQty.value : ""}
+            onChangeText={(v) => {
+              editingValueRef.current = v;
+              onSetEditingQty((e: any) => (e && e.id === product.id ? { id: e.id, value: v } : e));
+            }}
+            onBlur={() => onCommitQtyEdit(product, editingValueRef.current)}
+            onSubmitEditing={() => onCommitQtyEdit(product, editingValueRef.current)}
+            keyboardType="number-pad"
+            selectTextOnFocus
+            autoFocus
+          />
+        ) : (
+          <TouchableOpacity
+            onPress={() => {
+              editingValueRef.current = String(product.quantity);
+              onSetEditingQty({ id: product.id, value: String(product.quantity) });
+            }}
+            style={styles.qtyTouch}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.qty}>{product.quantity}</Text>
+          </TouchableOpacity>
+        )}
+
+        <TouchableOpacity
+          style={styles.qtyBtn}
+          onPress={() => onUpdateQuantity(product, product.quantity + 1)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.qtyText}>+</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+});
 
 export default function InventoryScreen() {
   const params = useLocalSearchParams<{ storeId?: string }>();
@@ -306,7 +396,7 @@ export default function InventoryScreen() {
   const updateQuantity = async (row: any, newQty: number) => {
     const qty = Math.max(0, newQty);
     const prevQty = row.quantity;
-    
+
     console.log("======================================");
     console.log("[inventory] updateQuantity START");
     console.log("  Row:", { id: row.id, name: row.name, quantity: row.quantity, storeProductId: row.storeProductId });
@@ -314,12 +404,12 @@ export default function InventoryScreen() {
     console.log("  Store ID:", storeId);
     console.log("  Token exists:", !!token);
     console.log("======================================");
-    
+
     setQuantityOptimistic(row.id, qty);
 
     if (!token || !storeId) {
       console.error("[inventory] MISSING token or storeId!", { token: !!token, storeId });
-      
+
       // Try to fetch store ID if missing
       if (!storeId && token) {
         Alert.alert(
@@ -352,7 +442,7 @@ export default function InventoryScreen() {
       } else if (!storeId) {
         console.log("⚠️ No store loaded");
       }
-      
+
       // Revert optimistic update
       setQuantityOptimistic(row.id, prevQty);
       return;
@@ -362,10 +452,10 @@ export default function InventoryScreen() {
     if (row.storeProductId) {
       console.log("[inventory] Updating existing product via Supabase");
       console.log("  storeProductId:", row.storeProductId);
-      
+
       const ok = await updateStoreProductQuantity(row.storeProductId, qty);
       console.log("[inventory] updateStoreProductQuantity result:", ok);
-      
+
       if (ok) {
         setProducts((prev) => {
           const next = prev.map((p) => (p.id === row.id ? { ...p, quantity: qty } : p));
@@ -376,7 +466,7 @@ export default function InventoryScreen() {
         console.log("[inventory] ✅ Update completed successfully");
         return;
       }
-      
+
       // Fallback to API
       console.log("[inventory] Supabase update failed, trying API fallback");
       const res = await fetch(`${API_BASE}/store-owner/products/${row.storeProductId}`, {
@@ -413,10 +503,10 @@ export default function InventoryScreen() {
     console.log("  storeId:", storeId);
     console.log("  masterProductId (row.id):", row.id);
     console.log("  quantity:", qty);
-    
+
     const inserted = await upsertStoreProduct(storeId, row.id, qty);
     console.log("[inventory] upsertStoreProduct result:", inserted);
-    
+
     if (inserted && "id" in inserted && inserted.id) {
       console.log("[inventory] ✅ SUCCESS! Product inserted with ID:", inserted.id);
       setProducts((prev) => {
@@ -430,7 +520,7 @@ export default function InventoryScreen() {
       console.log("✅ Product added to stock successfully");
       return;
     }
-    
+
     if (inserted && "error" in inserted) {
       const errMsg = inserted.error;
       console.error("[inventory] ❌ Supabase upsert FAILED:", errMsg);
@@ -444,7 +534,7 @@ export default function InventoryScreen() {
       console.error("[inventory] Could not add to stock:", errMsg + hint);
       return;
     }
-    
+
     console.error("[inventory] ❌ UNKNOWN ERROR - No id and no error returned");
     setQuantityOptimistic(row.id, prevQty);
   };
@@ -456,17 +546,17 @@ export default function InventoryScreen() {
   };
 
   const q = search.trim().toLowerCase();
-  
+
   // Filter out products already in stock (quantity > 0)
   const availableToAdd = products.filter((p) => p.quantity === 0);
-  
+
   // Apply search filter
   const filtered = availableToAdd.filter((p) =>
     [p.name, p.brand, p.category]
       .filter(Boolean)
       .some((x: string) => x.toLowerCase().includes(q))
   );
-  
+
   // Limit results to prevent memory issues
   const sorted = filtered.slice(0, q === "" ? 100 : 50);
 
@@ -474,14 +564,14 @@ export default function InventoryScreen() {
 
   const runDiagnostics = async () => {
     console.log("🔍 Running diagnostics...");
-    
+
     const connectionTest = await testSupabaseConnection();
     console.log("Connection test result:", connectionTest);
-    
+
     if (connectionTest.success && storeId) {
       const insertTest = await testProductInsert(storeId);
       console.log("Insert test result:", insertTest);
-      
+
       if (insertTest.success) {
         console.log("✅ All tests passed");
       } else {
@@ -492,147 +582,112 @@ export default function InventoryScreen() {
     }
   };
 
+  const renderItem = useCallback(({ item: p }: { item: any }) => {
+    const out = p.quantity === 0;
+    const isEditing = editingQty?.id === p.id;
+
+    return (
+      <ProductItem
+        product={p}
+        out={out}
+        isEditing={isEditing}
+        editingQty={editingQty}
+        editingValueRef={editingValueRef}
+        onUpdateQuantity={updateQuantity}
+        onSetEditingQty={setEditingQty}
+        onCommitQtyEdit={commitQtyEdit}
+      />
+    );
+  }, [editingQty, updateQuantity, commitQtyEdit]);
+
+  const keyExtractor = useCallback((item: any) => item.id, []);
+
+  const getItemLayout = useCallback(
+    (_: any, index: number) => ({
+      length: 98, // Approximate height of card + margin
+      offset: 98 * index,
+      index,
+    }),
+    []
+  );
+
+  const ListHeaderComponent = useCallback(() => (
+    <>
+      <View style={styles.headerRow}>
+        <TouchableOpacity onPress={goToDashboard} style={styles.backBtn} activeOpacity={0.7}>
+          <Text style={styles.backBtnText}>← Back</Text>
+        </TouchableOpacity>
+        {__DEV__ && (
+          <TouchableOpacity
+            onPress={runDiagnostics}
+            style={[styles.backBtn, { backgroundColor: colors.error, paddingHorizontal: 12, borderRadius: 8 }]}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.backBtnText, { color: colors.surface }]}>Test DB</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      <Text style={styles.title}>Inventory</Text>
+      <Text style={styles.subtitle}>
+        Products not yet in stock. Add quantities to make them available to customers. Items with stock will appear in "Your Stock" on the dashboard.
+      </Text>
+
+      <TextInput
+        value={search}
+        onChangeText={setSearch}
+        placeholder="Search products, brands or categories"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.search}
+      />
+    </>
+  ), [search, goToDashboard, runDiagnostics]);
+
+  const ListEmptyComponent = useCallback(() => {
+    if (loading && products.length === 0) {
+      return (
+        <View style={styles.loadingBlock}>
+          <ActivityIndicator color={colors.primary} size="large" />
+          <Text style={styles.loadingText}>Loading products...</Text>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.emptyState}>
+        <Text style={styles.emptyTitle}>
+          {products.length === 0
+            ? "No products available"
+            : availableToAdd.length === 0
+            ? "🎉 All products added!"
+            : "No matches"}
+        </Text>
+        <Text style={styles.emptyText}>
+          {products.length === 0
+            ? "Could not load products. Check your connection."
+            : availableToAdd.length === 0
+            ? "All products have stock. Manage quantities in 'Your Stock' on the dashboard."
+            : "No products match your search. Try different keywords."}
+        </Text>
+      </View>
+    );
+  }, [loading, products.length, availableToAdd.length]);
+
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container}>
-        <View style={styles.headerRow}>
-          <TouchableOpacity onPress={goToDashboard} style={styles.backBtn} activeOpacity={0.7}>
-            <Text style={styles.backBtnText}>← Back</Text>
-          </TouchableOpacity>
-          {__DEV__ && (
-            <TouchableOpacity 
-              onPress={runDiagnostics} 
-              style={[styles.backBtn, { backgroundColor: colors.error, paddingHorizontal: 12, borderRadius: 8 }]} 
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.backBtnText, { color: colors.surface }]}>Test DB</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-        <Text style={styles.title}>Inventory</Text>
-        <Text style={styles.subtitle}>
-          Products not yet in stock. Add quantities to make them available to customers. Items with stock will appear in "Your Stock" on the dashboard.
-        </Text>
-
-        <TextInput
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Search products, brands or categories"
-          placeholderTextColor={colors.textTertiary}
-          style={styles.search}
-        />
-
-        {loading && products.length === 0 ? (
-          <View style={styles.loadingBlock}>
-            <ActivityIndicator color={colors.primary} size="large" />
-            <Text style={styles.loadingText}>Loading products...</Text>
-          </View>
-        ) : sorted.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>
-              {products.length === 0
-                ? "No products available"
-                : availableToAdd.length === 0
-                ? "🎉 All products added!"
-                : "No matches"}
-            </Text>
-            <Text style={styles.emptyText}>
-              {products.length === 0
-                ? "Could not load products. Check your connection."
-                : availableToAdd.length === 0
-                ? "All products have stock. Manage quantities in 'Your Stock' on the dashboard."
-                : "No products match your search. Try different keywords."}
-            </Text>
-          </View>
-        ) : (
-          sorted.map((p) => {
-          const out = p.quantity === 0;
-          const inStore = !!p.storeProductId;
-          const isEditing = editingQty?.id === p.id;
-
-          return (
-            <View
-              key={p.id}
-              style={styles.card}
-            >
-              <Image
-                source={{ uri: p.image_url }}
-                style={styles.image}
-                resizeMode="cover"
-              />
-
-              <View style={{ flex: 1 }}>
-                <Text style={styles.name} numberOfLines={2}>
-                  {p.name}
-                </Text>
-
-                <Text style={styles.meta}>
-                  {p.brand ? `${p.brand} · ` : ""}
-                  {p.category}
-                </Text>
-
-                <Text style={styles.price}>₹{p.price ?? p.base_price}</Text>
-
-                <Text
-                  style={{
-                    color: out ? colors.warning : colors.success,
-                    fontSize: 12,
-                    marginTop: 2,
-                  }}
-                >
-                  {out ? "Out of stock" : "In stock"}
-                </Text>
-              </View>
-
-              <View style={styles.stockCol}>
-                <TouchableOpacity
-                  style={styles.qtyBtn}
-                  onPress={() => updateQuantity(p, p.quantity - 1)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.qtyText}>−</Text>
-                </TouchableOpacity>
-
-                {isEditing ? (
-                  <TextInput
-                    style={styles.qtyInput}
-                    value={editingQty && editingQty.id === p.id ? editingQty.value : ""}
-                    onChangeText={(v) => {
-                      editingValueRef.current = v;
-                      setEditingQty((e) => (e && e.id === p.id ? { id: e.id, value: v } : e));
-                    }}
-                    onBlur={() => commitQtyEdit(p, editingValueRef.current)}
-                    onSubmitEditing={() => commitQtyEdit(p, editingValueRef.current)}
-                    keyboardType="number-pad"
-                    selectTextOnFocus
-                    autoFocus
-                  />
-                ) : (
-                  <TouchableOpacity
-                    onPress={() => {
-                      editingValueRef.current = String(p.quantity);
-                      setEditingQty({ id: p.id, value: String(p.quantity) });
-                    }}
-                    style={styles.qtyTouch}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.qty}>{p.quantity}</Text>
-                  </TouchableOpacity>
-                )}
-
-                <TouchableOpacity
-                  style={styles.qtyBtn}
-                  onPress={() => updateQuantity(p, p.quantity + 1)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.qtyText}>+</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          );
-        })
-        )}
-      </ScrollView>
+      <FlatList
+        data={sorted}
+        renderItem={renderItem}
+        keyExtractor={keyExtractor}
+        getItemLayout={getItemLayout}
+        ListHeaderComponent={ListHeaderComponent}
+        ListEmptyComponent={ListEmptyComponent}
+        contentContainerStyle={styles.container}
+        removeClippedSubviews={true}
+        maxToRenderPerBatch={10}
+        updateCellsBatchingPeriod={50}
+        initialNumToRender={15}
+        windowSize={10}
+      />
     </SafeAreaView>
   );
 }

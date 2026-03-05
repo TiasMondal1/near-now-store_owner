@@ -16,6 +16,7 @@ import * as ImagePicker from "expo-image-picker";
 import { getSession } from "../session";
 import { config } from "../lib/config";
 import { colors, radius, spacing } from "../lib/theme";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const API_BASE = config.API_BASE;
 
