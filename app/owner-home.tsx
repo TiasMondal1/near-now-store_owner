@@ -606,6 +606,12 @@ export default function OwnerHomeScreen() {
   const toggleOnline = async (value: boolean) => {
     if (!session || !selectedStore) return;
 
+    // Prevent toggle if already in the desired state
+    if (selectedStore.is_active === value) {
+      console.log("Store already in desired state:", value ? "online" : "offline");
+      return;
+    }
+
     try {
       if (value) {
         // Going ONLINE - just enable quantity editing, start from 0
@@ -615,28 +621,44 @@ export default function OwnerHomeScreen() {
           [
             {
               text: "Cancel",
-              style: "cancel"
+              style: "cancel",
+              onPress: () => {
+                // Force re-render to reset switch visually
+                fetchStores(session.token);
+              }
             },
             {
               text: "Go Online",
               onPress: async () => {
-                // Just update store status - quantities stay at 0
-                await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
-                  method: "PATCH",
-                  headers: {
-                    Authorization: `Bearer ${session.token}`,
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify({ is_active: true }),
-                });
+                try {
+                  // Update store status
+                  const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
+                    method: "PATCH",
+                    headers: {
+                      Authorization: `Bearer ${session.token}`,
+                      "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ is_active: true }),
+                  });
 
-                await fetchStores(session.token);
-                await fetchStoreProducts(true);
+                  if (!response.ok) {
+                    throw new Error(`Failed to update store status: ${response.status}`);
+                  }
 
-                Alert.alert(
-                  "Store Online",
-                  "You can now set product quantities. Use +/- buttons to add stock."
-                );
+                  // Refresh store data
+                  await fetchStores(session.token);
+                  await fetchStoreProducts(true);
+
+                  Alert.alert(
+                    "Store Online",
+                    "You can now set product quantities. Use +/- buttons to add stock."
+                  );
+                } catch (error) {
+                  console.error("Error going online:", error);
+                  Alert.alert("Error", "Failed to update store status. Please try again.");
+                  // Revert on error
+                  fetchStores(session.token);
+                }
               }
             }
           ]
@@ -645,11 +667,15 @@ export default function OwnerHomeScreen() {
         // Going OFFLINE - reset everything to 0
         Alert.alert(
           "Go Offline?",
-          "Your store will be hidden from customers. All product quantities will be reset to 0.",
+          "Your store will be hidden from customers.",
           [
             {
               text: "Cancel",
-              style: "cancel"
+              style: "cancel",
+              onPress: () => {
+                // Force re-render to reset switch visually
+                fetchStores(session.token);
+              }
             },
             {
               text: "Go Offline",
@@ -658,20 +684,13 @@ export default function OwnerHomeScreen() {
                 setStoreProductsLoading(true);
 
                 try {
-                  console.log("🔴 Going offline - resetting all quantities to 0");
+                  console.log("🔴 Going offline - updating store status");
 
-                  // Set all products to quantity 0
-                  const productsToReset = storeProducts.filter(p => p.storeProductId && p.quantity > 0);
-                  console.log(`Resetting ${productsToReset.length} products to 0`);
-
-                  for (const product of productsToReset) {
-                    if (product.storeProductId) {
-                      await updateStoreProductQuantity(product.storeProductId, 0);
-                    }
-                  }
+                  // Immediately update UI to show 0 quantities (optimistic)
+                  setStoreProducts(prev => prev.map(p => ({ ...p, quantity: 0 })));
 
                   // Update store status
-                  await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
+                  const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
                     method: "PATCH",
                     headers: {
                       Authorization: `Bearer ${session.token}`,
@@ -680,21 +699,29 @@ export default function OwnerHomeScreen() {
                     body: JSON.stringify({ is_active: false }),
                   });
 
+                  if (!response.ok) {
+                    throw new Error(`Failed to update store status: ${response.status}`);
+                  }
+
                   // Clear all caches
                   await invalidateAllCaches();
 
-                  // Refresh store and products
+                  // Refresh store data
                   await fetchStores(session.token);
-                  await fetchStoreProducts(true);
 
-                  // Force UI to show 0
-                  setStoreProducts(prev => prev.map(p => ({ ...p, quantity: 0 })));
+                  // Background refresh of products (non-blocking)
+                  fetchStoreProducts(true).catch(err => {
+                    console.warn("Background product refresh failed:", err);
+                  });
 
-                  setStoreProductsLoading(false);
-
-                  Alert.alert("Store Offline", "All quantities reset to 0. Store hidden from customers.");
+                  Alert.alert("Store Offline", "Store is now hidden from customers.");
                 } catch (error) {
                   console.error("Error going offline:", error);
+                  Alert.alert("Error", "Failed to update store status. Please try again.");
+                  // Revert on error
+                  fetchStores(session.token);
+                  fetchStoreProducts(true);
+                } finally {
                   setStoreProductsLoading(false);
                 }
               }
@@ -704,9 +731,9 @@ export default function OwnerHomeScreen() {
       }
     } catch (error) {
       console.error("Error toggling store status:", error);
+      Alert.alert("Error", "An unexpected error occurred. Please try again.");
     }
   };
-
 
 
   const openIncomingOrder = async (order: any) => {
