@@ -54,13 +54,20 @@ type StoreRow = {
 export default function OwnerHomeScreen() {
   const [, requestPermission] = useCameraPermissions();
   const [scannerVisible, setScannerVisible] = useState(false);
-  const [exportState, setExportState] = useState<"idle" | "scanning" | "success">("idle");;
+  const [exportState, setExportState] = useState<"idle" | "scanning" | "success">("idle");
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const slideAnim = useRef(new Animated.Value(24)).current;
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const deadlineRef = useRef<number | null>(null);
+
+  // Orders accepted by this store should never trigger the popup again.
+  // Rejected orders are suppressed for REJECT_COOLDOWN_MS, after which the
+  // algorithm may re-route them back and the popup can re-appear.
+  const acceptedOrderIdsRef = useRef<Set<string>>(new Set());
+  const rejectedCooldownRef = useRef<Map<string, number>>(new Map());
+  const REJECT_COOLDOWN_MS = 60_000;
 
   const [session, setSession] = useState<UserSession | null>(null);
   const [stores, setStores] = useState<StoreRow[]>([]);
@@ -70,7 +77,8 @@ export default function OwnerHomeScreen() {
   const [countdown, setCountdown] = useState(20);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<
-    "orders" | "previous_orders" | "inventory" | "payments" | "payouts">("orders");
+    "orders" | "previous_orders" | "inventory" | "payments" | "payouts"
+  >("orders");
   const [payments, setPayments] = useState<any[]>([]);
   const [paymentsLoading, setPaymentsLoading] = useState(false);
   const [paymentsDayTotal, setPaymentsDayTotal] = useState(0);
@@ -81,7 +89,6 @@ export default function OwnerHomeScreen() {
   const [storeProductsLoading, setStoreProductsLoading] = useState(false);
   const [togglingProductId, setTogglingProductId] = useState<string | null>(null);
   const [stockExpanded, setStockExpanded] = useState(false);
-
 
   const selectedStore = stores[0];
 
@@ -112,7 +119,6 @@ export default function OwnerHomeScreen() {
     DELIVERED_STATUSES.includes((o.status || "").toLowerCase().replace(/-/g, "_"));
   const activeOrders = orders.filter((o: any) => !isDelivered(o));
   const previousOrders = orders.filter((o: any) => isDelivered(o));
-
 
   useEffect(() => {
     if (activeTab === "payments") {
@@ -442,11 +448,21 @@ export default function OwnerHomeScreen() {
   const fetchOrders = async () => {
     if (!session || !selectedStore) return;
 
+    const shouldShowPopup = (o: any): boolean => {
+      if (o.status !== "pending_store") return false;
+      if (acceptedOrderIdsRef.current.has(o.id)) return false;
+      const cooldownExpiry = rejectedCooldownRef.current.get(o.id);
+      if (cooldownExpiry && Date.now() < cooldownExpiry) return false;
+      // Cooldown elapsed — clean up the entry so it can show freely again
+      if (cooldownExpiry) rejectedCooldownRef.current.delete(o.id);
+      return true;
+    };
+
     try {
       const fromDb = await getOrdersFromDb(selectedStore.id);
       if (Array.isArray(fromDb) && fromDb.length > 0) {
         setOrders(fromDb);
-        const pending = fromDb.find((o: any) => o.status === "pending_store");
+        const pending = fromDb.find(shouldShowPopup);
         if (pending && !incomingOrder) openIncomingOrder(pending);
         return;
       }
@@ -470,10 +486,7 @@ export default function OwnerHomeScreen() {
 
       setOrders(json.orders || []);
 
-      const pending = json.orders?.find(
-        (o: any) => o.status === "pending_store"
-      );
-
+      const pending = (json.orders ?? []).find(shouldShowPopup);
       if (pending && !incomingOrder) openIncomingOrder(pending);
     } catch {
       setOrders([]);
@@ -819,6 +832,9 @@ export default function OwnerHomeScreen() {
       countdownRef.current = null;
     }
 
+    // Permanently suppress this order from re-triggering the popup
+    acceptedOrderIdsRef.current.add(incomingOrder.id);
+
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     await fetch(
@@ -839,6 +855,14 @@ export default function OwnerHomeScreen() {
       clearInterval(countdownRef.current);
       countdownRef.current = null;
     }
+
+    // Suppress popup for this order for REJECT_COOLDOWN_MS.
+    // After the cooldown the algorithm may re-route it back and the popup
+    // will re-appear naturally on the next fetchOrders tick.
+    rejectedCooldownRef.current.set(
+      incomingOrder.id,
+      Date.now() + REJECT_COOLDOWN_MS
+    );
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
@@ -1350,7 +1374,7 @@ export default function OwnerHomeScreen() {
                         ]}
                         numberOfLines={1}
                       >
-                        {p.name || p.product_name || "Product"}
+                        {p.name || "Product"}
                       </Text>
                     </View>
                   ))}
@@ -1414,7 +1438,7 @@ export default function OwnerHomeScreen() {
                         </TouchableOpacity>
                         <View style={styles.stockItemInfo}>
                           <Text style={styles.stockItemName} numberOfLines={1}>
-                            {p.name || p.product_name || "Product"}
+                            {p.name || "Product"}
                           </Text>
                         </View>
                         <TouchableOpacity
