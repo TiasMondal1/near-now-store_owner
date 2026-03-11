@@ -11,11 +11,13 @@ import {
   Image,
   Alert,
   Animated,
+  TextInput,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import * as Haptics from "expo-haptics";
+import * as ImagePicker from "expo-image-picker";
 import { getSession, clearSession } from "../session";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { Ionicons } from "@expo/vector-icons";
@@ -27,6 +29,8 @@ import {
   updateProductActiveState,
   setAllProductsOffline,
   restoreActiveProductsOnline,
+  getMergedInventoryFromDb,
+  upsertStoreProduct,
 } from "../lib/storeProducts";
 import { getOrdersFromDb, getOrderByIdFromDb } from "../lib/orders-db";
 
@@ -77,7 +81,7 @@ export default function OwnerHomeScreen() {
   const [countdown, setCountdown] = useState(20);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<
-    "orders" | "previous_orders" | "inventory" | "payments" | "payouts"
+    "orders" | "previous_orders" | "add_custom" | "inventory" | "payments" | "payouts"
   >("orders");
   const [payments, setPayments] = useState<any[]>([]);
   const [paymentsLoading, setPaymentsLoading] = useState(false);
@@ -119,12 +123,6 @@ export default function OwnerHomeScreen() {
     DELIVERED_STATUSES.includes((o.status || "").toLowerCase().replace(/-/g, "_"));
   const activeOrders = orders.filter((o: any) => !isDelivered(o));
   const previousOrders = orders.filter((o: any) => isDelivered(o));
-
-  useEffect(() => {
-    if (activeTab === "payments") {
-      fetchPayments();
-    }
-  }, [activeTab]);
 
   useEffect(() => {
     (async () => {
@@ -175,6 +173,7 @@ export default function OwnerHomeScreen() {
 
     fetchOrders();
     fetchStoreProducts();
+    fetchPayments();
     const interval = setInterval(fetchOrders, 10000);
     return () => clearInterval(interval);
   }, [session, selectedStore]);
@@ -1161,15 +1160,52 @@ export default function OwnerHomeScreen() {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tabs}
+          contentContainerStyle={styles.navScroll}
         >
-          <Tab label="Orders" active={activeTab === "orders"} onPress={() => setActiveTab("orders")} />
-          <Tab label="Previous Orders" active={activeTab === "previous_orders"} onPress={() => setActiveTab("previous_orders")} />
-          <Tab label="Add Custom" active={false} onPress={() => router.push({ pathname: "/add.product", params: { storeId: selectedStore?.id } })} />
-          <Tab label="Payments" active={activeTab === "payments"} onPress={() => setActiveTab("payments")} />
-          <Tab label="Payouts" active={activeTab === "payouts"} onPress={() => setActiveTab("payouts")} />
-          <Tab label="Inventory" active={false} onPress={() => router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })} />
+          <NavButton
+            label="Orders"
+            icon="receipt-outline"
+            active={activeTab === "orders"}
+            onPress={() => setActiveTab("orders")}
+          />
+          <NavButton
+            label="Previous"
+            icon="time-outline"
+            active={activeTab === "previous_orders"}
+            onPress={() => setActiveTab("previous_orders")}
+          />
+          <NavButton
+            label="Add Custom"
+            icon="add-circle-outline"
+            active={activeTab === "add_custom"}
+            onPress={() => setActiveTab("add_custom")}
+          />
+          <NavButton
+            label="Payments"
+            icon="card-outline"
+            active={activeTab === "payments"}
+            onPress={() => setActiveTab("payments")}
+          />
+          <NavButton
+            label="Payouts"
+            icon="cash-outline"
+            active={activeTab === "payouts"}
+            onPress={() => setActiveTab("payouts")}
+          />
+          <NavButton
+            label="Inventory"
+            icon="cube-outline"
+            active={activeTab === "inventory"}
+            onPress={() => {
+              setActiveTab("inventory");
+              setStockExpanded(true);
+            }}
+          />
         </ScrollView>
+
+        {activeTab === "add_custom" && (
+          <AddCustomSection storeId={selectedStore?.id} token={session?.token} />
+        )}
 
         {activeTab === "payments" && (
           paymentsLoading ? (
@@ -1211,6 +1247,15 @@ export default function OwnerHomeScreen() {
               </View>
             </>
           )
+        )}
+
+        {activeTab === "payouts" && (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyTitle}>No payouts yet</Text>
+            <Text style={styles.emptyText}>
+              Payouts from Near&Now will appear here once they’re processed.
+            </Text>
+          </View>
         )}
 
         {activeTab === "previous_orders" && (
@@ -1270,7 +1315,6 @@ export default function OwnerHomeScreen() {
 
         {activeTab === "orders" && (
           <>
-            {/* ── ACTIVE ORDERS – always at top ── */}
             <View style={styles.ordersSection}>
               <View style={styles.ordersSectionHeader}>
                 <View>
@@ -1286,54 +1330,55 @@ export default function OwnerHomeScreen() {
                 </TouchableOpacity>
               </View>
 
-              {activeOrders.length === 0 ? (
-                <View style={styles.waitingCard}>
-                  <Ionicons name="time-outline" size={36} color={colors.textTertiary} />
-                  <Text style={styles.waitingTitle}>Waiting for orders</Text>
-                  <Text style={styles.waitingText}>New orders appear here automatically every 10s</Text>
-                </View>
-              ) : (
-                activeOrders.map((o) => (
-                  <View key={o.id} style={styles.orderCardContainer}>
-                    <TouchableOpacity
-                      style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
-                      onPress={() => openOrderDetails(o.id)}
-                      activeOpacity={0.75}
-                    >
-                      <View style={styles.orderCardLeft}>
-                        <Text style={styles.orderCardCode}>#{o.order_code}</Text>
-                        {o.created_at && (
-                          <Text style={styles.orderCardTime}>
-                            {new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                          </Text>
-                        )}
-                      </View>
-                      <View style={styles.orderCardRight}>
-                        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(o.status) + "22" }]}>
-                          <Text style={[styles.statusBadgeText, { color: getStatusColor(o.status) }]}>
-                            {formatStatus(o.status)}
-                          </Text>
+                {activeOrders.length === 0 ? (
+                  <View style={styles.waitingCard}>
+                    <Ionicons name="time-outline" size={36} color={colors.textTertiary} />
+                    <Text style={styles.waitingTitle}>Waiting for orders</Text>
+                    <Text style={styles.waitingText}>New orders appear here automatically every 10s</Text>
+                  </View>
+                ) : (
+                  activeOrders.map((o) => (
+                    <View key={o.id} style={styles.orderCardContainer}>
+                      <TouchableOpacity
+                        style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
+                        onPress={() => openOrderDetails(o.id)}
+                        activeOpacity={0.75}
+                      >
+                        <View style={styles.orderCardLeft}>
+                          <Text style={styles.orderCardCode}>#{o.order_code}</Text>
+                          {o.created_at && (
+                            <Text style={styles.orderCardTime}>
+                              {new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                            </Text>
+                          )}
                         </View>
-                        {o.total_amount != null && (
-                          <Text style={styles.orderCardAmount}>₹{o.total_amount}</Text>
-                        )}
-                      </View>
-                    </TouchableOpacity>
-                    {Array.isArray(o.order_items) && o.order_items.length > 0 && (
-                      <View style={styles.orderItemsList}>
-                        {o.order_items.map((item: any, idx: number) => (
-                          <View key={idx} style={styles.orderItemChip}>
-                            <Text style={styles.orderItemText} numberOfLines={1}>
-                              {item.quantity} {item.unit} {item.product_name}
+                        <View style={styles.orderCardRight}>
+                          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(o.status) + "22" }]}>
+                            <Text style={[styles.statusBadgeText, { color: getStatusColor(o.status) }]}>
+                              {formatStatus(o.status)}
                             </Text>
                           </View>
-                        ))}
-                      </View>
-                    )}
-                  </View>
-                ))
-              )}
-            </View>
+                          {o.total_amount != null && (
+                            <Text style={styles.orderCardAmount}>₹{o.total_amount}</Text>
+                          )}
+                        </View>
+                      </TouchableOpacity>
+                      {Array.isArray(o.order_items) && o.order_items.length > 0 && (
+                        <View style={styles.orderItemsList}>
+                          {o.order_items.map((item: any, idx: number) => (
+                            <View key={idx} style={styles.orderItemChip}>
+                              <Text style={styles.orderItemText} numberOfLines={1}>
+                                {item.quantity} {item.unit} {item.product_name}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                  ))
+                )}
+              </View>
+            )}
 
             {/* ── YOUR STOCK – collapsible ── */}
             <View style={styles.stockSection}>
@@ -1347,7 +1392,10 @@ export default function OwnerHomeScreen() {
                 <View style={styles.stockHeaderRight}>
                   <TouchableOpacity
                     style={styles.manageBtn}
-                    onPress={() => router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })}
+                    onPress={() => {
+                      setActiveTab("inventory");
+                      setStockExpanded(true);
+                    }}
                   >
                     <Ionicons name="settings-outline" size={14} color={colors.primary} />
                     <Text style={styles.manageBtnText}>Manage</Text>
@@ -1425,7 +1473,7 @@ export default function OwnerHomeScreen() {
                       style={styles.addStockBtn}
                       onPress={() =>
                         selectedStore?.is_active
-                          ? router.push({ pathname: "/inventory", params: { storeId: selectedStore?.id } })
+                          ? (setActiveTab("inventory"), setStockExpanded(true))
                           : toggleOnline(true)
                       }
                     >
@@ -1475,7 +1523,12 @@ export default function OwnerHomeScreen() {
                 )
               )}
             </View>
+
           </>
+        )}
+
+        {activeTab === "inventory" && (
+          <InventoryCatalogSection storeId={selectedStore?.id} token={session?.token} />
         )}
       </ScrollView>
 
@@ -1516,15 +1569,514 @@ export default function OwnerHomeScreen() {
   );
 }
 
-function Tab({ label, active, onPress }: any) {
+function AddCustomSection({ storeId, token }: { storeId?: string; token?: string }) {
+  const [name, setName] = useState("");
+  const [brand, setBrand] = useState("");
+  const [category, setCategory] = useState("");
+  const [subcategory, setSubcategory] = useState("");
+  const [unit, setUnit] = useState("");
+  const [price, setPrice] = useState("");
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const UNITS = ["kg", "g", "l", "ml", "pcs", "units", "bunch", "pack"];
+
+  const pickFromCamera = async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert("Permission required", "Camera access is needed.");
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({
+      base64: true,
+      quality: 0.8,
+    });
+    if (!res.canceled) {
+      setImageUri(res.assets[0].uri);
+      setImageBase64(res.assets[0].base64 || null);
+    }
+  };
+
+  const pickFromGallery = async () => {
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      base64: true,
+      quality: 0.8,
+    });
+    if (!res.canceled) {
+      setImageUri(res.assets[0].uri);
+      setImageBase64(res.assets[0].base64 || null);
+    }
+  };
+
+  const addCustom = async () => {
+    if (!storeId || !token) {
+      Alert.alert("Not ready", "Store information is still loading. Please try again in a moment.");
+      return;
+    }
+    if (!name || !category || !unit || !price || !imageUri || !imageBase64) {
+      Alert.alert("Missing fields", "All fields marked * are required.");
+      return;
+    }
+    try {
+      setSaving(true);
+      const res = await fetch(
+        `${API_BASE}/store-owner/stores/${storeId}/products/custom`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name,
+            brand,
+            category,
+            subcategory,
+            unit,
+            image_url: `data:image/jpeg;base64,${imageBase64}`,
+            price: Number(price),
+            quantity: 100,
+          }),
+        }
+      );
+      const raw = await res.text();
+      let json: any = null;
+      try {
+        json = raw ? JSON.parse(raw) : null;
+      } catch {
+        json = null;
+      }
+      if (!res.ok || !json?.success) {
+        Alert.alert("Error", "Failed to add product.");
+        return;
+      }
+      Alert.alert("Success", "Custom product added.");
+      setName("");
+      setBrand("");
+      setCategory("");
+      setSubcategory("");
+      setUnit("");
+      setPrice("");
+      setImageUri(null);
+      setImageBase64(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <View style={styles.addCustomCard}>
+      <Text style={styles.addCustomTitle}>Add Custom Product</Text>
+      <Text style={styles.addCustomSubtitle}>Create a product unique to your store.</Text>
+
+      <Text style={styles.addCustomLabel}>Product Name *</Text>
+      <TextInput
+        value={name}
+        onChangeText={setName}
+        placeholder="e.g. Fresh Tomatoes"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.addCustomInput}
+      />
+
+      <Text style={styles.addCustomLabel}>Brand</Text>
+      <TextInput
+        value={brand}
+        onChangeText={setBrand}
+        placeholder="e.g. Local Farm (optional)"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.addCustomInput}
+      />
+
+      <Text style={styles.addCustomLabel}>Category *</Text>
+      <TextInput
+        value={category}
+        onChangeText={setCategory}
+        placeholder="e.g. Vegetables"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.addCustomInput}
+      />
+
+      <Text style={styles.addCustomLabel}>Subcategory</Text>
+      <TextInput
+        value={subcategory}
+        onChangeText={setSubcategory}
+        placeholder="e.g. Leafy Greens"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.addCustomInput}
+      />
+
+      <Text style={styles.addCustomLabel}>Unit *</Text>
+      <View style={styles.addCustomChipsRow}>
+        {UNITS.map((u) => (
+          <TouchableOpacity
+            key={u}
+            onPress={() => setUnit(u)}
+            style={[
+              styles.addCustomChip,
+              unit === u && styles.addCustomChipActive,
+            ]}
+          >
+            <Text
+              style={[
+                styles.addCustomChipText,
+                unit === u && styles.addCustomChipTextActive,
+              ]}
+            >
+              {u}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={styles.addCustomLabel}>Product Image *</Text>
+      {imageUri ? (
+        <View style={styles.addCustomImageBlock}>
+          <Image source={{ uri: imageUri }} style={styles.addCustomImage} />
+          <View style={styles.addCustomImageActions}>
+            <TouchableOpacity style={styles.addCustomSmallBtn} onPress={pickFromCamera}>
+              <Text style={styles.addCustomSmallBtnText}>Retake</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.addCustomSmallBtn} onPress={pickFromGallery}>
+              <Text style={styles.addCustomSmallBtnText}>Gallery</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.addCustomRemoveBtn}
+              onPress={() => {
+                setImageUri(null);
+                setImageBase64(null);
+              }}
+            >
+              <Text style={styles.addCustomRemoveBtnText}>Remove</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.addCustomImagePicker}>
+          <Text style={styles.addCustomImageIcon}>📷</Text>
+          <Text style={styles.addCustomImageLabel}>Add a photo of your product</Text>
+          <View style={styles.addCustomImageActions}>
+            <TouchableOpacity style={styles.addCustomSmallBtn} onPress={pickFromCamera}>
+              <Text style={styles.addCustomSmallBtnText}>Camera</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.addCustomSmallBtn} onPress={pickFromGallery}>
+              <Text style={styles.addCustomSmallBtnText}>Gallery</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      <Text style={styles.addCustomLabel}>Price (₹) *</Text>
+      <TextInput
+        value={price}
+        onChangeText={setPrice}
+        placeholder="0"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.addCustomInput}
+        keyboardType="numeric"
+      />
+      <Text style={styles.addCustomHint}>
+        Stock is automatically set to 100 when the product is active.
+      </Text>
+
+      <TouchableOpacity
+        style={[styles.addCustomSubmit, saving && styles.addCustomSubmitDisabled]}
+        onPress={addCustom}
+        disabled={saving}
+      >
+        {saving ? (
+          <ActivityIndicator color={colors.surface} />
+        ) : (
+          <Text style={styles.addCustomSubmitText}>Add Custom Product</Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function InventoryCatalogSection({ storeId, token }: { storeId?: string; token?: string }) {
+  const [loading, setLoading] = useState(true);
+  const [products, setProducts] = useState<any[]>([]);
+  const [search, setSearch] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      if (!storeId || !token) {
+        setLoading(false);
+        return;
+      }
+      try {
+        const fromDb = await getMergedInventoryFromDb(storeId);
+        if (Array.isArray(fromDb) && fromDb.length > 0) {
+          setProducts(fromDb);
+          setLoading(false);
+          return;
+        }
+      } catch {
+        // fall through to network fetch
+      }
+
+      try {
+        const [masterRes, storeProductsRes] = await Promise.all([
+          fetch(`${API_BASE}/api/products/master-products?isActive=true`),
+          fetch(`${API_BASE}/store-owner/stores/${storeId}/products`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
+        const [masterRaw, storeRaw] = await Promise.all([
+          masterRes.text(),
+          storeProductsRes.text(),
+        ]);
+        let masterList: any[] = [];
+        let storeList: any[] = [];
+        try {
+          masterList = masterRaw ? JSON.parse(masterRaw) : [];
+        } catch {
+          masterList = [];
+        }
+        try {
+          const storeJson = storeRaw ? JSON.parse(storeRaw) : null;
+          storeList = storeJson?.products || [];
+        } catch {
+          storeList = [];
+        }
+        if (!Array.isArray(masterList)) masterList = [];
+
+        const byMasterId: Record<
+          string,
+          { id: string; quantity: number; is_active: boolean }
+        > = {};
+        storeList.forEach((sp: any) => {
+          const mid = sp.master_product_id ?? sp.masterProductId;
+          if (mid) {
+            byMasterId[mid] = {
+              id: sp.id,
+              quantity: sp.quantity ?? 0,
+              is_active: sp.is_active !== false,
+            };
+          }
+        });
+
+        const merged = masterList.map((mp: any) => {
+          const storeRow = byMasterId[mp.id];
+          return {
+            ...mp,
+            price: mp.base_price ?? mp.price,
+            quantity: storeRow ? storeRow.quantity : 0,
+            storeProductId: storeRow?.id ?? null,
+            is_active: storeRow?.is_active ?? false,
+          };
+        });
+        setProducts(merged);
+      } catch {
+        setProducts([]);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [storeId, token]);
+
+  const notInStore = products.filter((p) => !p.storeProductId);
+  const q = search.trim().toLowerCase();
+
+  const categories = React.useMemo(() => {
+    const set = new Set<string>();
+    notInStore.forEach((p) => {
+      const c = (p.category || "").trim();
+      if (c) set.add(c);
+    });
+    return ["All", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [notInStore]);
+
+  const filteredBySearch = notInStore.filter((p) =>
+    [p.name, p.product_name, p.brand, p.category]
+      .filter(Boolean)
+      .some((x: string) => String(x).toLowerCase().includes(q))
+  );
+  const filtered =
+    !selectedCategory || selectedCategory === "All"
+      ? filteredBySearch
+      : filteredBySearch.filter(
+          (p) => (p.category || "").trim() === selectedCategory
+        );
+  const visible = filtered.slice(0, q === "" ? 40 : 60);
+
+  const addProduct = async (product: any) => {
+    if (!storeId || !token) return;
+    setTogglingId(product.id);
+    try {
+      const inserted = await upsertStoreProduct(storeId, product.id, 100);
+      if (inserted && "id" in inserted && inserted.id) {
+        setProducts((prev) =>
+          prev.map((p) =>
+            p.id === product.id
+              ? {
+                  ...p,
+                  storeProductId: inserted.id,
+                  quantity: 100,
+                  is_active: true,
+                }
+              : p
+          )
+        );
+      } else if (inserted && "error" in inserted) {
+        Alert.alert("Error", "Could not add product. Please try again.");
+      }
+    } catch {
+      Alert.alert("Error", "Something went wrong. Please try again.");
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  const formatCategoryLabel = (raw: string): string => {
+    if (!raw || raw === "All") return raw;
+    const withSpaces = String(raw).replace(/-/g, " ").trim();
+    return withSpaces
+      .split(/\s+/)
+      .map(
+        (word) =>
+          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      )
+      .join(" ");
+  };
+
+  return (
+    <View style={styles.catalogCard}>
+      <Text style={styles.catalogTitle}>Add from Near&Now catalog</Text>
+      <Text style={styles.catalogSubtitle}>
+        Browse master products and add them to your store.
+      </Text>
+
+      <TextInput
+        value={search}
+        onChangeText={setSearch}
+        placeholder="Search products, brands or categories"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.catalogSearch}
+      />
+
+      {categories.length > 1 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.catalogCategoryRow}
+        >
+          {categories.map((cat) => {
+            const isAll = cat === "All";
+            const isSelected = isAll
+              ? !selectedCategory || selectedCategory === "All"
+              : selectedCategory === cat;
+            return (
+              <TouchableOpacity
+                key={cat}
+                onPress={() => setSelectedCategory(isAll ? null : cat)}
+                style={[
+                  styles.catalogCategoryChip,
+                  isSelected && styles.catalogCategoryChipActive,
+                ]}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.catalogCategoryText,
+                    isSelected && styles.catalogCategoryTextActive,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {formatCategoryLabel(cat)}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      )}
+
+      {loading && products.length === 0 ? (
+        <View style={styles.catalogLoading}>
+          <ActivityIndicator color={colors.primary} />
+          <Text style={styles.catalogLoadingText}>Loading products...</Text>
+        </View>
+      ) : visible.length === 0 ? (
+        <View style={styles.catalogEmpty}>
+          <Text style={styles.catalogEmptyTitle}>
+            {products.length === 0
+              ? "No products available"
+              : "No products match your filters"}
+          </Text>
+          <Text style={styles.catalogEmptyText}>
+            {products.length === 0
+              ? "Could not load master products. Check your connection."
+              : "Try a different search or clear the category filter."}
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.catalogList}>
+          {visible.map((p) => {
+            const name = p.name || p.product_name || "Product";
+            const brand = p.brand;
+            const cat = p.category ? formatCategoryLabel(p.category) : "";
+            return (
+              <View key={p.id} style={styles.catalogItem}>
+                <Image
+                  source={{ uri: p.image_url }}
+                  style={styles.catalogItemImage}
+                />
+                <View style={styles.catalogItemInfo}>
+                  <Text style={styles.catalogItemName} numberOfLines={2}>
+                    {name}
+                  </Text>
+                  <Text style={styles.catalogItemMeta} numberOfLines={1}>
+                    {brand ? `${brand} · ` : ""}
+                    {cat}
+                  </Text>
+                  <Text style={styles.catalogItemPrice}>
+                    ₹{p.price ?? p.base_price ?? 0}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.catalogAddBtn}
+                  onPress={() => addProduct(p)}
+                  disabled={togglingId === p.id}
+                  activeOpacity={0.8}
+                >
+                  {togglingId === p.id ? (
+                    <ActivityIndicator size="small" color={colors.surface} />
+                  ) : (
+                    <Text style={styles.catalogAddBtnText}>Add</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function NavButton({ label, icon, active, onPress }: any) {
   return (
     <TouchableOpacity
       onPress={onPress}
-      style={[styles.tab, active && styles.tabActive]}
+      activeOpacity={0.85}
+      style={[styles.navButton, active && styles.navButtonActive]}
     >
-      <Text style={[styles.tabText, active && { color: colors.surface }]}>
-        {label}
-      </Text>
+      <View style={styles.navButtonInner}>
+        {icon ? (
+          <Ionicons
+            name={icon}
+            size={16}
+            color={active ? colors.surface : colors.primary}
+          />
+        ) : null}
+        <Text style={[styles.navButtonText, active && styles.navButtonTextActive]}>
+          {label}
+        </Text>
+      </View>
     </TouchableOpacity>
   );
 }
@@ -1662,19 +2214,309 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
-  tabs: {
-    flexDirection: "row",
-    backgroundColor: colors.surface,
-    borderRadius: radius.full,
-    padding: 4,
+  navScroll: {
+    paddingVertical: 2,
+    paddingRight: 6,
     marginBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  navButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
-    gap: 6,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  tab: { alignItems: "center", paddingVertical: spacing.sm, paddingHorizontal: 19 },
-  tabActive: { backgroundColor: colors.primary, borderRadius: radius.full },
-  tabText: { color: colors.textTertiary, fontSize: 12, fontWeight: "600" },
+  navButtonActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  navButtonInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  navButtonText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  navButtonTextActive: {
+    color: colors.surface,
+  },
+
+  catalogCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  catalogTitle: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  catalogSubtitle: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    marginBottom: spacing.sm,
+  },
+  catalogSearch: {
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    color: colors.textPrimary,
+    fontSize: 13,
+  },
+  catalogCategoryRow: {
+    flexDirection: "row",
+    gap: spacing.xs,
+    paddingVertical: spacing.xs,
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  catalogCategoryChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceVariant,
+  },
+  catalogCategoryChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  catalogCategoryText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  catalogCategoryTextActive: {
+    color: colors.surface,
+    fontWeight: "600",
+  },
+  catalogLoading: {
+    alignItems: "center",
+    paddingVertical: spacing.lg,
+    gap: spacing.sm,
+  },
+  catalogLoadingText: {
+    color: colors.textTertiary,
+    fontSize: 13,
+  },
+  catalogEmpty: {
+    paddingVertical: spacing.lg,
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  catalogEmptyTitle: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  catalogEmptyText: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    textAlign: "center",
+    paddingHorizontal: spacing.lg,
+  },
+  catalogList: {
+    marginTop: spacing.sm,
+    gap: spacing.sm,
+  },
+  catalogItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceVariant,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  catalogItemImage: {
+    width: 52,
+    height: 52,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+  },
+  catalogItemInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  catalogItemName: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  catalogItemMeta: {
+    color: colors.textTertiary,
+    fontSize: 11,
+  },
+  catalogItemPrice: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  catalogAddBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: radius.full,
+    backgroundColor: colors.primary,
+  },
+  catalogAddBtnText: {
+    color: colors.surface,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+
+  addCustomCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.lg,
+  },
+  addCustomTitle: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    fontWeight: "700",
+    marginBottom: spacing.xs,
+  },
+  addCustomSubtitle: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    marginBottom: spacing.md,
+  },
+  addCustomLabel: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    marginBottom: 6,
+    marginTop: 8,
+  },
+  addCustomInput: {
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: colors.textPrimary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    fontSize: 14,
+  },
+  addCustomChipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  addCustomChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceVariant,
+  },
+  addCustomChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  addCustomChipText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+  },
+  addCustomChipTextActive: {
+    color: colors.surface,
+    fontWeight: "600",
+  },
+  addCustomImageBlock: {
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  addCustomImage: {
+    width: "100%",
+    height: 160,
+    borderRadius: radius.md,
+    marginBottom: spacing.sm,
+  },
+  addCustomImagePicker: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    alignItems: "center",
+    marginBottom: spacing.sm,
+    gap: spacing.xs,
+  },
+  addCustomImageIcon: {
+    fontSize: 28,
+  },
+  addCustomImageLabel: {
+    color: colors.textTertiary,
+    fontSize: 12,
+  },
+  addCustomImageActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    alignItems: "center",
+  },
+  addCustomSmallBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceVariant,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  addCustomSmallBtnText: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  addCustomRemoveBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  addCustomRemoveBtnText: {
+    color: colors.error,
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  addCustomHint: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    marginTop: 4,
+  },
+  addCustomSubmit: {
+    marginTop: spacing.lg,
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  addCustomSubmitDisabled: {
+    opacity: 0.6,
+  },
+  addCustomSubmitText: {
+    color: colors.surface,
+    fontSize: 15,
+    fontWeight: "700",
+  },
 
   emptyCard: {
     backgroundColor: colors.surfaceVariant,
