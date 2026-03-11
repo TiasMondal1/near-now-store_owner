@@ -113,21 +113,11 @@ export default function ProfileScreen() {
               value={storeInfo.address || "Not provided"}
             />
             <InfoRow
-              label="Delivery Radius"
-              value={`${storeInfo.delivery_radius_km || 0} km`}
-            />
-            <InfoRow
               label="Status"
               value={storeInfo.is_active ? "Online" : "Offline"}
             />
           </View>
         )}
-
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>App Information</Text>
-          <InfoRow label="API Base" value={API_BASE} />
-          <InfoRow label="User ID" value={session?.user?.id || "N/A"} />
-        </View>
 
         <TouchableOpacity
           style={styles.logoutBtn}
