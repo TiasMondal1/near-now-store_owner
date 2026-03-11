@@ -1314,7 +1314,7 @@ export default function OwnerHomeScreen() {
         )}
 
         {activeTab === "orders" && (
-          <>
+          <View>
             <View style={styles.ordersSection}>
               <View style={styles.ordersSectionHeader}>
                 <View>
@@ -1330,55 +1330,54 @@ export default function OwnerHomeScreen() {
                 </TouchableOpacity>
               </View>
 
-                {activeOrders.length === 0 ? (
-                  <View style={styles.waitingCard}>
-                    <Ionicons name="time-outline" size={36} color={colors.textTertiary} />
-                    <Text style={styles.waitingTitle}>Waiting for orders</Text>
-                    <Text style={styles.waitingText}>New orders appear here automatically every 10s</Text>
-                  </View>
-                ) : (
-                  activeOrders.map((o) => (
-                    <View key={o.id} style={styles.orderCardContainer}>
-                      <TouchableOpacity
-                        style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
-                        onPress={() => openOrderDetails(o.id)}
-                        activeOpacity={0.75}
-                      >
-                        <View style={styles.orderCardLeft}>
-                          <Text style={styles.orderCardCode}>#{o.order_code}</Text>
-                          {o.created_at && (
-                            <Text style={styles.orderCardTime}>
-                              {new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                            </Text>
-                          )}
+              {activeOrders.length === 0 ? (
+                <View style={styles.waitingCard}>
+                  <Ionicons name="time-outline" size={36} color={colors.textTertiary} />
+                  <Text style={styles.waitingTitle}>Waiting for orders</Text>
+                  <Text style={styles.waitingText}>New orders appear here automatically every 10s</Text>
+                </View>
+              ) : (
+                activeOrders.map((o) => (
+                  <View key={o.id} style={styles.orderCardContainer}>
+                    <TouchableOpacity
+                      style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
+                      onPress={() => openOrderDetails(o.id)}
+                      activeOpacity={0.75}
+                    >
+                      <View style={styles.orderCardLeft}>
+                        <Text style={styles.orderCardCode}>#{o.order_code}</Text>
+                        {o.created_at && (
+                          <Text style={styles.orderCardTime}>
+                            {new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </Text>
+                        )}
+                      </View>
+                      <View style={styles.orderCardRight}>
+                        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(o.status) + "22" }]}>
+                          <Text style={[styles.statusBadgeText, { color: getStatusColor(o.status) }]}>
+                            {formatStatus(o.status)}
+                          </Text>
                         </View>
-                        <View style={styles.orderCardRight}>
-                          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(o.status) + "22" }]}>
-                            <Text style={[styles.statusBadgeText, { color: getStatusColor(o.status) }]}>
-                              {formatStatus(o.status)}
+                        {o.total_amount != null && (
+                          <Text style={styles.orderCardAmount}>₹{o.total_amount}</Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                    {Array.isArray(o.order_items) && o.order_items.length > 0 && (
+                      <View style={styles.orderItemsList}>
+                        {o.order_items.map((item: any, idx: number) => (
+                          <View key={idx} style={styles.orderItemChip}>
+                            <Text style={styles.orderItemText} numberOfLines={1}>
+                              {item.quantity} {item.unit} {item.product_name}
                             </Text>
                           </View>
-                          {o.total_amount != null && (
-                            <Text style={styles.orderCardAmount}>₹{o.total_amount}</Text>
-                          )}
-                        </View>
-                      </TouchableOpacity>
-                      {Array.isArray(o.order_items) && o.order_items.length > 0 && (
-                        <View style={styles.orderItemsList}>
-                          {o.order_items.map((item: any, idx: number) => (
-                            <View key={idx} style={styles.orderItemChip}>
-                              <Text style={styles.orderItemText} numberOfLines={1}>
-                                {item.quantity} {item.unit} {item.product_name}
-                              </Text>
-                            </View>
-                          ))}
-                        </View>
-                      )}
-                    </View>
-                  ))
-                )}
-              </View>
-            )}
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                ))
+              )}
+            </View>
 
             {/* ── YOUR STOCK – collapsible ── */}
             <View style={styles.stockSection}>
@@ -1523,8 +1522,7 @@ export default function OwnerHomeScreen() {
                 )
               )}
             </View>
-
-          </>
+          </View>
         )}
 
         {activeTab === "inventory" && (
