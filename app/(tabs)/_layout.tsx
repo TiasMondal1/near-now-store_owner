@@ -60,7 +60,7 @@ export default function TabsLayout() {
         name="payments"
         component={PaymentsTab}
         options={{
-          title: "Payments",
+          title: "Payouts",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="cash-outline" size={size} color={color} />
           ),
