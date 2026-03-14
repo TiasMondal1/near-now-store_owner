@@ -7,7 +7,7 @@ const { expo } = require("./app.json");
 module.exports = {
   expo: {
     ...expo,
-    scheme: "nearandnow-storeowner",
+    scheme: "nearandnow-shopkeeper",
     extra: {
       apiBaseUrl:
         process.env.EXPO_PUBLIC_API_BASE_URL || "http://192.168.0.111:3000",

@@ -89,7 +89,7 @@ export default function StoreOwnerOtpScreen() {
       try {
         json = raw ? JSON.parse(raw) : null;
       } catch {
-        console.warn("OTP verify: non-JSON response", raw?.slice(0, 200));
+        if (__DEV__) console.warn("OTP verify: non-JSON response", raw?.slice(0, 200));
       }
 
       if (!res.ok) {
@@ -97,7 +97,7 @@ export default function StoreOwnerOtpScreen() {
           json?.error ||
           json?.message ||
           (raw?.slice(0, 100) || `Server error ${res.status}`);
-        console.warn("OTP verify failed", res.status, msg);
+        if (__DEV__) console.warn("OTP verify failed", res.status, msg);
         Alert.alert(
           "Verification failed",
           msg + (res.status === 401 ? "\n\nCheck that the code is correct and not expired." : "")
@@ -148,28 +148,19 @@ export default function StoreOwnerOtpScreen() {
       // If backend returns mode: "signup", the shopkeeper account doesn't exist yet
       // If backend returns a token, the shopkeeper account exists
 
-      console.log("[otp] Extracted values:");
-      console.log("  token:", token ? "exists" : "MISSING");
-      console.log("  user:", user ? "exists" : "MISSING");
-      console.log("  user.role:", user?.role);
-      console.log("  user.name:", user?.name);
-      console.log("  mode:", mode || "NONE");
+      if (__DEV__) {
+        console.log("[otp] Extracted values:", { hasToken: !!token, hasUser: !!user, userRole: user?.role, mode });
+      }
 
       const explicitlySignup = mode === "signup";
       const hasToken = !!token;
 
-      console.log("[otp] Decision logic:");
-      console.log("  hasToken:", hasToken);
-      console.log("  explicitlySignup:", explicitlySignup);
-      console.log("  → Action:", hasToken ? "LOGIN to dashboard" : explicitlySignup ? "SIGNUP (store setup)" : "ERROR");
-
       // CRITICAL CHECK: Backend MUST return shopkeeper role, not customer!
       // We sent role: "shopkeeper" in request, so response should have user.role = "shopkeeper"
       if (hasToken && user?.role && user.role !== "shopkeeper" && user.role !== "store_owner") {
-        console.error("[otp] ❌ BACKEND ERROR: Returned wrong role!");
-        console.error("[otp] Expected: shopkeeper or store_owner");
-        console.error("[otp] Got:", user.role);
-        console.error("[otp] This means backend is NOT filtering by role correctly!");
+        if (__DEV__) {
+          console.error("[otp] BACKEND ERROR: Returned wrong role:", user.role);
+        }
         Alert.alert(
           "Backend Configuration Error",
           `Backend returned ${user.role} account instead of shopkeeper account.\n\n` +
@@ -184,9 +175,6 @@ export default function StoreOwnerOtpScreen() {
 
       // If we have a token, shopkeeper account exists → login to dashboard
       if (hasToken) {
-        console.log("[otp] ✅ Shopkeeper account exists - saving session and going to dashboard");
-        console.log("[otp] Store name:", user?.name);
-        console.log("[otp] User role:", user?.role);
         const sessionData = {
           token,
           user: {
@@ -198,17 +186,13 @@ export default function StoreOwnerOtpScreen() {
             email: user?.email ?? undefined,
           },
         };
-        console.log("[otp] Session data:", sessionData);
         await saveSession(sessionData);
-        console.log("[otp] Session saved, navigating to /owner-home");
         router.replace("/owner-home");
         return;
       }
 
       // If mode is signup and no token, shopkeeper account doesn't exist yet → store setup
       if (explicitlySignup && !hasToken) {
-        console.log("[otp] 🆕 Shopkeeper account doesn't exist - redirecting to store setup");
-        console.log("[otp] Note: Phone may have customer account, but needs shopkeeper account");
         router.replace({
           pathname: "/store-owner-signup",
           params: { phone },
@@ -217,8 +201,9 @@ export default function StoreOwnerOtpScreen() {
       }
 
       // Unexpected state - no token and not signup mode
-      console.error("[otp] ❌ Unexpected state - no token and not signup mode");
-      console.error("[otp] Full response:", JSON.stringify(json, null, 2));
+      if (__DEV__) {
+        console.error("[otp] Unexpected state - no token and not signup mode", { mode, hasToken });
+      }
       Alert.alert(
         "Login Error",
         "Could not log you in as shopkeeper.\n\n" +
@@ -235,7 +220,7 @@ export default function StoreOwnerOtpScreen() {
         msg.includes("Network") ||
         msg.includes("fetch") ||
         msg.includes("Failed to connect");
-      console.warn("OTP verify error", e);
+      if (__DEV__) console.warn("OTP verify error", e);
       Alert.alert(
         "Error",
         isNetwork
@@ -263,18 +248,18 @@ export default function StoreOwnerOtpScreen() {
       try {
         json = raw ? JSON.parse(raw) : null;
       } catch {
-        console.log("Non-JSON from /auth/phone/start (resend):", raw);
+        if (__DEV__) console.log("Non-JSON from /auth/phone/start (resend):", raw);
       }
 
       if (!res.ok || !json || json.success === false) {
-        console.log("Resend OTP error:", res.status, raw);
+        if (__DEV__) console.log("Resend OTP error:", res.status, raw);
         Alert.alert("Error", json?.error || "Could not resend OTP.");
         return;
       }
 
       setSecondsLeft(60);
     } catch (e) {
-      console.log("Network error resending OTP:", e);
+      if (__DEV__) console.log("Network error resending OTP:", e);
       Alert.alert("Error", "Network error. Please try again.");
     } finally {
       setResendLoading(false);

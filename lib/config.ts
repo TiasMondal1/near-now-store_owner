@@ -8,6 +8,7 @@ const getEnv = (key: string, fallback: string = ""): string => {
   return typeof value === "string" ? value : fallback;
 };
 
+// Only used when EXPO_PUBLIC_API_BASE_URL is not set (e.g. dev). For production builds set the env var.
 const defaultApi = "http://localhost:3000";
 
 export const config = {
