@@ -35,22 +35,40 @@ export default function StoreOwnerPhoneScreen() {
     if (!isValid || loading) return;
     const fullPhone = `+91${phone}`;
 
-    let res: Response | null = null;
-    let json: any = null;
+    // Normalize API base to avoid accidental double slashes like //api/...
+    const baseUrl = API_BASE.replace(/\/+$/, "");
 
     try {
       setLoading(true);
-      const url = `${API_BASE}/api/auth/send-otp`;
-      res = await fetch(url, {
+      const url = `${baseUrl}/api/auth/send-otp`;
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: fullPhone }),
       });
+
       const raw = await res.text();
+      let json: any = null;
       try {
         json = raw ? JSON.parse(raw) : null;
       } catch {
         json = null;
+      }
+      if (!res.ok || !json?.success) {
+        if (__DEV__) {
+          console.log("[send-otp] status:", res.status);
+          console.log("[send-otp] raw:", raw?.slice(0, 200));
+          console.log("[send-otp] json:", json);
+        }
+
+        Alert.alert(
+          "Error",
+          json?.error ||
+            json?.message ||
+            `Unable to send OTP. Server responded with status ${res.status}.`
+        );
+        setLoading(false);
+        return;
       }
     } catch (e: any) {
       const msg = e?.message || String(e);
@@ -63,15 +81,6 @@ export default function StoreOwnerPhoneScreen() {
             ? `App was built with: ${API_BASE}\n\nOn a real device, localhost is the phone—so the app cannot reach your computer.\n\n• Rebuild the APK with EXPO_PUBLIC_API_BASE_URL in .env set to your production API (e.g. https://api.yourdomain.com) or your computer’s LAN IP (e.g. http://192.168.1.x:3000) for testing.\n• Then run: npm run build:apk`
             : `App is using: ${API_BASE}\n\n• Backend must be running and listen on 0.0.0.0:3000.\n• Phone and computer on same Wi‑Fi.`
           : "Network or parsing error. Please try again."
-      );
-      setLoading(false);
-      return;
-    }
-
-    if (!res!.ok || !json?.success) {
-      Alert.alert(
-        "Error",
-        json?.error || json?.message || "Unable to send OTP. Check that the near-and-now backend is running and Twilio is configured."
       );
       setLoading(false);
       return;

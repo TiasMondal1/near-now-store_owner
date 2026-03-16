@@ -42,12 +42,38 @@ if (fs.existsSync(envPath)) {
 process.env.NODE_ENV = process.env.NODE_ENV || "production";
 
 const androidDir = path.join(rootDir, "android");
-const gradle = path.join(androidDir, "gradlew");
-const env = { ...process.env, JAVA_TOOL_OPTIONS: "--enable-native-access=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED" };
-const run = (args) => spawnSync(gradle, args, { cwd: androidDir, env, stdio: "inherit" });
+const isWin = process.platform === "win32";
+const gradleWrapper = isWin ? "gradlew.bat" : "gradlew";
+const gradle = path.join(androidDir, gradleWrapper);
 
+// Use whatever JAVA_HOME / PATH the environment provides; don't hardcode JDK paths.
+const env = {
+  ...process.env,
+  JAVA_TOOL_OPTIONS:
+    "--enable-native-access=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED",
+};
+
+const run = (gradleArgs) => {
+  if (isWin) {
+    // On Windows, run via cmd.exe to avoid spawnSync EINVAL with .bat
+    return spawnSync("cmd.exe", ["/c", gradle, ...gradleArgs], {
+      cwd: androidDir,
+      env,
+      stdio: "inherit",
+    });
+  }
+  return spawnSync(gradle, gradleArgs, {
+    cwd: androidDir,
+    env,
+    stdio: "inherit",
+  });
+};
 // Stop existing daemon so a new one starts with our EXPO_PUBLIC_* env (needed for bundle step)
 run(["--stop"]);
 const result = run(["assembleRelease"]);
+
+if (result.error) {
+  console.error("Gradle failed to start:", result.error.message || result.error);
+}
 
 process.exit(result.status ?? 1);

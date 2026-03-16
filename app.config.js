@@ -1,16 +1,54 @@
-/**
- * Expo config. When you run "expo start", .env is loaded first; we bake
- * EXPO_PUBLIC_API_BASE_URL into the app via extra so the device gets your LAN IP.
- */
-const { expo } = require("./app.json");
+// Single-source dynamic Expo config (no app.json).
+// Uses EXPO_PUBLIC_API_BASE_URL and your custom logo for icons.
 
-module.exports = {
-  expo: {
-    ...expo,
-    scheme: "nearandnow-shopkeeper",
-    extra: {
-      apiBaseUrl:
-        process.env.EXPO_PUBLIC_API_BASE_URL || "http://192.168.0.111:3000",
+module.exports = () => ({
+  name: "Near & Now Shopkeeper",
+  slug: "shopkeeperapp",
+  version: "1.0.0",
+  orientation: "portrait",
+  // App icon used on the device / launcher
+  icon: "./near_now_shopkeeper.png",
+  userInterfaceStyle: "light",
+  newArchEnabled: true,
+  splash: {
+    image: "./near_now_shopkeeper.png",
+    resizeMode: "contain",
+    backgroundColor: "#ffffff",
+  },
+  ios: {
+    supportsTablet: true,
+    bundleIdentifier: "com.nearandnow.shopkeeper",
+    buildNumber: "1",
+  },
+  android: {
+    adaptiveIcon: {
+      foregroundImage: "./near_now_shopkeeper.png",
+      backgroundColor: "#ffffff",
+    },
+    edgeToEdgeEnabled: true,
+    predictiveBackGestureEnabled: false,
+    package: "com.nearandnow.shopkeeper",
+    versionCode: 2,
+    jsEngine: "hermes",
+  },
+  web: {
+    favicon: "./near_now_shopkeeper.png",
+  },
+  owner: "near-and-now-organization",
+  scheme: "nearandnow-shopkeeper",
+  updates: {
+    url: "https://u.expo.dev/f0f709ec-f013-416a-b543-729b80cbd4b0",
+  },
+  runtimeVersion: {
+    policy: "appVersion",
+  },
+  plugins: ["expo-router"],
+  extra: {
+    apiBaseUrl:
+      process.env.EXPO_PUBLIC_API_BASE_URL ||
+      "https://near-and-now-backend-production.up.railway.app/",
+    eas: {
+      projectId: "f0f709ec-f013-416a-b543-729b80cbd4b0",
     },
   },
-};
+});

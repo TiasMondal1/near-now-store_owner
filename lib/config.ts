@@ -8,12 +8,15 @@ const getEnv = (key: string, fallback: string = ""): string => {
   return typeof value === "string" ? value : fallback;
 };
 
-// Only used when EXPO_PUBLIC_API_BASE_URL is not set (e.g. dev). For production builds set the env var.
-const defaultApi = "http://localhost:3000";
+// Fallback API URL if EXPO_PUBLIC_API_BASE_URL is not set.
+// Use production backend by default so release builds never hit localhost.
+const defaultApi = "https://near-and-now-backend-production.up.railway.app/";
 
 export const config = {
-  /** Store owner API base URL - set EXPO_PUBLIC_API_BASE_URL in .env */
-  API_BASE: getEnv("EXPO_PUBLIC_API_BASE_URL") || defaultApi,
+  /** Store owner API base URL - set EXPO_PUBLIC_API_BASE_URL in .env.
+   * We strip trailing slashes to avoid URLs like //api/auth/...
+   */
+  API_BASE: (getEnv("EXPO_PUBLIC_API_BASE_URL") || defaultApi).replace(/\/+$/, ""),
 
   /** Supabase project URL */
   SUPABASE_URL:

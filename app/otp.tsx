@@ -77,7 +77,8 @@ export default function StoreOwnerOtpScreen() {
 
     try {
       setLoading(true);
-      const url = `${API_BASE}/api/auth/verify-otp`;
+      const baseUrl = API_BASE.replace(/\/+$/, "");
+      const url = `${baseUrl}/api/auth/verify-otp`;
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -238,7 +239,8 @@ export default function StoreOwnerOtpScreen() {
 
     try {
       setResendLoading(true);
-      const res = await fetch(`${API_BASE}/api/auth/send-otp`, {
+      const baseUrl = API_BASE.replace(/\/+$/, "");
+      const res = await fetch(`${baseUrl}/api/auth/send-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone }),
