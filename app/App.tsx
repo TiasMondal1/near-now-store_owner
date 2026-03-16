@@ -55,10 +55,13 @@ export default function StoreOwnerPhoneScreen() {
     } catch (e: any) {
       const msg = e?.message || String(e);
       const isNetwork = msg.includes("Network") || msg.includes("fetch") || msg.includes("connect");
+      const isLocalhost = API_BASE.includes("localhost") || API_BASE.includes("127.0.0.1");
       Alert.alert(
         "Cannot reach server",
         isNetwork
-          ? `App is using: ${API_BASE}\n\n• Backend must be running and listen on 0.0.0.0:3000.\n• Phone and computer on same Wi‑Fi.\n• Try: npx expo start -c (clear cache), then reload the app.`
+          ? isLocalhost
+            ? `App was built with: ${API_BASE}\n\nOn a real device, localhost is the phone—so the app cannot reach your computer.\n\n• Rebuild the APK with EXPO_PUBLIC_API_BASE_URL in .env set to your production API (e.g. https://api.yourdomain.com) or your computer’s LAN IP (e.g. http://192.168.1.x:3000) for testing.\n• Then run: npm run build:apk`
+            : `App is using: ${API_BASE}\n\n• Backend must be running and listen on 0.0.0.0:3000.\n• Phone and computer on same Wi‑Fi.`
           : "Network or parsing error. Please try again."
       );
       setLoading(false);
