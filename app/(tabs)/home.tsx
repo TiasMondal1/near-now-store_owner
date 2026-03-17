@@ -32,6 +32,7 @@ import { getOrdersFromDb, getOrderByIdFromDb } from "../../lib/orders-db";
 const API_BASE = config.API_BASE;
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
+const BRAND_LOGO = require("../../near_now_shopkeeper.png");
 
 type StoreRow = {
   id: string;
@@ -522,7 +523,7 @@ export default function HomeTab() {
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.header}>
           <View style={styles.headerLeft}>
-            <Ionicons name="storefront" size={24} color={colors.primary} />
+            <Image source={BRAND_LOGO} style={styles.brandLogo} />
             <View>
               <Text style={styles.brand}>Near&Now</Text>
               <Text style={styles.subtitle}>Store Owner</Text>
@@ -837,6 +838,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
+  },
+  brandLogo: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
   },
   headerActions: {
     flexDirection: "row",

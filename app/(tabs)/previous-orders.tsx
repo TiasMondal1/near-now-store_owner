@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -6,9 +6,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
-  Modal,
-  Image,
-  Animated,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
@@ -17,15 +14,11 @@ import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import { config } from "../../lib/config";
 import { colors, radius, spacing } from "../../lib/theme";
-import { getOrdersFromDb, getOrderByIdFromDb } from "../../lib/orders-db";
+import { getOrdersFromDb } from "../../lib/orders-db";
 
 const API_BASE = config.API_BASE;
 
 export default function PreviousOrdersTab() {
-  const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
-  const slideAnim = useRef(new Animated.Value(24)).current;
-  const scaleAnim = useRef(new Animated.Value(1)).current;
-
   const [session, setSession] = useState<any | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
@@ -129,43 +122,6 @@ export default function PreviousOrdersTab() {
     }
   };
 
-  const openOrderDetails = async (orderId: string) => {
-    if (!session) return;
-
-    try {
-      const fromDb = await getOrderByIdFromDb(orderId);
-      if (fromDb) {
-        setSelectedOrder(fromDb);
-        return;
-      }
-
-      const res = await fetch(
-        `${API_BASE}/store-owner/orders/${orderId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${session.token}`,
-          },
-        }
-      );
-      const raw = await res.text();
-      let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {
-        return;
-      }
-
-      if (!json?.success) {
-        console.log("Failed to load order details", json);
-        return;
-      }
-
-      setSelectedOrder(json.order);
-    } catch (e) {
-      console.log("Order details error", e);
-    }
-  };
-
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
@@ -190,60 +146,6 @@ export default function PreviousOrdersTab() {
           </TouchableOpacity>
         </View>
 
-        <Modal visible={!!selectedOrder} transparent animationType="fade">
-          <View style={styles.overlay}>
-            <Animated.View
-              style={[
-                styles.popup,
-                {
-                  transform: [{ translateY: slideAnim }, { scale: scaleAnim }],
-                },
-              ]}
-            >
-              {selectedOrder ? (
-                <>
-                  <Text style={styles.popupTitle}>Order Details</Text>
-
-                  <Text style={styles.orderCodeBig}>
-                    #{selectedOrder?.order_code ?? "---"}
-                  </Text>
-
-                  <ScrollView style={{ maxHeight: 260 }}>
-                    {Array.isArray(selectedOrder.order_items) &&
-                      selectedOrder.order_items.map((item: any, idx: number) => (
-                        <View key={idx} style={styles.itemRow}>
-                          <Image
-                            source={{ uri: item.image_url }}
-                            style={styles.itemImg}
-                          />
-                          <View>
-                            <Text style={styles.itemName}>
-                              {item.product_name}
-                            </Text>
-                            <Text style={styles.itemQty}>
-                              {item.quantity} {item.unit}
-                            </Text>
-                          </View>
-                        </View>
-                      ))}
-                  </ScrollView>
-
-                  <View style={styles.actions}>
-                    <TouchableOpacity
-                      onPress={() => setSelectedOrder(null)}
-                      style={[styles.btn, { backgroundColor: colors.primary }]}
-                    >
-                      <Text style={styles.btnText}>Close</Text>
-                    </TouchableOpacity>
-                  </View>
-                </>
-              ) : (
-                <ActivityIndicator color="#fff" />
-              )}
-            </Animated.View>
-          </View>
-        </Modal>
-
         <View style={styles.ordersSection}>
           <View style={styles.ordersSectionHeader}>
             <View>
@@ -266,7 +168,7 @@ export default function PreviousOrdersTab() {
               <TouchableOpacity
                 key={o.id}
                 style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
-                onPress={() => openOrderDetails(o.id)}
+                onPress={() => router.push(`/invoice/${o.id}`)}
                 activeOpacity={0.75}
               >
                 <View style={styles.orderCardLeft}>
@@ -337,32 +239,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
-  overlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  popup: {
-    width: "92%",
-    backgroundColor: colors.surface,
-    borderRadius: 26,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  popupTitle: { color: colors.textPrimary, fontSize: 18, fontWeight: "800", textAlign: "center" },
-  orderCodeBig: { color: colors.textPrimary, fontSize: 24, fontWeight: "800", textAlign: "center", marginVertical: spacing.sm },
-
-  itemRow: { flexDirection: "row", gap: spacing.md, marginBottom: 10, alignItems: "center" },
-  itemImg: { width: 48, height: 48, borderRadius: radius.sm },
-  itemName: { color: colors.textPrimary, fontWeight: "600" },
-  itemQty: { color: colors.textTertiary, fontSize: 12 },
-
-  actions: { flexDirection: "row", gap: spacing.md, marginTop: 14 },
-  btn: { flex: 1, paddingVertical: 14, borderRadius: radius.md, alignItems: "center" },
-  btnText: { color: colors.surface, fontWeight: "800" },
 
   ordersSection: {
     backgroundColor: colors.surface,

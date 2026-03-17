@@ -1,9 +1,10 @@
 import React, { useEffect, useRef } from "react";
-import { View, Text, StyleSheet, Animated, Easing } from "react-native";
+import { View, Text, StyleSheet, Animated, Easing, Image } from "react-native";
 import { useRouter } from "expo-router";
 import { colors } from "../lib/theme";
 
 const SPLASH_DURATION_MS = 2200;
+const BRAND_LOGO = require("../near_now_shopkeeper.png");
 
 export default function SplashScreen() {
   const router = useRouter();
@@ -64,9 +65,7 @@ export default function SplashScreen() {
           },
         ]}
       >
-        <View style={styles.iconCircle}>
-          <Text style={styles.iconText}>N&N</Text>
-        </View>
+        <Image source={BRAND_LOGO} style={styles.logo} resizeMode="contain" />
       </Animated.View>
       <Text style={styles.tagline}>Shopkeeper</Text>
       <Text style={styles.sub}>Near & Now</Text>
@@ -85,24 +84,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  iconCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 28,
-    backgroundColor: colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
+  logo: {
+    width: 180,
+    height: 180,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
     elevation: 8,
-  },
-  iconText: {
-    fontSize: 32,
-    fontWeight: "800",
-    color: colors.surface,
-    letterSpacing: -0.5,
   },
   tagline: {
     marginTop: 24,
