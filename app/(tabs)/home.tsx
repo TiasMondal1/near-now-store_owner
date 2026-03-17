@@ -12,6 +12,7 @@ import {
   Alert,
   Animated,
 } from "react-native";
+import { InteractionManager } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
@@ -87,35 +88,56 @@ export default function HomeTab() {
   const activeOrders = orders.filter((o: any) => !isDelivered(o));
 
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
-      const s: any = await getSession();
-      if (!s?.token) return router.replace("/landing");
-
-      setSession(s);
-      await fetchStores(s.token);
-
-      const stores = await (async () => {
-        try {
-          const session = await getSession();
-          const userId = session?.user?.id;
-          const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
-            headers: { Authorization: `Bearer ${s.token}` },
-          });
-          const raw = await res.text();
-          const json = raw ? JSON.parse(raw) : null;
-          return json?.stores || [];
-        } catch {
-          return [];
+      try {
+        const s: any = await getSession();
+        if (!s?.token) {
+          if (!cancelled) router.replace("/landing");
+          return;
         }
-      })();
 
-      if (stores[0] && !stores[0].is_active) {
-        console.log("⚠️ Store is offline on app start - ensuring all quantities are 0");
-        await invalidateAllCaches();
+        if (cancelled) return;
+        setSession(s);
+
+        await fetchStores(s.token);
+
+        if (cancelled) return;
+
+        const currentStores = await (async () => {
+          try {
+            const latestSession = await getSession();
+            const userId = latestSession?.user?.id;
+            const res = await fetch(
+              `${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ""}`,
+              {
+                headers: { Authorization: `Bearer ${s.token}` },
+              }
+            );
+            const raw = await res.text();
+            const json = raw ? JSON.parse(raw) : null;
+            return Array.isArray(json?.stores) ? json.stores : [];
+          } catch (error) {
+            console.warn("[home] Failed to load stores during bootstrap", error);
+            return [];
+          }
+        })();
+
+        if (!cancelled && currentStores[0] && !currentStores[0].is_active) {
+          console.log("⚠️ Store is offline on app start - clearing inventory caches");
+          await invalidateAllCaches();
+        }
+      } catch (error) {
+        console.warn("[home] Initial bootstrap failed", error);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-
-      setLoading(false);
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const invalidateAllCaches = async () => {
@@ -131,75 +153,108 @@ export default function HomeTab() {
   useEffect(() => {
     if (!session || !selectedStore) return;
 
-    fetchOrders();
-    fetchStoreProducts();
-    const interval = setInterval(fetchOrders, 10000);
-    return () => clearInterval(interval);
+    let cancelled = false;
+
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (cancelled) return;
+
+      fetchOrders();
+      fetchStoreProducts();
+      const interval = setInterval(fetchOrders, 10000);
+      return () => clearInterval(interval);
+    });
+
+    return () => {
+      cancelled = true;
+      task.cancel && task.cancel();
+    };
   }, [session, selectedStore]);
 
   useEffect(() => {
     if (!selectedStore?.id) return;
 
-    console.log("🔴 Setting up realtime subscription for products, store:", selectedStore.id);
+    let cancelled = false;
 
-    const { supabase } = require("../../lib/supabase");
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (cancelled || !selectedStore?.id) return;
 
-    const channel = supabase
-      .channel(`products-${selectedStore.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "products",
-          filter: `store_id=eq.${selectedStore.id}`,
-        },
-        (payload: any) => {
-          console.log("🔴 Realtime update received:", payload);
-          fetchStoreProducts(true);
-        }
-      )
-      .subscribe((status: string) => {
-        console.log("🔴 Realtime subscription status:", status);
-      });
+      console.log("🔴 Setting up realtime subscription for products, store:", selectedStore.id);
+
+      const { supabase } = require("../../lib/supabase");
+
+      const channel = supabase
+        .channel(`products-${selectedStore.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "products",
+            filter: `store_id=eq.${selectedStore.id}`,
+          },
+          (payload: any) => {
+            console.log("🔴 Realtime update received:", payload);
+            fetchStoreProducts(true);
+          }
+        )
+        .subscribe((status: string) => {
+          console.log("🔴 Realtime subscription status:", status);
+        });
+
+      return () => {
+        console.log("🔴 Cleaning up realtime subscription");
+        supabase.removeChannel(channel);
+      };
+    });
 
     return () => {
-      console.log("🔴 Cleaning up realtime subscription");
-      supabase.removeChannel(channel);
+      cancelled = true;
+      task.cancel && task.cancel();
     };
   }, [selectedStore?.id]);
 
   useEffect(() => {
     if (!selectedStore?.id || !session?.token) return;
 
-    console.log("🟢 Setting up realtime subscription for store status");
+    let cancelled = false;
 
-    const { supabase } = require("../../lib/supabase");
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (cancelled || !selectedStore?.id || !session?.token) return;
 
-    const channel = supabase
-      .channel(`store-${selectedStore.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "stores",
-          filter: `id=eq.${selectedStore.id}`,
-        },
-        (payload: any) => {
-          console.log("🟢 Store status changed:", payload.new);
-          if (session?.token) {
-            fetchStores(session.token);
+      console.log("🟢 Setting up realtime subscription for store status");
+
+      const { supabase } = require("../../lib/supabase");
+
+      const channel = supabase
+        .channel(`store-${selectedStore.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "stores",
+            filter: `id=eq.${selectedStore.id}`,
+          },
+          (payload: any) => {
+            console.log("🟢 Store status changed:", payload.new);
+            if (session?.token) {
+              fetchStores(session.token);
+            }
           }
-        }
-      )
-      .subscribe((status: string) => {
-        console.log("🟢 Store subscription status:", status);
-      });
+        )
+        .subscribe((status: string) => {
+          console.log("🟢 Store subscription status:", status);
+        });
+
+      return () => {
+        console.log("🟢 Cleaning up store subscription");
+        supabase.removeChannel(channel);
+      };
+    });
 
     return () => {
-      console.log("🟢 Cleaning up store subscription");
-      supabase.removeChannel(channel);
+      cancelled = true;
+      task.cancel && task.cancel();
     };
   }, [selectedStore?.id, session?.token]);
 
@@ -557,10 +612,14 @@ export default function HomeTab() {
                     {Array.isArray(selectedOrder.order_items) &&
                       selectedOrder.order_items.map((item: any, idx: number) => (
                         <View key={idx} style={styles.itemRow}>
-                          <Image
-                            source={{ uri: item.image_url }}
-                            style={styles.itemImg}
-                          />
+                          {item?.image_url ? (
+                            <Image
+                              source={{ uri: item.image_url }}
+                              style={styles.itemImg}
+                            />
+                          ) : (
+                            <View style={styles.itemImg} />
+                          )}
                           <View>
                             <Text style={styles.itemName}>
                               {item.product_name}
