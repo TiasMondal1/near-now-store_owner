@@ -37,6 +37,13 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
-# generated native folders
+# iOS - fully generated, no native customisations
 /ios
-/android
+
+# Android - tracked because build.gradle has custom splits config.
+# Exclude only machine-local and generated-output paths:
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.kotlin/
