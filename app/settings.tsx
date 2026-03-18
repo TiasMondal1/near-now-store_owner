@@ -17,6 +17,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing } from '../lib/theme';
 import { getSession } from '../session';
+import { config } from '../lib/config';
 import { storeService, Store } from '../lib/store-service';
 import StoreSettingsModal from '../components/StoreSettingsModal';
 import NotificationSettings from '../components/NotificationSettings';
@@ -42,10 +43,11 @@ export default function SettingsScreen() {
 
       setToken(session.token);
 
-      // Fetch store
-      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/store-owner/stores`, {
-        headers: { Authorization: `Bearer ${session.token}` },
-      });
+      const userId = session.user?.id;
+      const response = await fetch(
+        `${config.API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`,
+        { headers: { Authorization: `Bearer ${session.token}` } }
+      );
       const data = await response.json();
       
       if (data?.stores?.[0]) {
