@@ -42,7 +42,7 @@ export async function testSupabaseConnection() {
   console.log("\nTest 2: Reading products table...");
   const { data: products, error: productsError } = await supabase
     .from("products")
-    .select("id, store_id, master_product_id, quantity")
+    .select("id, store_id, master_product_id, is_active")
     .limit(5);
 
   if (productsError) {
@@ -116,9 +116,7 @@ export async function testProductInsert(storeId: string) {
   const testPayload = {
     store_id: storeId,
     master_product_id: masterProducts.id,
-    quantity: 999, // Test quantity
     is_active: true,
-    in_stock: true,
   };
 
   console.log("Inserting test product:", testPayload);

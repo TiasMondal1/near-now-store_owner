@@ -3,7 +3,6 @@
  * Handles product operations, categories, low stock alerts, and bulk operations
  */
 
-import { apiClient } from './api-client';
 import { supabase } from './supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -15,7 +14,6 @@ export interface Product {
   price: number;
   base_price?: number;
   image_url?: string;
-  quantity: number;
   storeProductId?: string;
   unit?: string;
   description?: string;
@@ -28,32 +26,16 @@ export interface Category {
   count: number;
 }
 
-export interface LowStockAlert {
-  productId: string;
-  productName: string;
-  currentQuantity: number;
-  threshold: number;
-  lastUpdated: string;
-}
-
 export interface InventoryStats {
   totalProducts: number;
-  inStock: number;
-  outOfStock: number;
-  lowStock: number;
-  totalValue: number;
+  active: number;
+  inactive: number;
 }
-
-const LOW_STOCK_THRESHOLD_KEY = 'low_stock_threshold';
-const DEFAULT_LOW_STOCK_THRESHOLD = 5;
 
 class InventoryService {
   private static instance: InventoryService;
-  private lowStockThreshold: number = DEFAULT_LOW_STOCK_THRESHOLD;
 
-  private constructor() {
-    this.loadLowStockThreshold();
-  }
+  private constructor() {}
 
   static getInstance(): InventoryService {
     if (!InventoryService.instance) {
@@ -115,78 +97,24 @@ class InventoryService {
   }
 
   /**
-   * Get low stock products
-   */
-  getLowStockProducts(products: Product[]): LowStockAlert[] {
-    return products
-      .filter((p) => p.quantity > 0 && p.quantity <= this.lowStockThreshold)
-      .map((p) => ({
-        productId: p.id,
-        productName: p.name,
-        currentQuantity: p.quantity,
-        threshold: this.lowStockThreshold,
-        lastUpdated: new Date().toISOString(),
-      }));
-  }
-
-  /**
    * Get inventory statistics
    */
   getInventoryStats(products: Product[]): InventoryStats {
     const stats: InventoryStats = {
       totalProducts: products.length,
-      inStock: 0,
-      outOfStock: 0,
-      lowStock: 0,
-      totalValue: 0,
+      active: 0,
+      inactive: 0,
     };
 
     products.forEach((product) => {
-      if (product.quantity > 0) {
-        stats.inStock++;
-        stats.totalValue += product.quantity * (product.price || product.base_price || 0);
-
-        if (product.quantity <= this.lowStockThreshold) {
-          stats.lowStock++;
-        }
+      if (product.is_active !== false) {
+        stats.active++;
       } else {
-        stats.outOfStock++;
+        stats.inactive++;
       }
     });
 
     return stats;
-  }
-
-  /**
-   * Bulk update product quantities
-   */
-  async bulkUpdateQuantities(
-    updates: Array<{ storeProductId: string; quantity: number }>,
-    token: string
-  ): Promise<{ success: number; failed: number }> {
-    let success = 0;
-    let failed = 0;
-
-    for (const update of updates) {
-      try {
-        const response = await apiClient.patch(
-          `/store-owner/products/${update.storeProductId}/quantity`,
-          { quantity: update.quantity },
-          { Authorization: `Bearer ${token}` }
-        );
-
-        if (response.success) {
-          success++;
-        } else {
-          failed++;
-        }
-      } catch (error) {
-        failed++;
-        console.error('Failed to update product:', update.storeProductId, error);
-      }
-    }
-
-    return { success, failed };
   }
 
   /**
@@ -195,8 +123,7 @@ class InventoryService {
   async bulkAddProducts(
     storeId: string,
     productIds: string[],
-    defaultQuantity: number = 0,
-    token: string
+    _token: string
   ): Promise<{ success: number; failed: number }> {
     let success = 0;
     let failed = 0;
@@ -208,12 +135,12 @@ class InventoryService {
           continue;
         }
 
-        const { data, error } = await supabase
+        const { error } = await supabase
           .from('products')
           .insert({
             store_id: storeId,
             master_product_id: productId,
-            quantity: defaultQuantity,
+            is_active: true,
           })
           .select()
           .single();
@@ -309,31 +236,19 @@ class InventoryService {
       'Brand',
       'Category',
       'Price',
-      'Quantity',
       'Unit',
       'Status',
-      'Value',
     ];
 
     const rows = products.map((product) => {
-      const status =
-        product.quantity === 0
-          ? 'Out of Stock'
-          : product.quantity <= this.lowStockThreshold
-          ? 'Low Stock'
-          : 'In Stock';
-
-      const value = product.quantity * (product.price || product.base_price || 0);
-
+      const status = product.is_active !== false ? 'Active' : 'Inactive';
       return [
         product.name,
         product.brand || 'N/A',
         product.category || 'N/A',
         `₹${product.price || product.base_price || 0}`,
-        product.quantity.toString(),
         product.unit || 'pcs',
         status,
-        `₹${value.toFixed(2)}`,
       ];
     });
 
@@ -350,7 +265,7 @@ class InventoryService {
    */
   sortProducts(
     products: Product[],
-    sortBy: 'name' | 'quantity' | 'price' | 'category',
+    sortBy: 'name' | 'price' | 'category',
     order: 'asc' | 'desc' = 'asc'
   ): Product[] {
     const sorted = [...products].sort((a, b) => {
@@ -359,9 +274,6 @@ class InventoryService {
       switch (sortBy) {
         case 'name':
           comparison = a.name.localeCompare(b.name);
-          break;
-        case 'quantity':
-          comparison = a.quantity - b.quantity;
           break;
         case 'price':
           comparison = (a.price || a.base_price || 0) - (b.price || b.base_price || 0);

@@ -142,17 +142,16 @@ export default function InventoryScreen() {
       storeList = storeJson?.products || [];
     } catch { storeList = []; }
     if (!Array.isArray(masterList)) masterList = [];
-    const byMasterId: Record<string, { id: string; quantity: number; is_active: boolean }> = {};
+    const byMasterId: Record<string, { id: string; is_active: boolean }> = {};
     storeList.forEach((sp: any) => {
       const mid = sp.master_product_id ?? sp.masterProductId;
-      if (mid) byMasterId[mid] = { id: sp.id, quantity: sp.quantity ?? 0, is_active: sp.is_active !== false };
+      if (mid) byMasterId[mid] = { id: sp.id, is_active: sp.is_active !== false };
     });
     return masterList.map((mp: any) => {
       const storeRow = byMasterId[mp.id];
       return {
         ...mp,
         price: mp.base_price ?? mp.price,
-        quantity: storeRow ? storeRow.quantity : 0,
         storeProductId: storeRow?.id ?? null,
         is_active: storeRow?.is_active ?? false,
       };
@@ -163,17 +162,16 @@ export default function InventoryScreen() {
     masterList: any[],
     storeList: any[],
   ): any[] => {
-    const byMasterId: Record<string, { id: string; quantity: number; is_active: boolean }> = {};
+    const byMasterId: Record<string, { id: string; is_active: boolean }> = {};
     storeList.forEach((sp: any) => {
       const mid = sp.master_product_id ?? sp.masterProductId;
-      if (mid) byMasterId[mid] = { id: sp.id, quantity: sp.quantity ?? 0, is_active: sp.is_active !== false };
+      if (mid) byMasterId[mid] = { id: sp.id, is_active: sp.is_active !== false };
     });
     return masterList.map((mp: any) => {
       const storeRow = byMasterId[mp.id];
       return {
         ...mp,
         price: mp.base_price ?? mp.price,
-        quantity: storeRow ? storeRow.quantity : 0,
         storeProductId: storeRow?.id ?? null,
         is_active: storeRow?.is_active ?? false,
       };

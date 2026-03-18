@@ -6,10 +6,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { config } from '../lib/config';
-import { 
-  getMergedInventoryFromDb, 
-  updateStoreProductQuantity 
-} from '../lib/storeProducts';
+import { getMergedInventoryFromDb } from '../lib/storeProducts';
 
 const API_BASE = config.API_BASE;
 const INVENTORY_CACHE_KEY = 'inventory_products_cache';
@@ -19,11 +16,11 @@ export interface Product {
   id: string;
   name: string;
   price: number;
-  quantity: number;
   storeProductId?: string | null;
   image_url?: string;
   brand?: string;
   category?: string;
+  is_active?: boolean;
   [key: string]: any;
 }
 
@@ -91,52 +88,6 @@ export function useProducts(token: string | null, storeId: string | null) {
     }
   };
 
-  // Update product quantity
-  const updateQuantity = useCallback(async (product: Product, newQty: number) => {
-    if (!product.storeProductId) {
-      console.warn('[useProducts] No storeProductId for product:', product.id);
-      return false;
-    }
-
-    const qty = Math.max(0, newQty);
-    const prevQty = product.quantity;
-    
-    setUpdatingProductId(product.id);
-
-    // Optimistic update
-    setProducts(prev =>
-      prev.map(p => (p.id === product.id ? { ...p, quantity: qty } : p))
-    );
-
-    try {
-      const success = await updateStoreProductQuantity(product.storeProductId, qty);
-
-      if (!success) {
-        // Revert on failure
-        setProducts(prev =>
-          prev.map(p => (p.id === product.id ? { ...p, quantity: prevQty } : p))
-        );
-        return false;
-      }
-
-      // Update cache
-      const updated = products.map(p => 
-        p.id === product.id ? { ...p, quantity: qty } : p
-      );
-      await AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(updated));
-      
-      return true;
-    } catch (err) {
-      console.error('[useProducts] Error updating quantity:', err);
-      // Revert on error
-      setProducts(prev =>
-        prev.map(p => (p.id === product.id ? { ...p, quantity: prevQty } : p))
-      );
-      return false;
-    } finally {
-      setUpdatingProductId(null);
-    }
-  }, [products]);
 
   // Invalidate cache
   const invalidateCache = useCallback(async () => {
@@ -160,7 +111,6 @@ export function useProducts(token: string | null, storeId: string | null) {
     loading,
     updatingProductId,
     fetchProducts,
-    updateQuantity,
     invalidateCache,
     setProducts,
   };

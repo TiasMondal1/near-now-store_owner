@@ -184,16 +184,12 @@ function InventoryCatalogSection({ storeId, token }: { storeId?: string | null; 
         }
         if (!Array.isArray(masterList)) masterList = [];
 
-        const byMasterId: Record<
-          string,
-          { id: string; quantity: number; is_active: boolean }
-        > = {};
+        const byMasterId: Record<string, { id: string; is_active: boolean }> = {};
         storeList.forEach((sp: any) => {
           const mid = sp.master_product_id ?? sp.masterProductId;
           if (mid) {
             byMasterId[mid] = {
               id: sp.id,
-              quantity: sp.quantity ?? 0,
               is_active: sp.is_active !== false,
             };
           }
@@ -204,7 +200,6 @@ function InventoryCatalogSection({ storeId, token }: { storeId?: string | null; 
           return {
             ...mp,
             price: mp.base_price ?? mp.price,
-            quantity: storeRow ? storeRow.quantity : 0,
             storeProductId: storeRow?.id ?? null,
             is_active: storeRow?.is_active ?? false,
           };
@@ -255,7 +250,7 @@ function InventoryCatalogSection({ storeId, token }: { storeId?: string | null; 
     if (!storeId || !token) return;
     setTogglingId(product.id);
     try {
-      const inserted = await upsertStoreProduct(storeId, product.id, 100);
+      const inserted = await upsertStoreProduct(storeId, product.id);
       if (inserted && "id" in inserted && inserted.id) {
         setProducts((prev) =>
           prev.map((p) =>
@@ -263,7 +258,6 @@ function InventoryCatalogSection({ storeId, token }: { storeId?: string | null; 
               ? {
                   ...p,
                   storeProductId: inserted.id,
-                  quantity: 100,
                   is_active: true,
                 }
               : p
@@ -613,7 +607,7 @@ function AddCustomSection({ storeId, token }: { storeId?: string | null; token?:
         keyboardType="numeric"
       />
       <Text style={styles.addCustomHint}>
-        Stock is automatically set to 100 when the product is active.
+        Product will be active and visible when your store is online.
       </Text>
 
       <TouchableOpacity

@@ -10,10 +10,9 @@ export type StoreProductRow = {
   id: string;
   store_id: string;
   master_product_id: string;
-  quantity: number;
   is_active?: boolean;
-  in_stock?: boolean;
   name?: string;
+  phone?: string;
 };
 
 export type StoreProductWithName = StoreProductRow & { name: string };
@@ -25,9 +24,9 @@ export async function getStoreProductsFromDb(
   if (!supabase) return [];
   const { data, error } = await supabase
     .from("products")
-    .select("id, store_id, master_product_id, quantity, is_active, in_stock")
+    .select("id, store_id, master_product_id, is_active, name, phone")
     .eq("store_id", storeId)
-    .order("created_at", { ascending: true }); // Order by when they were added
+    .order("created_at", { ascending: true });
   if (error) return [];
   return (data ?? []) as StoreProductRow[];
 }
@@ -52,8 +51,8 @@ export async function getStoreProductsWithNames(
   if (!supabase) return [];
 
   const joinSelects = [
-    "id, store_id, master_product_id, quantity, is_active, in_stock, master_products(name)",
-    "id, store_id, master_product_id, quantity, is_active, in_stock, master_product(name)",
+    "id, store_id, master_product_id, is_active, name, phone, master_products(name)",
+    "id, store_id, master_product_id, is_active, name, phone, master_product(name)",
   ];
   for (const select of joinSelects) {
     const { data: joinedData, error: joinError } = await supabase
@@ -66,9 +65,9 @@ export async function getStoreProductsWithNames(
       return (joinedData as any[]).map((row) => {
         const rel = row[relationKey];
         const fromMaster = rel?.name ?? (rel && (rel as any).name);
-        const name = (fromMaster && String(fromMaster).trim()) || "Product";
+        const resolvedName = (fromMaster && String(fromMaster).trim()) || row.name || "Product";
         const { master_products, master_product, ...rest } = row;
-        return { ...rest, name };
+        return { ...rest, name: resolvedName };
       });
     }
   }
@@ -97,10 +96,10 @@ export async function getStoreProductsWithNames(
   });
 }
 
-/** Your stock list: id, name, quantity, is_active for main page */
+/** Your stock list: id, name, is_active for main page */
 export async function getStockListFromDb(
   storeId: string
-): Promise<Array<{ id: string; name: string; quantity: number; storeProductId: string; is_active: boolean }>> {
+): Promise<Array<{ id: string; name: string; storeProductId: string; is_active: boolean }>> {
   const rows = await getStoreProductsWithNames(storeId);
   return rows.map((r) => {
     const rawName = r.name ?? (r as any).product_name;
@@ -109,7 +108,6 @@ export async function getStockListFromDb(
       id: r.master_product_id,
       storeProductId: r.id,
       name,
-      quantity: Number(r.quantity ?? 0),
       is_active: r.is_active !== false,
     };
   });
@@ -117,18 +115,16 @@ export async function getStockListFromDb(
 
 export type UpsertResult = { id: string } | { error: string };
 
-/** Insert or update one product row. Quantity always defaults to 100 for new products. */
+/** Insert or update one product row. */
 export async function upsertStoreProduct(
   storeId: string,
   masterProductId: string,
-  quantity: number = 100
+  storeName?: string,
+  ownerPhone?: string
 ): Promise<UpsertResult | null> {
   if (!supabase) return { error: "Supabase not configured" };
   if (!storeId || !masterProductId) return { error: "Missing store_id or master_product_id" };
-  // New products always start with qty 100 (active)
-  const qty = Math.max(0, quantity === 0 ? 100 : quantity);
 
-  // Check if product already exists
   const { data: existing, error: selectErr } = await supabase
     .from("products")
     .select("id")
@@ -139,23 +135,28 @@ export async function upsertStoreProduct(
   if (selectErr) return { error: selectErr.message };
 
   if (existing?.id) {
+    const updatePayload: any = { updated_at: new Date().toISOString() };
+    if (storeName) updatePayload.name = storeName;
+    if (ownerPhone) updatePayload.phone = ownerPhone;
     const { error: updateErr } = await supabase
       .from("products")
-      .update({ quantity: qty, in_stock: qty > 0, updated_at: new Date().toISOString() })
+      .update(updatePayload)
       .eq("id", existing.id);
     if (updateErr) return { error: updateErr.message };
     return { id: existing.id };
   }
 
+  const insertPayload: any = {
+    store_id: storeId,
+    master_product_id: masterProductId,
+    is_active: true,
+  };
+  if (storeName) insertPayload.name = storeName;
+  if (ownerPhone) insertPayload.phone = ownerPhone;
+
   const { data: insertData, error: insertErr } = await supabase
     .from("products")
-    .insert({
-      store_id: storeId,
-      master_product_id: masterProductId,
-      quantity: qty,
-      is_active: true,
-      in_stock: qty > 0,
-    })
+    .insert(insertPayload)
     .select("id")
     .single();
 
@@ -164,24 +165,10 @@ export async function upsertStoreProduct(
   return { error: "No id returned after insert" };
 }
 
-/** Update quantity (and in_stock) for an existing product row via Supabase directly */
-export async function updateStoreProductQuantity(
-  productId: string,
-  quantity: number
-): Promise<boolean> {
-  if (!supabase) return false;
-  const qty = Math.max(0, quantity);
-  const { error } = await supabase
-    .from("products")
-    .update({ quantity: qty, in_stock: qty > 0, updated_at: new Date().toISOString() })
-    .eq("id", productId);
-  return !error;
-}
-
 /**
  * Toggle a product's active state.
- * Active   → is_active=true,  quantity=100, in_stock=true
- * Inactive → is_active=false, quantity=0,   in_stock=false
+ * Active   → is_active=true
+ * Inactive → is_active=false
  * Uses Supabase first; if that fails and token is provided, falls back to backend API.
  */
 export async function updateProductActiveState(
@@ -189,15 +176,11 @@ export async function updateProductActiveState(
   isActive: boolean,
   authToken?: string | null
 ): Promise<boolean> {
-  const quantity = isActive ? 100 : 0;
-
   if (supabase) {
     const { error } = await supabase
       .from("products")
       .update({
         is_active: isActive,
-        quantity,
-        in_stock: isActive,
         updated_at: new Date().toISOString(),
       })
       .eq("id", storeProductId);
@@ -213,20 +196,10 @@ export async function updateProductActiveState(
           Authorization: `Bearer ${authToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ is_active: isActive, quantity }),
+        body: JSON.stringify({ is_active: isActive }),
       });
       const data = res.ok ? await res.json().catch(() => ({})) : {};
       if (res.ok && (data.success !== false)) return true;
-      const res2 = await fetch(`${config.API_BASE}/store-owner/products/${storeProductId}/quantity`, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ quantity }),
-      });
-      const data2 = res2.ok ? await res2.json().catch(() => ({})) : {};
-      if (res2.ok && (data2.success !== false)) return true;
     } catch (e) {
       console.warn("[updateProductActiveState] API fallback error:", e);
     }
@@ -236,36 +209,18 @@ export async function updateProductActiveState(
 }
 
 /**
- * When store goes offline: set quantity=0 and in_stock=false for all store products.
- * Preserves is_active flags so they can be restored when coming back online.
+ * When store goes offline: no-op now that quantity/in_stock are removed.
+ * Individual product is_active flags are preserved as-is.
  */
-export async function setAllProductsOffline(storeId: string): Promise<boolean> {
-  if (!supabase) return false;
-  const { error } = await supabase
-    .from("products")
-    .update({ quantity: 0, in_stock: false, updated_at: new Date().toISOString() })
-    .eq("store_id", storeId);
-  if (error) {
-    console.error("[setAllProductsOffline] error:", error.message);
-    return false;
-  }
+export async function setAllProductsOffline(_storeId: string): Promise<boolean> {
   return true;
 }
 
 /**
- * When store comes online: restore quantity=100 / in_stock=true for all is_active products.
+ * When store comes online: no-op now that quantity/in_stock are removed.
+ * Individual product is_active flags are already persisted in the DB.
  */
-export async function restoreActiveProductsOnline(storeId: string): Promise<boolean> {
-  if (!supabase) return false;
-  const { error } = await supabase
-    .from("products")
-    .update({ quantity: 100, in_stock: true, updated_at: new Date().toISOString() })
-    .eq("store_id", storeId)
-    .eq("is_active", true);
-  if (error) {
-    console.error("[restoreActiveProductsOnline] error:", error.message);
-    return false;
-  }
+export async function restoreActiveProductsOnline(_storeId: string): Promise<boolean> {
   return true;
 }
 
@@ -278,7 +233,7 @@ export async function getMasterProductsFullFromDb(): Promise<any[]> {
 }
 
 /**
- * Get merged inventory list from DB: all master_products with quantity and storeProductId from products table.
+ * Get merged inventory list from DB: all master_products with storeProductId from products table.
  * Use this for Inventory screen so it reads from DB.
  */
 export async function getMergedInventoryFromDb(storeId: string): Promise<any[]> {
@@ -287,9 +242,9 @@ export async function getMergedInventoryFromDb(storeId: string): Promise<any[]> 
     getStoreProductsFromDb(storeId),
   ]);
   if (!Array.isArray(masterList)) return [];
-  const byMasterId: Record<string, { id: string; quantity: number }> = {};
+  const byMasterId: Record<string, { id: string; is_active: boolean }> = {};
   storeRows.forEach((r) => {
-    byMasterId[r.master_product_id] = { id: r.id, quantity: Number(r.quantity ?? 0) };
+    byMasterId[r.master_product_id] = { id: r.id, is_active: r.is_active !== false };
   });
   return masterList.map((mp: any) => {
     const row = byMasterId[mp.id];
@@ -297,8 +252,8 @@ export async function getMergedInventoryFromDb(storeId: string): Promise<any[]> 
       ...mp,
       name: mp.name ?? mp.product_name ?? "Product",
       price: mp.base_price ?? mp.price,
-      quantity: row ? row.quantity : 0,
       storeProductId: row?.id ?? null,
+      is_active: row?.is_active ?? false,
     };
   });
 }

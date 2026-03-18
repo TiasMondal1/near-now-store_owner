@@ -54,7 +54,7 @@ export default function HomeTab() {
   const [loading, setLoading] = useState(true);
 
   const [storeProducts, setStoreProducts] = useState<
-    Array<{ id: string; name: string; quantity: number; storeProductId?: string; is_active?: boolean }>
+    Array<{ id: string; name: string; storeProductId?: string; is_active?: boolean }>
   >([]);
   const [storeProductsLoading, setStoreProductsLoading] = useState(false);
   const [togglingProductId, setTogglingProductId] = useState<string | null>(null);
@@ -251,7 +251,6 @@ export default function HomeTab() {
         const mapped = fromDb.map((item: any) => ({
           id: item.id,
           name: (item.name || item.product_name || "").trim() || "Product",
-          quantity: item.quantity || 0,
           storeProductId: item.storeProductId,
           is_active: item.is_active !== false,
         }));
@@ -277,10 +276,11 @@ export default function HomeTab() {
         json = raw ? JSON.parse(raw) : null;
       } catch { /* non-JSON response */ }
       const fetched: StoreRow[] = json?.stores || [];
-      setStores(fetched);
+      if (fetched.length > 0) {
+        setStores(fetched);
+      }
       return fetched;
     } catch {
-      setStores([]);
       return [];
     }
   }, []);
@@ -346,7 +346,7 @@ export default function HomeTab() {
             {
               text: "Cancel",
               style: "cancel",
-              onPress: () => fetchStores(session.token),
+              onPress: () => fetchStores(session.token, session.user?.id),
             },
             {
               text: "Go Online",
@@ -363,14 +363,14 @@ export default function HomeTab() {
                   if (!response.ok) throw new Error(`Failed: ${response.status}`);
 
                   await restoreActiveProductsOnline(selectedStore.id);
-                  await fetchStores(session.token);
+                  await fetchStores(session.token, session.user?.id);
                   await fetchStoreProducts(true);
 
                   Alert.alert("Store Online", "Your store is now visible to customers.");
                 } catch (error) {
                   console.error("Error going online:", error);
                   Alert.alert("Error", "Failed to update store status. Please try again.");
-                  fetchStores(session.token);
+                  fetchStores(session.token, session.user?.id);
                 }
               },
             },
@@ -384,7 +384,7 @@ export default function HomeTab() {
             {
               text: "Cancel",
               style: "cancel",
-              onPress: () => fetchStores(session.token),
+              onPress: () => fetchStores(session.token, session.user?.id),
             },
             {
               text: "Go Offline",
@@ -405,14 +405,14 @@ export default function HomeTab() {
                   if (!response.ok) throw new Error(`Failed: ${response.status}`);
 
                   await invalidateAllCaches();
-                  await fetchStores(session.token);
+                  await fetchStores(session.token, session.user?.id);
                   fetchStoreProducts(true).catch(() => {});
 
                   Alert.alert("Store Offline", "Store is now hidden from customers. Your products are saved.");
                 } catch (error) {
                   console.error("Error going offline:", error);
                   Alert.alert("Error", "Failed to update store status. Please try again.");
-                  fetchStores(session.token);
+                  fetchStores(session.token, session.user?.id);
                   fetchStoreProducts(true);
                 } finally {
                   setStoreProductsLoading(false);
@@ -437,7 +437,7 @@ export default function HomeTab() {
     setTogglingProductId(product.id);
     setStoreProducts((prev) =>
       prev.map((p) =>
-        p.id === product.id ? { ...p, is_active: nowActive, quantity: nowActive ? 100 : 0 } : p
+        p.id === product.id ? { ...p, is_active: nowActive } : p
       )
     );
 
@@ -450,7 +450,7 @@ export default function HomeTab() {
       if (!success) {
         setStoreProducts((prev) =>
           prev.map((p) =>
-            p.id === product.id ? { ...p, is_active: wasActive, quantity: product.quantity } : p
+            p.id === product.id ? { ...p, is_active: wasActive } : p
           )
         );
       } else {
@@ -461,7 +461,7 @@ export default function HomeTab() {
     } catch {
       setStoreProducts((prev) =>
         prev.map((p) =>
-          p.id === product.id ? { ...p, is_active: wasActive, quantity: product.quantity } : p
+          p.id === product.id ? { ...p, is_active: wasActive } : p
         )
       );
     } finally {
