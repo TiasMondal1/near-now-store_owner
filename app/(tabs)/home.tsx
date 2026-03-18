@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -6,16 +6,17 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Switch,
+  FlatList,
   ScrollView,
   Modal,
   Image,
   Alert,
   Animated,
+  InteractionManager,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
-import * as Haptics from "expo-haptics";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -82,125 +83,153 @@ export default function HomeTab() {
     return status;
   };
 
-  const DELIVERED_STATUSES = ["delivered", "order_delivered"];
-  const isDelivered = (o: any) =>
-    DELIVERED_STATUSES.includes((o.status || "").toLowerCase().replace(/-/g, "_"));
-  const activeOrders = orders.filter((o: any) => !isDelivered(o));
+  const activeOrders = useMemo(() => {
+    const DELIVERED = ["delivered", "order_delivered"];
+    return orders.filter(
+      (o: any) => !DELIVERED.includes((o.status || "").toLowerCase().replace(/-/g, "_"))
+    );
+  }, [orders]);
 
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
-      const s: any = await getSession();
-      if (!s?.token) return router.replace("/landing");
-
-      setSession(s);
-      await fetchStores(s.token);
-
-      const stores = await (async () => {
-        try {
-          const session = await getSession();
-          const userId = session?.user?.id;
-          const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
-            headers: { Authorization: `Bearer ${s.token}` },
-          });
-          const raw = await res.text();
-          const json = raw ? JSON.parse(raw) : null;
-          return json?.stores || [];
-        } catch {
-          return [];
+      try {
+        const s: any = await getSession();
+        if (!s?.token) {
+          if (!cancelled) router.replace("/landing");
+          return;
         }
-      })();
 
-      if (stores[0] && !stores[0].is_active) {
-        console.log("⚠️ Store is offline on app start - ensuring all quantities are 0");
-        await invalidateAllCaches();
+        if (cancelled) return;
+        setSession(s);
+
+        const currentStores = await fetchStores(s.token, s.user?.id);
+
+        if (cancelled) return;
+
+        if (currentStores.length > 0 && !currentStores[0].is_active) {
+          await invalidateAllCaches();
+        }
+      } catch (error) {
+        console.warn("[home] Initial bootstrap failed", error);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-
-      setLoading(false);
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const invalidateAllCaches = async () => {
+  const invalidateAllCaches = useCallback(async () => {
     try {
       await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
       await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
-      console.log("🗑️ Cleared all inventory caches");
-    } catch (error) {
-      console.error("Failed to clear caches:", error);
-    }
-  };
+    } catch { /* non-fatal */ }
+  }, []);
 
   useEffect(() => {
     if (!session || !selectedStore) return;
 
-    fetchOrders();
-    fetchStoreProducts();
-    const interval = setInterval(fetchOrders, 10000);
-    return () => clearInterval(interval);
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (cancelled) return;
+
+      fetchOrders();
+      fetchStoreProducts();
+      interval = setInterval(fetchOrders, 10000);
+    });
+
+    return () => {
+      cancelled = true;
+      task.cancel && task.cancel();
+      if (interval) clearInterval(interval);
+    };
   }, [session, selectedStore]);
 
   useEffect(() => {
     if (!selectedStore?.id) return;
 
-    console.log("🔴 Setting up realtime subscription for products, store:", selectedStore.id);
+    let cancelled = false;
+    let channel: any = null;
 
-    const { supabase } = require("../../lib/supabase");
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (cancelled || !selectedStore?.id) return;
 
-    const channel = supabase
-      .channel(`products-${selectedStore.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "products",
-          filter: `store_id=eq.${selectedStore.id}`,
-        },
-        (payload: any) => {
-          console.log("🔴 Realtime update received:", payload);
-          fetchStoreProducts(true);
-        }
-      )
-      .subscribe((status: string) => {
-        console.log("🔴 Realtime subscription status:", status);
-      });
+      const { supabase } = require("../../lib/supabase");
+      if (!supabase) return;
+
+      channel = supabase
+        .channel(`products-${selectedStore.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "products",
+            filter: `store_id=eq.${selectedStore.id}`,
+          },
+          () => { fetchStoreProducts(true); }
+        )
+        .subscribe();
+    });
 
     return () => {
-      console.log("🔴 Cleaning up realtime subscription");
-      supabase.removeChannel(channel);
+      cancelled = true;
+      task.cancel && task.cancel();
+      if (channel) {
+        try {
+          const { supabase } = require("../../lib/supabase");
+          supabase?.removeChannel(channel);
+        } catch { /* ignore cleanup errors */ }
+        channel = null;
+      }
     };
   }, [selectedStore?.id]);
 
   useEffect(() => {
     if (!selectedStore?.id || !session?.token) return;
 
-    console.log("🟢 Setting up realtime subscription for store status");
+    let cancelled = false;
+    let channel: any = null;
 
-    const { supabase } = require("../../lib/supabase");
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (cancelled || !selectedStore?.id || !session?.token) return;
 
-    const channel = supabase
-      .channel(`store-${selectedStore.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "stores",
-          filter: `id=eq.${selectedStore.id}`,
-        },
-        (payload: any) => {
-          console.log("🟢 Store status changed:", payload.new);
-          if (session?.token) {
-            fetchStores(session.token);
+      const { supabase } = require("../../lib/supabase");
+      if (!supabase) return;
+
+      channel = supabase
+        .channel(`store-${selectedStore.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "stores",
+            filter: `id=eq.${selectedStore.id}`,
+          },
+          () => {
+            if (session?.token) fetchStores(session.token, session.user?.id);
           }
-        }
-      )
-      .subscribe((status: string) => {
-        console.log("🟢 Store subscription status:", status);
-      });
+        )
+        .subscribe();
+    });
 
     return () => {
-      console.log("🟢 Cleaning up store subscription");
-      supabase.removeChannel(channel);
+      cancelled = true;
+      task.cancel && task.cancel();
+      if (channel) {
+        try {
+          const { supabase } = require("../../lib/supabase");
+          supabase?.removeChannel(channel);
+        } catch { /* ignore cleanup errors */ }
+        channel = null;
+      }
     };
   }, [selectedStore?.id, session?.token]);
 
@@ -212,7 +241,7 @@ export default function HomeTab() {
     }, [session?.token, selectedStore?.id])
   );
 
-  const fetchStoreProducts = async (silent = false) => {
+  const fetchStoreProducts = useCallback(async (silent = false) => {
     if (!session?.token || !selectedStore?.id) return;
     if (!silent) setStoreProductsLoading(true);
 
@@ -227,22 +256,18 @@ export default function HomeTab() {
           is_active: item.is_active !== false,
         }));
         setStoreProducts(mapped);
-        if (!silent) setStoreProductsLoading(false);
         return;
       }
-
       setStoreProducts([]);
     } catch {
       setStoreProducts([]);
     } finally {
       if (!silent) setStoreProductsLoading(false);
     }
-  };
+  }, [session?.token, selectedStore?.id]);
 
-  const fetchStores = async (token: string) => {
+  const fetchStores = useCallback(async (token: string, userId?: string): Promise<StoreRow[]> => {
     try {
-      const session = await getSession();
-      const userId = session?.user?.id;
       const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -250,17 +275,17 @@ export default function HomeTab() {
       let json: any = null;
       try {
         json = raw ? JSON.parse(raw) : null;
-      } catch (e) {
-        console.error(`[fetchStores] Failed to parse JSON:`, e);
-      }
-      setStores(json?.stores || []);
-    } catch (e) {
-      console.error(`[fetchStores] Error:`, e);
+      } catch { /* non-JSON response */ }
+      const fetched: StoreRow[] = json?.stores || [];
+      setStores(fetched);
+      return fetched;
+    } catch {
       setStores([]);
+      return [];
     }
-  };
+  }, []);
 
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     if (!session || !selectedStore) return;
 
     try {
@@ -269,9 +294,7 @@ export default function HomeTab() {
         setOrders(fromDb);
         return;
       }
-    } catch (e) {
-      console.warn("[fetchOrders] DB failed:", e);
-    }
+    } catch { /* fall through to HTTP */ }
 
     try {
       const res = await fetch(
@@ -280,55 +303,31 @@ export default function HomeTab() {
       );
       const raw = await res.text();
       let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {
-        return;
-      }
+      try { json = raw ? JSON.parse(raw) : null; } catch { return; }
       if (!json?.success) return;
-
       setOrders(json.orders || []);
     } catch {
       setOrders([]);
     }
-  };
+  }, [session, selectedStore]);
 
-  const openOrderDetails = async (orderId: string) => {
+  const openOrderDetails = useCallback(async (orderId: string) => {
     if (!session) return;
 
     try {
       const fromDb = await getOrderByIdFromDb(orderId);
-      if (fromDb) {
-        setSelectedOrder(fromDb);
-        return;
-      }
+      if (fromDb) { setSelectedOrder(fromDb); return; }
 
-      const res = await fetch(
-        `${API_BASE}/store-owner/orders/${orderId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${session.token}`,
-          },
-        }
-      );
+      const res = await fetch(`${API_BASE}/store-owner/orders/${orderId}`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
       const raw = await res.text();
       let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {
-        return;
-      }
-
-      if (!json?.success) {
-        console.log("Failed to load order details", json);
-        return;
-      }
-
+      try { json = raw ? JSON.parse(raw) : null; } catch { return; }
+      if (!json?.success) return;
       setSelectedOrder(json.order);
-    } catch (e) {
-      console.log("Order details error", e);
-    }
-  };
+    } catch { /* ignore */ }
+  }, [session]);
 
   const toggleOnline = async (value: boolean) => {
     if (!session || !selectedStore) return;
@@ -429,19 +428,16 @@ export default function HomeTab() {
     }
   };
 
-  const toggleProductActive = async (product: any) => {
+  const toggleProductActive = useCallback(async (product: any) => {
     if (!product.storeProductId) return;
 
     const wasActive = product.is_active !== false;
     const nowActive = !wasActive;
 
     setTogglingProductId(product.id);
-
     setStoreProducts((prev) =>
       prev.map((p) =>
-        p.id === product.id
-          ? { ...p, is_active: nowActive, quantity: nowActive ? 100 : 0 }
-          : p
+        p.id === product.id ? { ...p, is_active: nowActive, quantity: nowActive ? 100 : 0 } : p
       )
     );
 
@@ -454,9 +450,7 @@ export default function HomeTab() {
       if (!success) {
         setStoreProducts((prev) =>
           prev.map((p) =>
-            p.id === product.id
-              ? { ...p, is_active: wasActive, quantity: product.quantity }
-              : p
+            p.id === product.id ? { ...p, is_active: wasActive, quantity: product.quantity } : p
           )
         );
       } else {
@@ -464,30 +458,23 @@ export default function HomeTab() {
         await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
         fetchStoreProducts(true);
       }
-    } catch (error) {
-      console.error("Exception in toggleProductActive:", error);
+    } catch {
       setStoreProducts((prev) =>
         prev.map((p) =>
-          p.id === product.id
-            ? { ...p, is_active: wasActive, quantity: product.quantity }
-            : p
+          p.id === product.id ? { ...p, is_active: wasActive, quantity: product.quantity } : p
         )
       );
     } finally {
       setTogglingProductId(null);
     }
-  };
+  }, [session?.token, fetchStoreProducts]);
 
-  const deleteProduct = async (product: any) => {
-    if (!product.storeProductId) {
-      console.log("❌ No storeProductId found for delete");
-      return;
-    }
+  const deleteProduct = useCallback(async (product: any) => {
+    if (!product.storeProductId) return;
 
     try {
-      console.log("🗑️ Deleting product from store:", product.storeProductId);
-
       const { supabase } = require("../../lib/supabase");
+      if (!supabase) return;
 
       const { error } = await supabase
         .from("products")
@@ -495,20 +482,17 @@ export default function HomeTab() {
         .eq("id", product.storeProductId);
 
       if (error) {
-        console.error("Failed to delete product:", error);
+        if (__DEV__) console.error("Failed to delete product:", error);
         return;
       }
 
       setStoreProducts((prev) => prev.filter((p) => p.id !== product.id));
-
       await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
       await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
-
-      console.log("✅ Product removed successfully");
     } catch (error) {
-      console.error("Error deleting product:", error);
+      if (__DEV__) console.error("Error deleting product:", error);
     }
-  };
+  }, []);
 
   if (loading) {
     return (
@@ -558,10 +542,14 @@ export default function HomeTab() {
                     {Array.isArray(selectedOrder.order_items) &&
                       selectedOrder.order_items.map((item: any, idx: number) => (
                         <View key={idx} style={styles.itemRow}>
-                          <Image
-                            source={{ uri: item.image_url }}
-                            style={styles.itemImg}
-                          />
+                          {item?.image_url ? (
+                            <Image
+                              source={{ uri: item.image_url }}
+                              style={styles.itemImg}
+                            />
+                          ) : (
+                            <View style={styles.itemImg} />
+                          )}
                           <View>
                             <Text style={styles.itemName}>
                               {item.product_name}
@@ -652,45 +640,53 @@ export default function HomeTab() {
                 <Text style={styles.waitingText}>New orders appear here automatically every 10s</Text>
               </View>
             ) : (
-              activeOrders.map((o) => (
-                <View key={o.id} style={styles.orderCardContainer}>
-                  <TouchableOpacity
-                    style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
-                    onPress={() => openOrderDetails(o.id)}
-                    activeOpacity={0.75}
-                  >
-                    <View style={styles.orderCardLeft}>
-                      <Text style={styles.orderCardCode}>#{o.order_code}</Text>
-                      {o.created_at && (
-                        <Text style={styles.orderCardTime}>
-                          {new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                        </Text>
-                      )}
-                    </View>
-                    <View style={styles.orderCardRight}>
-                      <View style={[styles.statusBadge, { backgroundColor: getStatusColor(o.status) + "22" }]}>
-                        <Text style={[styles.statusBadgeText, { color: getStatusColor(o.status) }]}>
-                          {formatStatus(o.status)}
-                        </Text>
+              <FlatList
+                data={activeOrders}
+                keyExtractor={(o) => o.id}
+                scrollEnabled={false}
+                initialNumToRender={5}
+                maxToRenderPerBatch={5}
+                windowSize={3}
+                renderItem={({ item: o }) => (
+                  <View style={styles.orderCardContainer}>
+                    <TouchableOpacity
+                      style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
+                      onPress={() => openOrderDetails(o.id)}
+                      activeOpacity={0.75}
+                    >
+                      <View style={styles.orderCardLeft}>
+                        <Text style={styles.orderCardCode}>#{o.order_code}</Text>
+                        {o.created_at && (
+                          <Text style={styles.orderCardTime}>
+                            {new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </Text>
+                        )}
                       </View>
-                      {o.total_amount != null && (
-                        <Text style={styles.orderCardAmount}>₹{o.total_amount}</Text>
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                  {Array.isArray(o.order_items) && o.order_items.length > 0 && (
-                    <View style={styles.orderItemsList}>
-                      {o.order_items.map((item: any, idx: number) => (
-                        <View key={idx} style={styles.orderItemChip}>
-                          <Text style={styles.orderItemText} numberOfLines={1}>
-                            {item.quantity} {item.unit} {item.product_name}
+                      <View style={styles.orderCardRight}>
+                        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(o.status) + "22" }]}>
+                          <Text style={[styles.statusBadgeText, { color: getStatusColor(o.status) }]}>
+                            {formatStatus(o.status)}
                           </Text>
                         </View>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              ))
+                        {o.total_amount != null && (
+                          <Text style={styles.orderCardAmount}>₹{o.total_amount}</Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                    {Array.isArray(o.order_items) && o.order_items.length > 0 && (
+                      <View style={styles.orderItemsList}>
+                        {o.order_items.map((item: any, idx: number) => (
+                          <View key={idx} style={styles.orderItemChip}>
+                            <Text style={styles.orderItemText} numberOfLines={1}>
+                              {item.quantity} {item.unit} {item.product_name}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                )}
+              />
             )}
           </View>
 

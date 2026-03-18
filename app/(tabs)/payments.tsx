@@ -22,24 +22,33 @@ export default function PaymentsTab() {
 
   useEffect(() => {
     (async () => {
-      const s: any = await getSession();
-      if (!s?.token) return router.replace("/landing");
+      try {
+        const s: any = await getSession();
+        if (!s?.token) return router.replace("/landing");
 
-      setSession(s);
-      
-      const userId = s.user?.id;
-      const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
-        headers: { Authorization: `Bearer ${s.token}` },
-      });
-      const raw = await res.text();
-      const json = raw ? JSON.parse(raw) : null;
-      const stores = json?.stores || [];
-      
-      if (stores[0]) {
-        setStoreId(stores[0].id);
+        setSession(s);
+
+        const userId = s.user?.id;
+        const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
+          headers: { Authorization: `Bearer ${s.token}` },
+        });
+        const raw = await res.text();
+        let json: any = null;
+        try {
+          json = raw ? JSON.parse(raw) : null;
+        } catch {
+          json = null;
+        }
+        const stores = json?.stores || [];
+
+        if (stores[0]) {
+          setStoreId(stores[0].id);
+        }
+      } catch (e) {
+        console.warn("[payments] Bootstrap error:", e);
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     })();
   }, []);
 

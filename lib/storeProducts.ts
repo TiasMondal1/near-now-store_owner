@@ -123,22 +123,10 @@ export async function upsertStoreProduct(
   masterProductId: string,
   quantity: number = 100
 ): Promise<UpsertResult | null> {
-  if (!supabase) {
-    console.error("[storeProducts] Supabase client not initialized");
-    return { error: "Supabase not configured" };
-  }
-  if (!storeId || !masterProductId) {
-    console.error("[storeProducts] Missing required fields", { storeId, masterProductId });
-    return { error: "Missing store_id or master_product_id" };
-  }
+  if (!supabase) return { error: "Supabase not configured" };
+  if (!storeId || !masterProductId) return { error: "Missing store_id or master_product_id" };
   // New products always start with qty 100 (active)
   const qty = Math.max(0, quantity === 0 ? 100 : quantity);
-
-  console.log("[storeProducts] upsertStoreProduct called", {
-    storeId,
-    masterProductId,
-    quantity: qty,
-  });
 
   // Check if product already exists
   const { data: existing, error: selectErr } = await supabase
@@ -148,95 +136,46 @@ export async function upsertStoreProduct(
     .eq("master_product_id", masterProductId)
     .maybeSingle();
 
-  if (selectErr) {
-    console.error("[storeProducts] select error:", selectErr);
-    return { error: selectErr.message };
-  }
+  if (selectErr) return { error: selectErr.message };
 
   if (existing?.id) {
-    console.log("[storeProducts] Updating existing product", existing.id);
     const { error: updateErr } = await supabase
       .from("products")
       .update({ quantity: qty, in_stock: qty > 0, updated_at: new Date().toISOString() })
       .eq("id", existing.id);
-    if (updateErr) {
-      console.error("[storeProducts] update error:", updateErr.message, updateErr);
-      return { error: updateErr.message };
-    }
-    console.log("[storeProducts] Successfully updated product", existing.id);
+    if (updateErr) return { error: updateErr.message };
     return { id: existing.id };
   }
 
-  // Insert new product
-  const insertPayload = {
-    store_id: storeId,
-    master_product_id: masterProductId,
-    quantity: qty,
-    is_active: true,
-    in_stock: qty > 0,
-  };
-  console.log("[storeProducts] Inserting new product", insertPayload);
-  
   const { data: insertData, error: insertErr } = await supabase
     .from("products")
-    .insert(insertPayload)
+    .insert({
+      store_id: storeId,
+      master_product_id: masterProductId,
+      quantity: qty,
+      is_active: true,
+      in_stock: qty > 0,
+    })
     .select("id")
     .single();
-    
-  if (insertErr) {
-    console.error("[storeProducts] insert error:", {
-      message: insertErr.message,
-      code: insertErr.code,
-      details: insertErr.details,
-      hint: insertErr.hint,
-    });
-    return { error: insertErr.message };
-  }
-  
-  if (insertData?.id) {
-    console.log("[storeProducts] Successfully inserted product", insertData.id);
-    return { id: insertData.id };
-  }
-  
-  console.error("[storeProducts] No id returned after insert");
+
+  if (insertErr) return { error: insertErr.message };
+  if (insertData?.id) return { id: insertData.id };
   return { error: "No id returned after insert" };
 }
 
-/** Update quantity (and in_stock) for an existing product row via backend API */
+/** Update quantity (and in_stock) for an existing product row via Supabase directly */
 export async function updateStoreProductQuantity(
   productId: string,
   quantity: number
 ): Promise<boolean> {
-  console.log("[updateStoreProductQuantity] START", { productId, quantity });
-  
-  const API_BASE = config.API_BASE;
-  
-  try {
-    const qty = Math.max(0, quantity);
-    console.log("[updateStoreProductQuantity] Calling backend API...");
-    
-    const response = await fetch(`${API_BASE}/store-owner/products/${productId}/quantity`, {
-      method: "PATCH",
-      headers: {
-        "Authorization": "Bearer dummy-token", // You should pass real token
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ quantity: qty })
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok || !data.success) {
-      console.error("[updateStoreProductQuantity] Backend error:", data);
-      return false;
-    }
-    
-    console.log("[updateStoreProductQuantity] SUCCESS via backend:", data.product);
-    return true;
-  } catch (error) {
-    console.error("[updateStoreProductQuantity] Exception:", error);
-    return false;
-  }
+  if (!supabase) return false;
+  const qty = Math.max(0, quantity);
+  const { error } = await supabase
+    .from("products")
+    .update({ quantity: qty, in_stock: qty > 0, updated_at: new Date().toISOString() })
+    .eq("id", productId);
+  return !error;
 }
 
 /**
