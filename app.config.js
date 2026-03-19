@@ -22,7 +22,7 @@ module.exports = () => ({
   },
   android: {
     adaptiveIcon: {
-      foregroundImage: "./near_now_shopkeeper.png",
+      foregroundImage: "./near_now_shopkeeper_foreground.png",
       backgroundColor: "#ffffff",
     },
     edgeToEdgeEnabled: true,
@@ -39,10 +39,8 @@ module.exports = () => ({
   updates: {
     url: "https://u.expo.dev/f0f709ec-f013-416a-b543-729b80cbd4b0",
   },
-  runtimeVersion: {
-    policy: "appVersion",
-  },
-  plugins: ["expo-router"],
+  runtimeVersion: "1.0.0",
+  plugins: ["expo-router", "expo-font"],
   extra: {
     apiBaseUrl:
       process.env.EXPO_PUBLIC_API_BASE_URL ||

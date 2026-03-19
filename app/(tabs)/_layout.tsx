@@ -71,7 +71,7 @@ export default function TabsLayout() {
         name="stock"
         component={StockTab}
         options={{
-          title: "Stock",
+          title: "Inventory",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="cube-outline" size={size} color={color} />
           ),

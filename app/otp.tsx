@@ -151,20 +151,18 @@ export default function StoreOwnerOtpScreen() {
       const explicitlySignup = mode === "signup";
       const hasToken = !!token;
 
-      // CRITICAL CHECK: Backend MUST return shopkeeper role, not customer!
-      // We sent role: "shopkeeper" in request, so response should have user.role = "shopkeeper"
+      // Backend must filter by role (WHERE phone = ? AND role = 'shopkeeper').
+      // If it returns a different role it found the wrong account for this phone.
       if (hasToken && user?.role && user.role !== "shopkeeper" && user.role !== "store_owner") {
         if (__DEV__) {
-          console.error("[otp] BACKEND ERROR: Returned wrong role:", user.role);
+          console.error("[otp] Backend returned wrong role:", user.role);
         }
         Alert.alert(
-          "Backend Configuration Error",
-          `Backend returned ${user.role} account instead of shopkeeper account.\n\n` +
-          "This is a backend bug. The backend must query:\n" +
-          "WHERE phone = '${phone}' AND role = 'shopkeeper'\n\n" +
-          `Backend is returning: ${user.name} (${user.role})\n` +
-          "Should return: Your store account (shopkeeper)\n\n" +
-          "Please check backend /api/auth/verify-otp endpoint."
+          "Login failed",
+          "The server returned the wrong account for this number.\n\n" +
+          "The backend verify-otp endpoint must query:\n" +
+          "WHERE phone = ? AND role = 'shopkeeper'\n\n" +
+          "Fix that query and try again."
         );
         return;
       }

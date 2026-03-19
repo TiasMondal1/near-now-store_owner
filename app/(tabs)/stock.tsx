@@ -263,7 +263,6 @@ function InventoryCatalogSection({ storeId, token }: { storeId?: string | null; 
               : p
           )
         );
-        Alert.alert("Success", "Product added to your stock!");
       } else if (inserted && "error" in inserted) {
         Alert.alert("Error", "Could not add product. Please try again.");
       }
