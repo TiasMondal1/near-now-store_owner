@@ -159,10 +159,7 @@ export default function StoreOwnerOtpScreen() {
         }
         Alert.alert(
           "Login failed",
-          "The server returned the wrong account for this number.\n\n" +
-          "The backend verify-otp endpoint must query:\n" +
-          "WHERE phone = ? AND role = 'shopkeeper'\n\n" +
-          "Fix that query and try again."
+          "The phone number does not match our records. Please try again or contact support."
         );
         return;
       }

@@ -39,7 +39,7 @@ module.exports = () => ({
   updates: {
     url: "https://u.expo.dev/f0f709ec-f013-416a-b543-729b80cbd4b0",
   },
-  runtimeVersion: "1.0.0",
+  runtimeVersion: { policy: "appVersion" },
   plugins: ["expo-router", "expo-font"],
   extra: {
     apiBaseUrl:
