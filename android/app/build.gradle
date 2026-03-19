@@ -128,12 +128,14 @@ android {
         }
     }
     // Generate separate APKs per CPU architecture so each file is smaller.
+    // universalApk true ensures a single app-universal-release.apk is also produced
+    // for easy local installation without needing to pick the right architecture.
     splits {
         abi {
             enable true
             reset()
             include "arm64-v8a", "armeabi-v7a"
-            universalApk false
+            universalApk true
         }
     }
 

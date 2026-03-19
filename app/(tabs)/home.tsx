@@ -266,10 +266,14 @@ export default function HomeTab() {
   }, [session?.token, selectedStore?.id]);
 
   const fetchStores = useCallback(async (token: string, userId?: string): Promise<StoreRow[]> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
     try {
       const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       const raw = await res.text();
       let json: any = null;
       try {
@@ -281,6 +285,7 @@ export default function HomeTab() {
       }
       return fetched;
     } catch {
+      clearTimeout(timeoutId);
       return [];
     }
   }, []);

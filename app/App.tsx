@@ -35,8 +35,10 @@ export default function StoreOwnerPhoneScreen() {
     if (!isValid || loading) return;
     const fullPhone = `+91${phone}`;
 
-    // Normalize API base to avoid accidental double slashes like //api/...
     const baseUrl = API_BASE.replace(/\/+$/, "");
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
 
     try {
       setLoading(true);
@@ -45,7 +47,9 @@ export default function StoreOwnerPhoneScreen() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: fullPhone }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       const raw = await res.text();
       let json: any = null;
@@ -54,34 +58,39 @@ export default function StoreOwnerPhoneScreen() {
       } catch {
         json = null;
       }
-      if (!res.ok || !json?.success) {
-        if (__DEV__) {
-          console.log("[send-otp] status:", res.status);
-          console.log("[send-otp] raw:", raw?.slice(0, 200));
-          console.log("[send-otp] json:", json);
-        }
 
+      if (!res.ok || !json?.success) {
         Alert.alert(
-          "Error",
+          "Could not send OTP",
           json?.error ||
             json?.message ||
-            `Unable to send OTP. Server responded with status ${res.status}.`
+            `Server error ${res.status}. Please try again.`
         );
         setLoading(false);
         return;
       }
     } catch (e: any) {
+      clearTimeout(timeoutId);
       const msg = e?.message || String(e);
-      const isNetwork = msg.includes("Network") || msg.includes("fetch") || msg.includes("connect");
-      const isLocalhost = API_BASE.includes("localhost") || API_BASE.includes("127.0.0.1");
-      Alert.alert(
-        "Cannot reach server",
-        isNetwork
-          ? isLocalhost
-            ? `App was built with: ${API_BASE}\n\nOn a real device, localhost is the phone—so the app cannot reach your computer.\n\n• Rebuild the APK with EXPO_PUBLIC_API_BASE_URL in .env set to your production API (e.g. https://api.yourdomain.com) or your computer’s LAN IP (e.g. http://192.168.1.x:3000) for testing.\n• Then run: npm run build:apk`
-            : `App is using: ${API_BASE}\n\n• Backend must be running and listen on 0.0.0.0:3000.\n• Phone and computer on same Wi‑Fi.`
-          : "Network or parsing error. Please try again."
-      );
+      const isAbort = e?.name === "AbortError" || msg.includes("aborted");
+      if (isAbort) {
+        Alert.alert(
+          "Server is starting up",
+          "The server took too long to respond — it may have been sleeping.\n\nPlease wait 10 seconds and try again."
+        );
+      } else {
+        const isNetwork =
+          msg.includes("Network") ||
+          msg.includes("fetch") ||
+          msg.includes("connect") ||
+          msg.includes("timeout");
+        Alert.alert(
+          "Cannot reach server",
+          isNetwork
+            ? `Could not connect to the server. Please check your internet connection and try again.\n\nDetails: ${msg.slice(0, 100)}`
+            : `Something went wrong. Please try again.\n\nDetails: ${msg.slice(0, 100)}`
+        );
+      }
       setLoading(false);
       return;
     }
@@ -143,7 +152,7 @@ export default function StoreOwnerPhoneScreen() {
               />
             </View>
             <Text style={styles.helperText}>
-              We’ll send an OTP to verify that you own this number.
+              We&apos;ll send an OTP to verify that you own this number.
             </Text>
           </View>
 
@@ -166,9 +175,6 @@ export default function StoreOwnerPhoneScreen() {
 
             <Text style={styles.termsText}>
               By continuing as a shopkeeper, you agree to manage live inventory and orders responsibly.
-            </Text>
-            <Text style={styles.apiUrlText} numberOfLines={1}>
-              API: {API_BASE}
             </Text>
           </View>
         </View>
@@ -288,11 +294,5 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     textAlign: "center",
     lineHeight: 16,
-  },
-  apiUrlText: {
-    fontSize: 10,
-    color: colors.textTertiary,
-    marginTop: spacing.sm,
-    textAlign: "center",
   },
 });

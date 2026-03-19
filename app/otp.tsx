@@ -75,6 +75,9 @@ export default function StoreOwnerOtpScreen() {
       return;
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
     try {
       setLoading(true);
       const baseUrl = API_BASE.replace(/\/+$/, "");
@@ -83,7 +86,9 @@ export default function StoreOwnerOtpScreen() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone, otp, role: "shopkeeper" }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       const raw = await res.text();
       let json: any = null;
@@ -205,19 +210,27 @@ export default function StoreOwnerOtpScreen() {
         "Your phone may be registered as customer only. Please complete store setup to become a shopkeeper."
       );
     } catch (e: any) {
-      const msg =
-        e?.message || String(e);
-      const isNetwork =
-        msg.includes("Network") ||
-        msg.includes("fetch") ||
-        msg.includes("Failed to connect");
-      if (__DEV__) console.warn("OTP verify error", e);
-      Alert.alert(
-        "Error",
-        isNetwork
-          ? `Cannot reach server. Check that the app is using the correct API URL (${API_BASE}) and the server is running.`
-          : "Something went wrong. Please try again."
-      );
+      clearTimeout(timeoutId);
+      const msg = e?.message || String(e);
+      const isAbort = e?.name === "AbortError" || msg.includes("aborted");
+      if (isAbort) {
+        Alert.alert(
+          "Server is starting up",
+          "The server took too long to respond — it may have been sleeping.\n\nPlease wait 10 seconds and try again."
+        );
+      } else {
+        const isNetwork =
+          msg.includes("Network") ||
+          msg.includes("fetch") ||
+          msg.includes("Failed to connect");
+        if (__DEV__) console.warn("OTP verify error", e);
+        Alert.alert(
+          "Error",
+          isNetwork
+            ? `Cannot reach server. Please check your internet connection and try again.`
+            : "Something went wrong. Please try again."
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -227,6 +240,9 @@ export default function StoreOwnerOtpScreen() {
     if (secondsLeft > 0 || resendLoading) return;
     if (!phone) return;
 
+    const resendController = new AbortController();
+    const resendTimeout = setTimeout(() => resendController.abort(), 20000);
+
     try {
       setResendLoading(true);
       const baseUrl = API_BASE.replace(/\/+$/, "");
@@ -234,7 +250,9 @@ export default function StoreOwnerOtpScreen() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone }),
+        signal: resendController.signal,
       });
+      clearTimeout(resendTimeout);
       const raw = await res.text();
       let json: any = null;
       try {
@@ -250,9 +268,16 @@ export default function StoreOwnerOtpScreen() {
       }
 
       setSecondsLeft(60);
-    } catch (e) {
+    } catch (e: any) {
+      clearTimeout(resendTimeout);
+      const isAbort = e?.name === "AbortError" || (e?.message || "").includes("aborted");
       if (__DEV__) console.log("Network error resending OTP:", e);
-      Alert.alert("Error", "Network error. Please try again.");
+      Alert.alert(
+        "Error",
+        isAbort
+          ? "Server is starting up. Please wait 10 seconds and try again."
+          : "Network error. Please try again."
+      );
     } finally {
       setResendLoading(false);
     }

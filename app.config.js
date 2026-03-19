@@ -45,6 +45,18 @@ module.exports = () => ({
     apiBaseUrl:
       process.env.EXPO_PUBLIC_API_BASE_URL ||
       "https://near-and-now-backend-production.up.railway.app/",
+    supabaseUrl:
+      process.env.EXPO_PUBLIC_SUPABASE_URL ||
+      process.env.VITE_SUPABASE_URL ||
+      "",
+    supabaseAnonKey:
+      process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
+      process.env.VITE_SUPABASE_ANON_KEY ||
+      "",
+    googleMapsApiKey:
+      process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ||
+      process.env.VITE_GOOGLE_MAPS_API_KEY ||
+      "",
     eas: {
       projectId: "f0f709ec-f013-416a-b543-729b80cbd4b0",
     },

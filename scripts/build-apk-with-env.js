@@ -28,7 +28,16 @@ if (fs.existsSync(envPath)) {
     }
   });
   const apiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || "";
-  console.log("Loaded .env (EXPO_PUBLIC_API_BASE_URL =", apiUrl || "(not set)", ")");
+  const supaUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || "";
+  const supaKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "";
+  console.log("Loaded .env:");
+  console.log("  EXPO_PUBLIC_API_BASE_URL     =", apiUrl || "(not set)");
+  console.log("  EXPO_PUBLIC_SUPABASE_URL     =", supaUrl || "(not set)");
+  console.log("  EXPO_PUBLIC_SUPABASE_ANON_KEY=", supaKey ? supaKey.slice(0, 20) + "…" : "(not set)");
+  if (!supaUrl || !supaKey) {
+    console.error("\nERROR: EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY is missing from .env");
+    console.error("The built APK will have no Supabase connection. Add them to .env and rebuild.\n");
+  }
   if (!apiUrl || apiUrl.includes("localhost") || apiUrl.includes("127.0.0.1")) {
     console.warn("");
     console.warn("WARNING: EXPO_PUBLIC_API_BASE_URL is not set or is localhost. The APK will not reach your backend on a real device.");
@@ -68,8 +77,24 @@ const run = (gradleArgs) => {
     stdio: "inherit",
   });
 };
-// Stop existing daemon so a new one starts with our EXPO_PUBLIC_* env (needed for bundle step)
+// Stop daemon so a new one picks up the freshly injected EXPO_PUBLIC_* env vars.
 run(["--stop"]);
+
+// Delete only the JS bundle intermediates so Metro always re-bundles with the current env vars.
+// We deliberately avoid "gradle clean" because it also cleans C++ native build artifacts and
+// triggers a CMake re-check that fails when codegen directories haven't been created yet.
+const bundleDirs = [
+  path.join(androidDir, "app/build/intermediates/assets"),
+  path.join(androidDir, "app/build/intermediates/merged_assets"),
+  path.join(androidDir, "app/build/generated/assets"),
+];
+bundleDirs.forEach((dir) => {
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    console.log("Cleared bundle cache:", dir);
+  }
+});
+
 const result = run(["assembleRelease"]);
 
 if (result.error) {

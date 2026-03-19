@@ -1,34 +1,56 @@
 /**
- * App config from .env (Expo inlines EXPO_PUBLIC_* when you run "expo start").
- * Use your machine's LAN IP in .env for device testing. Same Supabase project as near-and-now.
+ * App config — three-layer fallback chain for every value:
+ *
+ * 1. process.env.EXPO_PUBLIC_* (static literal access)
+ *    Metro/Babel can only inline env vars when they are accessed as static property
+ *    expressions — process.env.EXPO_PUBLIC_FOO. Dynamic access like process.env[key]
+ *    is never inlined and always returns undefined at runtime in a built app.
+ *    So we access every key directly here.
+ *
+ * 2. Constants.expoConfig.extra
+ *    app.config.js runs in the EAS/Expo CLI process (which has access to all env vars
+ *    including .env file). Values in `extra` are baked into the app manifest and
+ *    available via Constants.expoConfig.extra regardless of Metro env inlining.
+ *    This is the reliable fallback for production/local Gradle builds.
+ *
+ * 3. Hardcoded defaults (only for non-sensitive values like the API base URL).
  */
 
-const getEnv = (key: string, fallback: string = ""): string => {
-  const value = typeof process !== "undefined" && process.env?.[key];
-  return typeof value === "string" ? value : fallback;
-};
+import Constants from "expo-constants";
 
-// Fallback API URL if EXPO_PUBLIC_API_BASE_URL is not set.
-// Use production backend by default so release builds never hit localhost.
+const extra = (Constants.expoConfig?.extra ?? {}) as Record<string, string>;
+
 const defaultApi = "https://near-and-now-backend-production.up.railway.app/";
 
 export const config = {
-  /** Store owner API base URL - set EXPO_PUBLIC_API_BASE_URL in .env.
-   * We strip trailing slashes to avoid URLs like //api/auth/...
-   */
-  API_BASE: (getEnv("EXPO_PUBLIC_API_BASE_URL") || defaultApi).replace(/\/+$/, ""),
+  /** Store owner REST API base URL */
+  API_BASE: (
+    process.env.EXPO_PUBLIC_API_BASE_URL ||
+    extra.apiBaseUrl ||
+    defaultApi
+  ).replace(/\/+$/, ""),
 
   /** Supabase project URL */
-  SUPABASE_URL:
-    getEnv("EXPO_PUBLIC_SUPABASE_URL") || getEnv("VITE_SUPABASE_URL") || "",
+  SUPABASE_URL: (
+    process.env.EXPO_PUBLIC_SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    extra.supabaseUrl ||
+    ""
+  ).replace(/\/+$/, ""),
 
-  /** Supabase anon key for client */
+  /** Supabase anon (public) key */
   SUPABASE_ANON_KEY:
-    getEnv("EXPO_PUBLIC_SUPABASE_ANON_KEY") || getEnv("VITE_SUPABASE_ANON_KEY") || "",
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    extra.supabaseAnonKey ||
+    "",
 
-  /** Google Maps API key (for map picker in signup, etc.) */
+  /** Google Maps API key */
   GOOGLE_MAPS_API_KEY:
-    getEnv("EXPO_PUBLIC_GOOGLE_MAPS_API_KEY") || getEnv("VITE_GOOGLE_MAPS_API_KEY") || "",
+    process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ||
+    process.env.VITE_GOOGLE_MAPS_API_KEY ||
+    extra.googleMapsApiKey ||
+    "",
 } as const;
 
 export default config;
