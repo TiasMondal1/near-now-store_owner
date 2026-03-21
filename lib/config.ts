@@ -51,6 +51,17 @@ export const config = {
     process.env.VITE_GOOGLE_MAPS_API_KEY ||
     extra.googleMapsApiKey ||
     "",
+
+  /**
+   * Dev-only OTP bypass. Set EXPO_PUBLIC_DEV_SKIP_OTP=true in .env to skip
+   * OTP during development. Has no effect in production (__DEV__ === false).
+   */
+  DEV_SKIP_OTP:
+    process.env.EXPO_PUBLIC_DEV_SKIP_OTP === "true" || extra.devSkipOtp === "true",
+
+  /** Optional real JWT for dev bypass API calls. Falls back to placeholder. */
+  DEV_TOKEN:
+    process.env.EXPO_PUBLIC_DEV_TOKEN || extra.devToken || "",
 } as const;
 
 export default config;

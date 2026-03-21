@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { config } from "../lib/config";
+import { saveSession } from "../session";
 import { colors, radius, spacing } from "../lib/theme";
 
 const API_BASE = config.API_BASE;
@@ -30,6 +31,29 @@ export default function StoreOwnerPhoneScreen() {
   };
 
   const isValid = phone.length === 10;
+
+  const handleDevLogin = async () => {
+    if (!isValid) return;
+    const fullPhone = `+91${phone}`;
+    const devToken = config.DEV_TOKEN || `dev-mock-token-${Date.now()}`;
+    await saveSession({
+      token: devToken,
+      user: {
+        id: `dev-user-${phone}`,
+        name: "Dev User",
+        role: "shopkeeper",
+        isActivated: true,
+        phone: fullPhone,
+      },
+    });
+    router.replace("/owner-home");
+  };
+
+  const handleDevNewStore = () => {
+    if (!isValid) return;
+    const fullPhone = `+91${phone}`;
+    router.push({ pathname: "/store-owner-signup", params: { phone: fullPhone } });
+  };
 
   const handleContinueWithOtp = async () => {
     if (!isValid || loading) return;
@@ -173,6 +197,27 @@ export default function StoreOwnerPhoneScreen() {
               )}
             </TouchableOpacity>
 
+            {__DEV__ && config.DEV_SKIP_OTP && (
+              <View style={styles.devRow}>
+                <TouchableOpacity
+                  activeOpacity={isValid ? 0.85 : 1}
+                  onPress={handleDevLogin}
+                  disabled={!isValid}
+                  style={[styles.devSkipButton, styles.devSkipButtonHalf, !isValid && styles.buttonDisabled]}
+                >
+                  <Text style={styles.devSkipButtonText}>Dev: Login</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={isValid ? 0.85 : 1}
+                  onPress={handleDevNewStore}
+                  disabled={!isValid}
+                  style={[styles.devSkipButton, styles.devSkipButtonHalf, !isValid && styles.buttonDisabled]}
+                >
+                  <Text style={styles.devSkipButtonText}>Dev: New Store</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             <Text style={styles.termsText}>
               By continuing as a shopkeeper, you agree to manage live inventory and orders responsibly.
             </Text>
@@ -294,5 +339,26 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     textAlign: "center",
     lineHeight: 16,
+  },
+  devRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  devSkipButton: {
+    borderRadius: radius.md,
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#444",
+    borderWidth: 1,
+    borderColor: "#666",
+  },
+  devSkipButtonHalf: {
+    flex: 1,
+  },
+  devSkipButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#ffcc00",
   },
 });
