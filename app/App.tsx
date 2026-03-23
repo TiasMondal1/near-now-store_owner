@@ -22,6 +22,7 @@ export default function StoreOwnerPhoneScreen() {
   const router = useRouter();
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
+  const [devLoading, setDevLoading] = useState(false);
 
   const onlyDigits = (value: string) => value.replace(/[^0-9]/g, "");
 
@@ -33,20 +34,54 @@ export default function StoreOwnerPhoneScreen() {
   const isValid = phone.length === 10;
 
   const handleDevLogin = async () => {
-    if (!isValid) return;
+    if (!isValid || devLoading) return;
     const fullPhone = `+91${phone}`;
-    const devToken = config.DEV_TOKEN || `dev-mock-token-${Date.now()}`;
-    await saveSession({
-      token: devToken,
-      user: {
-        id: `dev-user-${phone}`,
-        name: "Dev User",
-        role: "shopkeeper",
-        isActivated: true,
-        phone: fullPhone,
-      },
-    });
-    router.replace("/owner-home");
+    const baseUrl = API_BASE.replace(/\/+$/, "");
+
+    setDevLoading(true);
+    try {
+      // Calls a dev-only backend endpoint that authenticates by phone number
+      // without OTP. The backend must guard this route with a dev/env check.
+      // Expected response: { token: string, user: { id, name, role, phone, isActivated } }
+      const res = await fetch(`${baseUrl}/api/auth/dev-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: fullPhone, role: "shopkeeper" }),
+      });
+
+      const raw = await res.text();
+      let json: any = null;
+      try { json = raw ? JSON.parse(raw) : null; } catch { /* non-JSON */ }
+
+      if (!res.ok || !json?.token || !json?.user) {
+        const msg = json?.error || json?.message || `No shopkeeper found for ${fullPhone}`;
+        Alert.alert("Dev Login Failed", msg);
+        return;
+      }
+
+      await saveSession({
+        token: json.token,
+        user: {
+          id: json.user.id,
+          name: json.user.name ?? json.user.full_name ?? "Shopkeeper",
+          role: json.user.role ?? "shopkeeper",
+          isActivated: json.user.isActivated ?? json.user.is_activated ?? true,
+          phone: json.user.phone ?? fullPhone,
+          email: json.user.email ?? undefined,
+        },
+      });
+      router.replace("/owner-home");
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      Alert.alert(
+        "Dev Login Error",
+        msg.includes("fetch") || msg.includes("Network")
+          ? "Cannot reach server. Is the backend running?"
+          : msg
+      );
+    } finally {
+      setDevLoading(false);
+    }
   };
 
   const handleDevNewStore = () => {
@@ -200,12 +235,15 @@ export default function StoreOwnerPhoneScreen() {
             {__DEV__ && config.DEV_SKIP_OTP && (
               <View style={styles.devRow}>
                 <TouchableOpacity
-                  activeOpacity={isValid ? 0.85 : 1}
+                  activeOpacity={isValid && !devLoading ? 0.85 : 1}
                   onPress={handleDevLogin}
-                  disabled={!isValid}
-                  style={[styles.devSkipButton, styles.devSkipButtonHalf, !isValid && styles.buttonDisabled]}
+                  disabled={!isValid || devLoading}
+                  style={[styles.devSkipButton, styles.devSkipButtonHalf, (!isValid || devLoading) && styles.buttonDisabled]}
                 >
-                  <Text style={styles.devSkipButtonText}>Dev: Login</Text>
+                  {devLoading
+                    ? <ActivityIndicator size="small" color="#ffcc00" />
+                    : <Text style={styles.devSkipButtonText}>Dev: Login</Text>
+                  }
                 </TouchableOpacity>
                 <TouchableOpacity
                   activeOpacity={isValid ? 0.85 : 1}
