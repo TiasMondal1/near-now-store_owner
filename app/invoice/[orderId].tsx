@@ -93,8 +93,7 @@ export default function InvoiceScreen() {
     return lineItems.reduce((sum, it) => sum + (it.amount ?? 0), 0);
   }, [lineItems]);
 
-  const total = Number(order?.total_amount ?? 0);
-  const deliveryFee = Math.max(0, total - computedSubtotal);
+  const finalTotal = computedSubtotal;
 
   if (loading) {
     return (
@@ -173,15 +172,14 @@ export default function InvoiceScreen() {
 
         <View style={styles.tableCard}>
           <View style={styles.tableHeader}>
-            <Text style={[styles.th, { flex: 1.4 }]}>Item</Text>
+            <Text style={[styles.th, { flex: 1.9 }]}>Item</Text>
             <Text style={[styles.th, { width: 56, textAlign: "right" }]}>Qty</Text>
-            <Text style={[styles.th, { width: 84, textAlign: "right" }]}>Price</Text>
-            <Text style={[styles.th, { width: 92, textAlign: "right" }]}>Amount</Text>
+            <Text style={[styles.th, { width: 96, textAlign: "right" }]}>Price</Text>
           </View>
 
           {lineItems.map((it) => (
             <View key={it.id} style={styles.tr}>
-              <View style={{ flex: 1.4, flexDirection: "row", gap: spacing.sm, alignItems: "center" }}>
+              <View style={{ flex: 1.9, flexDirection: "row", gap: spacing.sm, alignItems: "center" }}>
                 {it.image_url ? (
                   <Image source={{ uri: it.image_url }} style={styles.itemImg} />
                 ) : (
@@ -190,16 +188,13 @@ export default function InvoiceScreen() {
                   </View>
                 )}
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.itemName} numberOfLines={2}>{it.name}</Text>
+                  <Text style={styles.itemName}>{it.name}</Text>
                   <Text style={styles.itemUnit}>{it.unit}</Text>
                 </View>
               </View>
 
               <Text style={[styles.td, { width: 56, textAlign: "right" }]}>{it.qty}</Text>
-              <Text style={[styles.td, { width: 84, textAlign: "right" }]}>
-                {it.unitPrice == null ? "-" : formatMoneyINR(it.unitPrice)}
-              </Text>
-              <Text style={[styles.tdStrong, { width: 92, textAlign: "right" }]}>
+              <Text style={[styles.tdStrong, { width: 96, textAlign: "right" }]}>
                 {it.amount == null ? "-" : formatMoneyINR(it.amount)}
               </Text>
             </View>
@@ -208,17 +203,8 @@ export default function InvoiceScreen() {
 
         <View style={styles.totalsCard}>
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Subtotal</Text>
-            <Text style={styles.totalValue}>{formatMoneyINR(computedSubtotal)}</Text>
-          </View>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Delivery</Text>
-            <Text style={styles.totalValue}>{formatMoneyINR(deliveryFee)}</Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.totalRow}>
             <Text style={styles.grandLabel}>Total</Text>
-            <Text style={styles.grandValue}>{formatMoneyINR(total)}</Text>
+            <Text style={styles.grandValue}>{formatMoneyINR(finalTotal)}</Text>
           </View>
         </View>
       </ScrollView>
@@ -331,7 +317,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  itemName: { color: colors.textPrimary, fontSize: 12, fontWeight: "700" },
+  itemName: { color: colors.textPrimary, fontSize: 12, fontWeight: "700", flexShrink: 1, flexWrap: "wrap" },
   itemUnit: { color: colors.textTertiary, fontSize: 11, marginTop: 2 },
 
   totalsCard: {
@@ -341,10 +327,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  totalRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6 },
-  totalLabel: { color: colors.textSecondary, fontSize: 12, fontWeight: "600" },
-  totalValue: { color: colors.textPrimary, fontSize: 12, fontWeight: "800" },
-  divider: { height: 1, backgroundColor: colors.borderLight, marginVertical: spacing.sm },
+  totalRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 2 },
   grandLabel: { color: colors.textPrimary, fontSize: 14, fontWeight: "800" },
   grandValue: { color: colors.textPrimary, fontSize: 16, fontWeight: "900", letterSpacing: -0.2 },
 

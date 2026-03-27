@@ -14,9 +14,15 @@ import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import { config } from "../../lib/config";
 import { colors, radius, spacing } from "../../lib/theme";
-import { getOrdersFromDb } from "../../lib/orders-db";
+import { getOrderByIdFromDb, getOrdersFromDb } from "../../lib/orders-db";
 
 const API_BASE = config.API_BASE;
+
+function formatMoneyINR(value: number | null | undefined): string {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return "₹0";
+  return `₹${n.toFixed(2).replace(/\.00$/, "")}`;
+}
 
 export default function PreviousOrdersTab() {
   const [session, setSession] = useState<any | null>(null);
@@ -48,6 +54,43 @@ export default function PreviousOrdersTab() {
   const DELIVERED_STATUSES = ["delivered", "order_delivered"];
   const isDelivered = (o: any) =>
     DELIVERED_STATUSES.includes((o.status || "").toLowerCase().replace(/-/g, "_"));
+  const toNumber = (v: any) => {
+    if (typeof v === "number") return Number.isFinite(v) ? v : NaN;
+    if (typeof v === "string") {
+      const cleaned = v.replace(/[^0-9.-]/g, "");
+      const n = Number(cleaned);
+      return Number.isFinite(n) ? n : NaN;
+    }
+    const n = Number(v);
+    return Number.isFinite(n) ? n : NaN;
+  };
+  const getDisplayTotal = (o: any) => {
+    const items = Array.isArray(o?.order_items) ? o.order_items : [];
+    if (items.length > 0) {
+      return items.reduce((sum: number, it: any) => {
+        const qty = toNumber(it?.quantity ?? 0);
+        const price = toNumber(it?.price ?? it?.unit_price ?? 0);
+        if (!Number.isFinite(qty) || !Number.isFinite(price)) return sum;
+        return sum + qty * price;
+      }, 0);
+    }
+    const fallbackCandidates = [
+      o?.total_amount,
+      o?.totalAmount,
+      o?.total,
+      o?.grand_total,
+      o?.subtotal_amount,
+      o?.subtotal,
+      o?.customer_order?.total_amount,
+      o?.customerOrder?.total_amount,
+      o?.summary?.total_amount,
+    ];
+    for (const c of fallbackCandidates) {
+      const n = toNumber(c);
+      if (Number.isFinite(n)) return n;
+    }
+    return 0;
+  };
   const previousOrders = orders.filter((o: any) => isDelivered(o));
 
   useEffect(() => {
@@ -104,7 +147,20 @@ export default function PreviousOrdersTab() {
     try {
       const fromDb = await getOrdersFromDb(storeId);
       if (Array.isArray(fromDb) && fromDb.length > 0) {
-        setOrders(fromDb);
+        const withRecoveredTotals = await Promise.all(
+          fromDb.map(async (o: any) => {
+            const current = getDisplayTotal(o);
+            if (current > 0 || !o?.id) return o;
+            try {
+              const detail = await getOrderByIdFromDb(String(o.id));
+              if (!detail) return o;
+              return { ...o, order_items: detail.order_items, total_amount: detail.total_amount };
+            } catch {
+              return o;
+            }
+          })
+        );
+        setOrders(withRecoveredTotals);
         return;
       }
     } catch (e) {
@@ -182,13 +238,19 @@ export default function PreviousOrdersTab() {
               >
                 <View style={styles.orderCardLeft}>
                   <Text style={styles.orderCardCode}>#{o.order_code}</Text>
-                  {o.created_at && (
-                    <Text style={styles.orderCardTime}>
-                      {new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      {" · "}
-                      {new Date(o.created_at).toLocaleDateString()}
-                    </Text>
-                  )}
+                  {(() => {
+                    const rawDate = o.created_at ?? o.createdAt ?? o.updated_at ?? o.updatedAt;
+                    if (!rawDate) return null;
+                    const parsed = new Date(rawDate);
+                    if (Number.isNaN(parsed.getTime())) return null;
+                    return (
+                      <Text style={styles.orderCardTime}>
+                        {parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        {" · "}
+                        {parsed.toLocaleDateString()}
+                      </Text>
+                    );
+                  })()}
                 </View>
                 <View style={styles.orderCardRight}>
                   <View style={[styles.statusBadge, { backgroundColor: getStatusColor(o.status) + "22" }]}>
@@ -196,9 +258,7 @@ export default function PreviousOrdersTab() {
                       {formatStatus(o.status)}
                     </Text>
                   </View>
-                  {o.total_amount != null && (
-                    <Text style={styles.orderCardAmount}>₹{o.total_amount}</Text>
-                  )}
+                  <Text style={styles.orderCardAmount}>{formatMoneyINR(getDisplayTotal(o))}</Text>
                 </View>
               </TouchableOpacity>
             ))
