@@ -10,11 +10,21 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
+import { isGarbageEmail, normalizeSignupEmail } from "../lib/emailForApi";
+import { normalizeToShopkeeperRole } from "../lib/shopkeeperRole";
 import { getSession, clearSession } from "../session";
 import { config } from "../lib/config";
 import { colors, radius, spacing } from "../lib/theme";
 
 const API_BASE = config.API_BASE;
+
+function accountEmailLabel(session: { user?: { email?: string } } | null, store: { email?: string } | null): string {
+  const u = normalizeSignupEmail(session?.user?.email ?? "");
+  const st = normalizeSignupEmail(store?.email ?? "");
+  if (u && !isGarbageEmail(u)) return u;
+  if (st && !isGarbageEmail(st)) return st;
+  return "Not provided";
+}
 
 export default function ProfileScreen() {
   const [loading, setLoading] = useState(true);
@@ -96,8 +106,8 @@ export default function ProfileScreen() {
           <Text style={styles.sectionTitle}>Account Information</Text>
           <InfoRow label="Name" value={session?.user?.name || "N/A"} />
           <InfoRow label="Phone" value={session?.user?.phone || "N/A"} />
-          <InfoRow label="Email" value={session?.user?.email || "Not provided"} />
-          <InfoRow label="Role" value={session?.user?.role || "shopkeeper"} />
+          <InfoRow label="Email" value={accountEmailLabel(session, storeInfo)} />
+          <InfoRow label="Role" value={normalizeToShopkeeperRole(session?.user?.role)} />
           <InfoRow
             label="Account Status"
             value={session?.user?.isActivated ? "Active" : "Inactive"}

@@ -10,6 +10,7 @@ import {
   Alert,
   ScrollView,
   ActivityIndicator,
+  Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import MapView, { PROVIDER_GOOGLE, Region } from "react-native-maps";
@@ -18,7 +19,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, router } from "expo-router";
 import { saveSession } from "../session";
 import { config } from "../lib/config";
-import { isMapsProductionEnabled } from "../lib/maps-env";
+import { fetchPlaceAutocomplete, fetchPlaceLatLng, type PlacePrediction } from "../lib/googlePlaces";
+import { coalesceEmail, isPlausibleEmail, normalizeSignupEmail } from "../lib/emailForApi";
+import { isMapsEnabled } from "../lib/maps-env";
+import { normalizeToShopkeeperRole } from "../lib/shopkeeperRole";
 import { colors, radius, spacing } from "../lib/theme";
 
 const API_BASE = config.API_BASE;
@@ -30,7 +34,7 @@ const PIN_SIZE = 42;
 const PIN_REST_Y = -(PIN_SIZE / 2);
 
 export default function StoreOwnerSignupScreen() {
-  const mapsEnabled = isMapsProductionEnabled();
+  const mapsEnabled = isMapsEnabled();
   const params = useLocalSearchParams();
   const phone = typeof params.phone === "string" ? params.phone : "";
 
@@ -62,6 +66,11 @@ export default function StoreOwnerSignupScreen() {
   // ── Search state ─────────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
+  const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
+  const [predictionsLoading, setPredictionsLoading] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [recentering, setRecentering] = useState(false);
+  const skipAutocompleteRef = useRef(false);
 
   // ── Submit state ─────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
@@ -69,7 +78,43 @@ export default function StoreOwnerSignupScreen() {
   // ── Refs ─────────────────────────────────────────────────────────────────────
   const mapRef = useRef<MapView>(null);
 
-  // ── GPS on first map open (production + API key only) ────────────────────────
+  // ── Places Autocomplete (debounced) while typing ─────────────────────────────
+  useEffect(() => {
+    if (!mapsEnabled || !mapExpanded) {
+      setPredictions([]);
+      return;
+    }
+    if (skipAutocompleteRef.current) {
+      skipAutocompleteRef.current = false;
+      return;
+    }
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setPredictions([]);
+      setPredictionsLoading(false);
+      return;
+    }
+    const ac = new AbortController();
+    const t = setTimeout(() => {
+      setPredictionsLoading(true);
+      fetchPlaceAutocomplete(q, ac.signal)
+        .then((list) => {
+          if (!ac.signal.aborted) setPredictions(list.slice(0, 8));
+        })
+        .catch(() => {
+          if (!ac.signal.aborted) setPredictions([]);
+        })
+        .finally(() => {
+          if (!ac.signal.aborted) setPredictionsLoading(false);
+        });
+    }, 350);
+    return () => {
+      clearTimeout(t);
+      ac.abort();
+    };
+  }, [searchQuery, mapsEnabled, mapExpanded]);
+
+  // ── GPS on first map open ────────────────────────────────────────────────────
   useEffect(() => {
     if (!mapExpanded || !mapsEnabled) return;
     let cancelled = false;
@@ -106,11 +151,46 @@ export default function StoreOwnerSignupScreen() {
     setCoords({ latitude: r.latitude, longitude: r.longitude });
   };
 
-  // ── Geocoding search ─────────────────────────────────────────────────────────
+  const applyLatLngToMap = (lat: number, lng: number, duration = 400) => {
+    const newRegion = {
+      latitude: lat,
+      longitude: lng,
+      latitudeDelta: 0.003,
+      longitudeDelta: 0.003,
+    };
+    setRegion(newRegion);
+    setCoords({ latitude: lat, longitude: lng });
+    mapRef.current?.animateToRegion(newRegion, duration);
+  };
+
+  const selectPrediction = async (item: PlacePrediction) => {
+    if (!mapsEnabled || searchLoading) return;
+    skipAutocompleteRef.current = true;
+    setPredictions([]);
+    setSearchFocused(false);
+    setSearchQuery(item.description);
+    try {
+      setSearchLoading(true);
+      const ll = await fetchPlaceLatLng(item.place_id);
+      if (!ll) {
+        Alert.alert("Not found", "Could not load that place. Try another suggestion.");
+        return;
+      }
+      applyLatLngToMap(ll.lat, ll.lng, 450);
+    } catch {
+      Alert.alert("Error", "Could not load place details. Check your connection.");
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  // ── Geocoding search (keyboard / search button) ─────────────────────────────
   const handleSearch = async () => {
     if (!mapsEnabled) return;
     const q = searchQuery.trim();
     if (!q || searchLoading) return;
+    setPredictions([]);
+    setSearchFocused(false);
     try {
       setSearchLoading(true);
       const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&key=${GOOGLE_MAPS_API_KEY}`;
@@ -121,15 +201,29 @@ export default function StoreOwnerSignupScreen() {
         return;
       }
       const loc = json.results[0].geometry.location;
-      // latitudeDelta 0.003 ≈ 330 m — street-level zoom where roads are clearly readable
-      const newRegion = { latitude: loc.lat, longitude: loc.lng, latitudeDelta: 0.003, longitudeDelta: 0.003 };
-      setRegion(newRegion);
-      setCoords({ latitude: loc.lat, longitude: loc.lng });
-      mapRef.current?.animateToRegion(newRegion, 0);
+      applyLatLngToMap(loc.lat, loc.lng, 0);
     } catch {
       Alert.alert("Error", "Could not search for that address. Check your connection.");
     } finally {
       setSearchLoading(false);
+    }
+  };
+
+  const handleRecenterOnDevice = async () => {
+    if (!mapsEnabled || locating) return;
+    setRecentering(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Location", "Allow location to move the map to where you are.");
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      applyLatLngToMap(pos.coords.latitude, pos.coords.longitude, 500);
+    } catch {
+      Alert.alert("Location", "Could not get your current position.");
+    } finally {
+      setRecentering(false);
     }
   };
 
@@ -142,8 +236,8 @@ export default function StoreOwnerSignupScreen() {
     stateName.trim().length > 0 ||
     postalCode.trim().length > 0;
 
-  const emailTrimmed = email.trim().toLowerCase();
-  const emailValid = /\S+@\S+\.\S+/.test(emailTrimmed);
+  const emailNormalized = normalizeSignupEmail(email);
+  const emailValid = isPlausibleEmail(emailNormalized);
 
   const isValid =
     ownerName.trim().length > 0 &&
@@ -178,7 +272,9 @@ export default function StoreOwnerSignupScreen() {
           storeName: storeName.trim(),
           storeAddress: buildAddressString(),
           radiusKm: radiusKm.trim(),
-          email: emailTrimmed,
+          email: emailNormalized,
+          ownerEmail: emailNormalized,
+          owner_email: emailNormalized,
           latitude: coords.latitude,
           longitude: coords.longitude,
         }),
@@ -201,14 +297,16 @@ export default function StoreOwnerSignupScreen() {
         Alert.alert("Error", json?.error || json?.message || "Invalid response from server.");
         return;
       }
+      const sessionEmail = coalesceEmail(json.user?.email, emailNormalized);
       await saveSession({
         token: json.token,
         user: {
           id: json.user.id,
           name: json.user.name,
-          role: json.user.role ?? "shopkeeper",
+          role: normalizeToShopkeeperRole(json.user.role),
           isActivated: json.user.isActivated ?? json.user.is_activated ?? true,
           phone: json.user.phone ?? phone,
+          email: sessionEmail || undefined,
         },
       });
       router.replace("/registration-success");
@@ -246,10 +344,8 @@ export default function StoreOwnerSignupScreen() {
               <Text style={styles.title}>Set up your store</Text>
               <Text style={styles.subtitle}>
                 {mapsEnabled
-                  ? "Pan the map to drop the pin on your shop entrance, then fill in your address below."
-                  : __DEV__
-                    ? "Development: enter your store address below. Map, search, and GPS run in a production build with your Maps API key."
-                    : "Enter your store address below. Set EXPO_PUBLIC_GOOGLE_MAPS_API_KEY in your production build to enable the map and search."}
+                  ? "Pan the map to drop the pin on your shop entrance, pick a search suggestion, or use the current-location button. Then fill in your address below."
+                  : "Enter your store address below. Add EXPO_PUBLIC_GOOGLE_MAPS_API_KEY to your .env (dev) or build env (release) to enable the map, suggestions, and GPS."}
               </Text>
             </View>
 
@@ -298,7 +394,7 @@ export default function StoreOwnerSignupScreen() {
                   autoCapitalize="none"
                   keyboardType="email-address"
                 />
-                {!emailValid && emailTrimmed.length > 0 && (
+                {!emailValid && emailNormalized.length > 0 && (
                   <Text style={styles.errorText}>Please enter a valid email address.</Text>
                 )}
               </View>
@@ -320,36 +416,66 @@ export default function StoreOwnerSignupScreen() {
                     <Text style={styles.mapTriggerSub}>
                       {mapsEnabled
                         ? "Pan the map to place the pin exactly"
-                        : __DEV__
-                          ? "No map in dev — use address fields. Production APK enables map + search."
-                          : "Add EXPO_PUBLIC_GOOGLE_MAPS_API_KEY to enable map, search, and GPS."}
+                        : "Add EXPO_PUBLIC_GOOGLE_MAPS_API_KEY to enable map, live suggestions, and GPS."}
                     </Text>
                   </TouchableOpacity>
                 ) : (
                   <>
                     {mapsEnabled && (
-                      <View style={styles.searchRow}>
-                        <TextInput
-                          style={styles.searchInput}
-                          value={searchQuery}
-                          onChangeText={setSearchQuery}
-                          placeholder="Search area, street or landmark…"
-                          placeholderTextColor={colors.textTertiary}
-                          returnKeyType="search"
-                          onSubmitEditing={handleSearch}
-                        />
-                        <TouchableOpacity
-                          style={styles.searchButton}
-                          onPress={handleSearch}
-                          disabled={searchLoading}
-                          activeOpacity={0.85}
-                        >
-                          {searchLoading ? (
-                            <ActivityIndicator size="small" color={colors.surface} />
-                          ) : (
-                            <Ionicons name="search" size={18} color={colors.surface} />
-                          )}
-                        </TouchableOpacity>
+                      <View style={styles.searchWrap}>
+                        <View style={styles.searchRow}>
+                          <TextInput
+                            style={styles.searchInput}
+                            value={searchQuery}
+                            onChangeText={setSearchQuery}
+                            placeholder="Search area, street or landmark…"
+                            placeholderTextColor={colors.textTertiary}
+                            returnKeyType="search"
+                            onSubmitEditing={handleSearch}
+                            onFocus={() => setSearchFocused(true)}
+                            onBlur={() => {
+                              setTimeout(() => setSearchFocused(false), 300);
+                            }}
+                          />
+                          <TouchableOpacity
+                            style={styles.searchButton}
+                            onPress={handleSearch}
+                            disabled={searchLoading}
+                            activeOpacity={0.85}
+                          >
+                            {searchLoading ? (
+                              <ActivityIndicator size="small" color={colors.surface} />
+                            ) : (
+                              <Ionicons name="search" size={18} color={colors.surface} />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {searchFocused && (predictions.length > 0 || predictionsLoading) && (
+                          <View style={styles.suggestionsBox}>
+                            {predictionsLoading ? (
+                              <View style={styles.suggestionsLoading}>
+                                <ActivityIndicator size="small" color={colors.primary} />
+                                <Text style={styles.suggestionsLoadingText}>Finding places…</Text>
+                              </View>
+                            ) : (
+                              predictions.map((p) => (
+                                <Pressable
+                                  key={p.place_id}
+                                  style={({ pressed }) => [
+                                    styles.suggestionRow,
+                                    pressed && styles.suggestionRowPressed,
+                                  ]}
+                                  onPress={() => selectPrediction(p)}
+                                >
+                                  <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
+                                  <Text style={styles.suggestionText} numberOfLines={2}>
+                                    {p.description}
+                                  </Text>
+                                </Pressable>
+                              ))
+                            )}
+                          </View>
+                        )}
                       </View>
                     )}
 
@@ -364,9 +490,9 @@ export default function StoreOwnerSignupScreen() {
                         <View style={styles.devMapPlaceholder}>
                           <Ionicons name="map-outline" size={40} color={colors.textTertiary} />
                           <Text style={styles.devMapPlaceholderText}>
-                            {__DEV__
-                              ? "Map, search, and GPS are disabled in development. Default coordinates are used — fill the address below to complete signup."
-                              : "Set EXPO_PUBLIC_GOOGLE_MAPS_API_KEY in your production build. Until then, default coordinates are used — fill the address below."}
+                            Set EXPO_PUBLIC_GOOGLE_MAPS_API_KEY in your .env or build environment. Until then, default
+                            coordinates are used — fill the address below. Enable Places API on the key for search
+                            suggestions.
                           </Text>
                         </View>
                       ) : locating ? (
@@ -381,6 +507,7 @@ export default function StoreOwnerSignupScreen() {
                             style={styles.map}
                             provider={PROVIDER_GOOGLE}
                             initialRegion={region}
+                            userInterfaceStyle="light"
                             onRegionChange={handleRegionChange}
                             onRegionChangeComplete={handleRegionChangeComplete}
                             scrollEnabled
@@ -398,6 +525,20 @@ export default function StoreOwnerSignupScreen() {
                               </View>
                             </View>
                           </View>
+
+                          <TouchableOpacity
+                            style={styles.recenterButton}
+                            onPress={handleRecenterOnDevice}
+                            disabled={recentering || locating}
+                            activeOpacity={0.85}
+                            accessibilityLabel="Center map on my location"
+                          >
+                            {recentering ? (
+                              <ActivityIndicator size="small" color={colors.primary} />
+                            ) : (
+                              <Ionicons name="navigate" size={22} color={colors.primary} />
+                            )}
+                          </TouchableOpacity>
                         </>
                       )}
                     </View>
@@ -585,8 +726,6 @@ const styles = StyleSheet.create({
   searchRow: {
     flexDirection: "row",
     gap: spacing.sm,
-    marginTop: spacing.sm,
-    marginBottom: spacing.sm,
   },
   searchInput: {
     flex: 1,
@@ -607,6 +746,40 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  searchWrap: {
+    zIndex: 20,
+    elevation: 8,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  suggestionsBox: {
+    marginTop: 4,
+    maxHeight: 220,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    overflow: "hidden",
+  },
+  suggestionsLoading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+  },
+  suggestionsLoadingText: { fontSize: 13, color: colors.textSecondary },
+  suggestionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  suggestionRowPressed: { backgroundColor: colors.surfaceVariant },
+  suggestionText: { flex: 1, fontSize: 14, color: colors.textPrimary, lineHeight: 19 },
 
   // Map container + pin
   mapContainer: {
@@ -652,6 +825,25 @@ const styles = StyleSheet.create({
     bottom: 0,
     alignItems: "center",
     justifyContent: "center",
+  },
+  recenterButton: {
+    position: "absolute",
+    right: 10,
+    bottom: 10,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 6,
+    elevation: 6,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.22,
+    shadowRadius: 2.5,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
 
   // Coordinates label

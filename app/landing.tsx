@@ -82,7 +82,9 @@ export default function LandingScreen() {
             activeOpacity={0.85}
           >
             <Text style={styles.primaryButtonText}>Login</Text>
-            <Text style={styles.primaryHint}>Use your phone number & OTP</Text>
+            <Text style={styles.primaryHint}>
+              {__DEV__ ? "Phone number, then Dev Login (no OTP)" : "Use your phone number & OTP"}
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -91,12 +93,16 @@ export default function LandingScreen() {
             activeOpacity={0.85}
           >
             <Text style={styles.secondaryButtonText}>New store</Text>
-            <Text style={styles.secondaryHint}>Set up your store (phone + OTP)</Text>
+            <Text style={styles.secondaryHint}>
+              {__DEV__ ? "Phone number, then Dev: New Store" : "Set up your store (phone + OTP)"}
+            </Text>
           </TouchableOpacity>
         </View>
 
         <Text style={styles.footer}>
-          Same verification as the main Near&Now app — phone & OTP only.
+          {__DEV__
+            ? "Development build — OTP is disabled. Production uses phone & OTP only."
+            : "Same verification as the main Near&Now app — phone & OTP only."}
         </Text>
 
         {__DEV__ && (

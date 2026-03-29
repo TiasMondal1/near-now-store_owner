@@ -12,7 +12,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import { apiUrl } from "../lib/apiUrl";
+import { buildDevLoginBody } from "../lib/devLoginPayload";
+import { coalesceEmail } from "../lib/emailForApi";
 import { config } from "../lib/config";
+import { normalizeToShopkeeperRole } from "../lib/shopkeeperRole";
 import { saveSession } from "../session";
 import { colors, radius, spacing } from "../lib/theme";
 
@@ -36,41 +40,61 @@ export default function StoreOwnerPhoneScreen() {
   const handleDevLogin = async () => {
     if (!isValid || devLoading) return;
     const fullPhone = `+91${phone}`;
-    const baseUrl = API_BASE.replace(/\/+$/, "");
+    const body = buildDevLoginBody(phone);
 
     setDevLoading(true);
     try {
-      // Calls a dev-only backend endpoint that authenticates by phone number
-      // without OTP. The backend must guard this route with a dev/env check.
-      // Expected response: { token: string, user: { id, name, role, phone, isActivated } }
-      const res = await fetch(`${baseUrl}/api/auth/dev-login`, {
+      const url = apiUrl(API_BASE, "/auth/dev-login");
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: fullPhone, role: "shopkeeper" }),
+        body: JSON.stringify(body),
       });
+      const lastStatus = res.status;
+      const lastRaw = await res.text();
+      let lastJson: any = null;
+      try {
+        lastJson = lastRaw ? JSON.parse(lastRaw) : null;
+      } catch {
+        lastJson = null;
+      }
 
-      const raw = await res.text();
-      let json: any = null;
-      try { json = raw ? JSON.parse(raw) : null; } catch { /* non-JSON */ }
+      const token =
+        lastJson?.token ??
+        lastJson?.data?.token ??
+        lastJson?.access_token ??
+        lastJson?.data?.access_token;
+      const user = lastJson?.user ?? lastJson?.data?.user ?? null;
 
-      if (!res.ok || !json?.token || !json?.user) {
-        const msg = json?.error || json?.message || `No shopkeeper found for ${fullPhone}`;
-        Alert.alert("Dev Login Failed", msg);
+      if (res.ok && token && user && (user.id ?? user.userId ?? user.user_id)) {
+        await saveSession({
+          token,
+          user: {
+            id: String(user.id ?? user.userId ?? user.user_id ?? ""),
+            name: user.name ?? user.full_name ?? "Shopkeeper",
+            role: normalizeToShopkeeperRole(user.role),
+            isActivated: user.isActivated ?? user.is_activated ?? true,
+            phone: user.phone ?? fullPhone,
+            email: (() => {
+              const e = coalesceEmail(user.email, "");
+              return e || undefined;
+            })(),
+          },
+        });
+        router.replace("/owner-home");
         return;
       }
 
-      await saveSession({
-        token: json.token,
-        user: {
-          id: json.user.id,
-          name: json.user.name ?? json.user.full_name ?? "Shopkeeper",
-          role: json.user.role ?? "shopkeeper",
-          isActivated: json.user.isActivated ?? json.user.is_activated ?? true,
-          phone: json.user.phone ?? fullPhone,
-          email: json.user.email ?? undefined,
-        },
-      });
-      router.replace("/owner-home");
+      const hint =
+        __DEV__ && lastRaw
+          ? `\n\nHTTP ${lastStatus}\n${lastRaw.slice(0, 280)}${lastRaw.length > 280 ? "…" : ""}`
+          : "";
+      const notFound =
+        lastStatus === 404
+          ? `No route at:\n${url}\n\nOn your Next.js API add: app/api/auth/dev-login/route.ts exporting POST. It should find app_users by phone (try body.phone, phoneE164, phoneNational10) and return JSON { token, user }.\n\nCheck EXPO_PUBLIC_API_BASE_URL — if it already ends with /api, paths are correct; if not, base should be origin only (e.g. https://your-app.vercel.app).`
+          : `No shopkeeper found for ${fullPhone}. Server must return JSON with token + user (id, name, role, phone). Request sends phone variants in the body for DB matching.${hint}`;
+      const msg = lastJson?.error || lastJson?.message || notFound;
+      Alert.alert("Dev Login Failed", msg);
     } catch (e: any) {
       const msg = e?.message || String(e);
       Alert.alert(
@@ -101,7 +125,7 @@ export default function StoreOwnerPhoneScreen() {
 
     try {
       setLoading(true);
-      const url = `${baseUrl}/api/auth/send-otp`;
+      const url = apiUrl(API_BASE, "/auth/send-otp");
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -211,39 +235,30 @@ export default function StoreOwnerPhoneScreen() {
               />
             </View>
             <Text style={styles.helperText}>
-              We&apos;ll send an OTP to verify that you own this number.
+              {__DEV__
+                ? "Development: no OTP. Use Dev Login (existing shopkeeper) or Dev New Store (signup)."
+                : "We'll send an OTP to verify that you own this number."}
             </Text>
           </View>
 
           <View style={styles.bottomSection}>
-            <TouchableOpacity
-              activeOpacity={isValid && !loading ? 0.85 : 1}
-              onPress={handleContinueWithOtp}
-              disabled={!isValid || loading}
-              style={[
-                styles.primaryButton,
-                (!isValid || loading) && styles.buttonDisabled,
-              ]}
-            >
-              {loading ? (
-                <ActivityIndicator color={colors.surface} />
-              ) : (
-                <Text style={styles.primaryButtonText}>Continue with OTP</Text>
-              )}
-            </TouchableOpacity>
-
-            {__DEV__ && config.DEV_SKIP_OTP && (
+            {__DEV__ ? (
               <View style={styles.devRow}>
                 <TouchableOpacity
                   activeOpacity={isValid && !devLoading ? 0.85 : 1}
                   onPress={handleDevLogin}
                   disabled={!isValid || devLoading}
-                  style={[styles.devSkipButton, styles.devSkipButtonHalf, (!isValid || devLoading) && styles.buttonDisabled]}
+                  style={[
+                    styles.devSkipButton,
+                    styles.devSkipButtonHalf,
+                    (!isValid || devLoading) && styles.buttonDisabled,
+                  ]}
                 >
-                  {devLoading
-                    ? <ActivityIndicator size="small" color="#ffcc00" />
-                    : <Text style={styles.devSkipButtonText}>Dev: Login</Text>
-                  }
+                  {devLoading ? (
+                    <ActivityIndicator size="small" color="#ffcc00" />
+                  ) : (
+                    <Text style={styles.devSkipButtonText}>Dev: Login</Text>
+                  )}
                 </TouchableOpacity>
                 <TouchableOpacity
                   activeOpacity={isValid ? 0.85 : 1}
@@ -254,6 +269,19 @@ export default function StoreOwnerPhoneScreen() {
                   <Text style={styles.devSkipButtonText}>Dev: New Store</Text>
                 </TouchableOpacity>
               </View>
+            ) : (
+              <TouchableOpacity
+                activeOpacity={isValid && !loading ? 0.85 : 1}
+                onPress={handleContinueWithOtp}
+                disabled={!isValid || loading}
+                style={[styles.primaryButton, (!isValid || loading) && styles.buttonDisabled]}
+              >
+                {loading ? (
+                  <ActivityIndicator color={colors.surface} />
+                ) : (
+                  <Text style={styles.primaryButtonText}>Continue with OTP</Text>
+                )}
+              </TouchableOpacity>
             )}
 
             <Text style={styles.termsText}>

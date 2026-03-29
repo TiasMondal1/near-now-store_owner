@@ -1,5 +1,5 @@
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -14,7 +14,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, router } from "expo-router";
 import { saveSession } from "../session";
+import { coalesceEmail } from "../lib/emailForApi";
 import { config } from "../lib/config";
+import { isShopkeeperAppRole, normalizeToShopkeeperRole } from "../lib/shopkeeperRole";
 import { colors, radius, spacing } from "../lib/theme";
 
 const API_BASE = config.API_BASE;
@@ -34,6 +36,11 @@ export default function StoreOwnerOtpScreen() {
 
   const inputsRef = useRef<Array<TextInput | null>>([]);
 
+  useLayoutEffect(() => {
+    if (__DEV__) {
+      router.replace("/App");
+    }
+  }, []);
 
   useEffect(() => {
     if (secondsLeft <= 0) return;
@@ -158,7 +165,7 @@ export default function StoreOwnerOtpScreen() {
 
       // Backend must filter by role (WHERE phone = ? AND role = 'shopkeeper').
       // If it returns a different role it found the wrong account for this phone.
-      if (hasToken && user?.role && user.role !== "shopkeeper" && user.role !== "store_owner") {
+      if (hasToken && user?.role && !isShopkeeperAppRole(user.role)) {
         if (__DEV__) {
           console.error("[otp] Backend returned wrong role:", user.role);
         }
@@ -176,10 +183,13 @@ export default function StoreOwnerOtpScreen() {
           user: {
             id: user?.id ?? json.userId ?? json.data?.userId ?? "",
             name: user?.name ?? user?.full_name ?? "Shopkeeper",
-            role: user?.role ?? "shopkeeper",
+            role: normalizeToShopkeeperRole(user?.role),
             isActivated: user?.isActivated ?? user?.is_activated ?? true,
             phone: user?.phone ?? phone,
-            email: user?.email ?? undefined,
+            email: (() => {
+              const e = coalesceEmail(user?.email, "");
+              return e || undefined;
+            })(),
           },
         };
         await saveSession(sessionData);
