@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, router } from "expo-router";
 import { saveSession } from "../session";
 import { config } from "../lib/config";
+import { isMapsProductionEnabled } from "../lib/maps-env";
 import { colors, radius, spacing } from "../lib/theme";
 
 const API_BASE = config.API_BASE;
@@ -29,6 +30,7 @@ const PIN_SIZE = 42;
 const PIN_REST_Y = -(PIN_SIZE / 2);
 
 export default function StoreOwnerSignupScreen() {
+  const mapsEnabled = isMapsProductionEnabled();
   const params = useLocalSearchParams();
   const phone = typeof params.phone === "string" ? params.phone : "";
 
@@ -67,9 +69,9 @@ export default function StoreOwnerSignupScreen() {
   // ── Refs ─────────────────────────────────────────────────────────────────────
   const mapRef = useRef<MapView>(null);
 
-  // ── GPS on first map open ────────────────────────────────────────────────────
+  // ── GPS on first map open (production + API key only) ────────────────────────
   useEffect(() => {
-    if (!mapExpanded) return;
+    if (!mapExpanded || !mapsEnabled) return;
     let cancelled = false;
     (async () => {
       setLocating(true);
@@ -92,7 +94,7 @@ export default function StoreOwnerSignupScreen() {
       }
     })();
     return () => { cancelled = true; };
-  }, [mapExpanded]);
+  }, [mapExpanded, mapsEnabled]);
 
   // ── Map pan handlers ─────────────────────────────────────────────────────────
   const handleRegionChange = () => {
@@ -106,6 +108,7 @@ export default function StoreOwnerSignupScreen() {
 
   // ── Geocoding search ─────────────────────────────────────────────────────────
   const handleSearch = async () => {
+    if (!mapsEnabled) return;
     const q = searchQuery.trim();
     if (!q || searchLoading) return;
     try {
@@ -242,7 +245,11 @@ export default function StoreOwnerSignupScreen() {
               <Text style={styles.tag}>Near&Now · Shopkeeper</Text>
               <Text style={styles.title}>Set up your store</Text>
               <Text style={styles.subtitle}>
-                Pan the map to drop the pin on your shop entrance, then fill in your address below.
+                {mapsEnabled
+                  ? "Pan the map to drop the pin on your shop entrance, then fill in your address below."
+                  : __DEV__
+                    ? "Development: enter your store address below. Map, search, and GPS run in a production build with your Maps API key."
+                    : "Enter your store address below. Set EXPO_PUBLIC_GOOGLE_MAPS_API_KEY in your production build to enable the map and search."}
               </Text>
             </View>
 
@@ -307,44 +314,62 @@ export default function StoreOwnerSignupScreen() {
                     activeOpacity={0.85}
                   >
                     <Ionicons name="location-outline" size={28} color={colors.primary} />
-                    <Text style={styles.mapTriggerText}>Tap to pin your store on the map</Text>
-                    <Text style={styles.mapTriggerSub}>Pan the map to place the pin exactly</Text>
+                    <Text style={styles.mapTriggerText}>
+                      {mapsEnabled ? "Tap to pin your store on the map" : "Tap to enter store location & address"}
+                    </Text>
+                    <Text style={styles.mapTriggerSub}>
+                      {mapsEnabled
+                        ? "Pan the map to place the pin exactly"
+                        : __DEV__
+                          ? "No map in dev — use address fields. Production APK enables map + search."
+                          : "Add EXPO_PUBLIC_GOOGLE_MAPS_API_KEY to enable map, search, and GPS."}
+                    </Text>
                   </TouchableOpacity>
                 ) : (
                   <>
-                    {/* Search bar */}
-                    <View style={styles.searchRow}>
-                      <TextInput
-                        style={styles.searchInput}
-                        value={searchQuery}
-                        onChangeText={setSearchQuery}
-                        placeholder="Search area, street or landmark…"
-                        placeholderTextColor={colors.textTertiary}
-                        returnKeyType="search"
-                        onSubmitEditing={handleSearch}
-                      />
-                      <TouchableOpacity
-                        style={styles.searchButton}
-                        onPress={handleSearch}
-                        disabled={searchLoading}
-                        activeOpacity={0.85}
-                      >
-                        {searchLoading ? (
-                          <ActivityIndicator size="small" color={colors.surface} />
-                        ) : (
-                          <Ionicons name="search" size={18} color={colors.surface} />
-                        )}
-                      </TouchableOpacity>
-                    </View>
+                    {mapsEnabled && (
+                      <View style={styles.searchRow}>
+                        <TextInput
+                          style={styles.searchInput}
+                          value={searchQuery}
+                          onChangeText={setSearchQuery}
+                          placeholder="Search area, street or landmark…"
+                          placeholderTextColor={colors.textTertiary}
+                          returnKeyType="search"
+                          onSubmitEditing={handleSearch}
+                        />
+                        <TouchableOpacity
+                          style={styles.searchButton}
+                          onPress={handleSearch}
+                          disabled={searchLoading}
+                          activeOpacity={0.85}
+                        >
+                          {searchLoading ? (
+                            <ActivityIndicator size="small" color={colors.surface} />
+                          ) : (
+                            <Ionicons name="search" size={18} color={colors.surface} />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    )}
 
-                    {/* Map + center pin */}
                     <View
                       style={styles.mapContainer}
-                      onTouchStart={() => setScrollEnabled(false)}
-                      onTouchEnd={() => setScrollEnabled(true)}
-                      onTouchCancel={() => setScrollEnabled(true)}
+                      collapsable={false}
+                      onTouchStart={mapsEnabled ? () => setScrollEnabled(false) : undefined}
+                      onTouchEnd={mapsEnabled ? () => setScrollEnabled(true) : undefined}
+                      onTouchCancel={mapsEnabled ? () => setScrollEnabled(true) : undefined}
                     >
-                      {locating ? (
+                      {!mapsEnabled ? (
+                        <View style={styles.devMapPlaceholder}>
+                          <Ionicons name="map-outline" size={40} color={colors.textTertiary} />
+                          <Text style={styles.devMapPlaceholderText}>
+                            {__DEV__
+                              ? "Map, search, and GPS are disabled in development. Default coordinates are used — fill the address below to complete signup."
+                              : "Set EXPO_PUBLIC_GOOGLE_MAPS_API_KEY in your production build. Until then, default coordinates are used — fill the address below."}
+                          </Text>
+                        </View>
+                      ) : locating ? (
                         <View style={styles.mapPlaceholderCenter}>
                           <ActivityIndicator />
                           <Text style={styles.locatingText}>Fetching location…</Text>
@@ -361,9 +386,11 @@ export default function StoreOwnerSignupScreen() {
                             scrollEnabled
                             zoomEnabled
                             moveOnMarkerPress={false}
+                            {...(Platform.OS === "android"
+                              ? { poiClickEnabled: false }
+                              : {})}
                           />
 
-                          {/* Drop-pin overlay — no touch events */}
                           <View style={styles.pinOverlay} pointerEvents="none">
                             <View style={styles.pinCenterLayer}>
                               <View style={{ transform: [{ translateY: PIN_REST_Y }] }}>
@@ -375,17 +402,18 @@ export default function StoreOwnerSignupScreen() {
                       )}
                     </View>
 
-                    {/* Current coordinates reference */}
                     <View style={styles.coordsRow}>
                       <Ionicons
-                        name={isMoving ? "locate-outline" : "checkmark-circle"}
+                        name={mapsEnabled && isMoving ? "locate-outline" : "checkmark-circle"}
                         size={14}
-                        color={isMoving ? colors.textTertiary : colors.primary}
+                        color={mapsEnabled && isMoving ? colors.textTertiary : colors.primary}
                       />
-                      <Text style={[styles.coordsLabel, isMoving && styles.coordsMoving]}>
-                        {isMoving
-                          ? "  Moving…"
-                          : `  ${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`}
+                      <Text style={[styles.coordsLabel, mapsEnabled && isMoving && styles.coordsMoving]}>
+                        {!mapsEnabled
+                          ? `  Default pin: ${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`
+                          : isMoving
+                            ? "  Moving…"
+                            : `  ${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`}
                       </Text>
                     </View>
                   </>
@@ -591,6 +619,21 @@ const styles = StyleSheet.create({
   map: { flex: 1 },
   mapPlaceholderCenter: { flex: 1, alignItems: "center", justifyContent: "center" },
   locatingText: { color: colors.textSecondary, marginTop: 8, fontSize: 13 },
+  devMapPlaceholder: {
+    flex: 1,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.surfaceVariant,
+  },
+  devMapPlaceholderText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    textAlign: "center",
+    lineHeight: 19,
+  },
 
   // Drop-pin overlay
   pinOverlay: {

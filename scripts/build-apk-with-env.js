@@ -30,10 +30,12 @@ if (fs.existsSync(envPath)) {
   const apiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || "";
   const supaUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || "";
   const supaKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "";
+  const mapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || "";
   console.log("Loaded .env:");
   console.log("  EXPO_PUBLIC_API_BASE_URL     =", apiUrl || "(not set)");
   console.log("  EXPO_PUBLIC_SUPABASE_URL     =", supaUrl || "(not set)");
   console.log("  EXPO_PUBLIC_SUPABASE_ANON_KEY=", supaKey ? supaKey.slice(0, 20) + "…" : "(not set)");
+  console.log("  EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=", mapsKey ? mapsKey.slice(0, 8) + "… (native manifest + JS)" : "(not set — MapView may crash or show blank in release)");
   if (!supaUrl || !supaKey) {
     console.error("\nERROR: EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY is missing from .env");
     console.error("The built APK will have no Supabase connection. Add them to .env and rebuild.\n");

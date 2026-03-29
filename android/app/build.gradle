@@ -96,6 +96,10 @@ android {
         versionName "1.0.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
+
+        // Same key as JS (Geocoding + MapView). Must be present at Gradle time for release APK/AAB — e.g. EAS env or `npm run build:apk` (loads .env into process.env).
+        def googleMapsKey = System.getenv('EXPO_PUBLIC_GOOGLE_MAPS_API_KEY') ?: System.getenv('VITE_GOOGLE_MAPS_API_KEY') ?: ''
+        manifestPlaceholders = [GOOGLE_MAPS_API_KEY: googleMapsKey]
     }
     signingConfigs {
         debug {
