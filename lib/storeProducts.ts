@@ -165,6 +165,187 @@ export async function upsertStoreProduct(
   return { error: "No id returned after insert" };
 }
 
+const PG_UNIQUE_VIOLATION = "23505";
+
+/**
+ * Ensures a row exists in public.categories (FK target for master_products.category).
+ */
+export async function ensureCategoryExists(
+  categoryName: string
+): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
+  if (!supabase) return { ok: false, error: "Supabase not configured" };
+  const name = categoryName.trim();
+  if (!name) return { ok: false, error: "Category is required" };
+
+  const { data: existing, error: selErr } = await supabase
+    .from("categories")
+    .select("name")
+    .eq("name", name)
+    .maybeSingle();
+
+  if (selErr) return { ok: false, error: selErr.message };
+  if (existing?.name) return { ok: true, name: String(existing.name) };
+
+  const { error: insErr } = await supabase.from("categories").insert({
+    name,
+    display_order: 0,
+  });
+
+  if (insErr) {
+    if (insErr.code === PG_UNIQUE_VIOLATION) return { ok: true, name };
+    return { ok: false, error: insErr.message };
+  }
+
+  return { ok: true, name };
+}
+
+export type AddCustomMasterProductInput = {
+  name: string;
+  brand?: string;
+  category: string;
+  description?: string | null;
+  /** Resolved image: data URL or https URL. */
+  image_url: string;
+  /** master_products.unit. For loose items pass "" to use DEFAULT_LOOSE_MASTER_PRODUCT_UNIT. */
+  unit: string;
+  base_price: number;
+  discounted_price: number;
+  is_loose: boolean;
+  min_quantity?: number;
+  max_quantity?: number;
+  is_active?: boolean;
+  /** 0–5; defaults to 4 if omitted */
+  rating?: number;
+  rating_count?: number;
+};
+
+/** Fallback if is_loose but unit is missing (use unitForLoosePricingBasis from the form when possible). */
+export const DEFAULT_LOOSE_MASTER_PRODUCT_UNIT = "1kg";
+
+export type LoosePricingBasis = "kg" | "l";
+
+/** Stored in master_products.unit: prices are per 1 kg or per 1 litre. */
+export function unitForLoosePricingBasis(basis: LoosePricingBasis): string {
+  return basis === "kg" ? "1kg" : "1l";
+}
+
+/** Builds master_products.unit from amount + suffix (e.g. 200 + "g" → "200g", 300 + "ml" → "300ml"). */
+export function formatMasterProductUnit(amount: number, unitSuffix: string): string {
+  const suffix = unitSuffix.trim();
+  if (!suffix) return "";
+  if (!Number.isFinite(amount) || amount <= 0) return suffix;
+  const n =
+    Math.abs(amount - Math.round(amount)) < 1e-9
+      ? String(Math.round(amount))
+      : String(amount);
+  return `${n}${suffix}`;
+}
+
+export type AddCustomMasterProductResult =
+  | { success: true; masterProductId: string }
+  | { success: false; error: string };
+
+/**
+ * Inserts public.master_products only (and creates category if missing).
+ * Does not write to products — add to store inventory separately.
+ */
+export async function addCustomMasterProduct(
+  input: AddCustomMasterProductInput
+): Promise<AddCustomMasterProductResult> {
+  if (!supabase) return { success: false, error: "Supabase not configured" };
+
+  const productName = input.name.trim();
+  let unit = input.unit.trim();
+  if (input.is_loose && !unit) {
+    unit = DEFAULT_LOOSE_MASTER_PRODUCT_UNIT;
+  }
+  if (!productName) {
+    return { success: false, error: "Product name is required" };
+  }
+  if (!unit) {
+    return { success: false, error: "Pack amount and unit are required for non-loose products" };
+  }
+
+  const img = input.image_url.trim();
+  if (!img) {
+    return { success: false, error: "Add a product photo or an image URL" };
+  }
+
+  const base = Number(input.base_price);
+  const disc = Number(input.discounted_price);
+  if (!Number.isFinite(base) || base < 0) {
+    return { success: false, error: "Enter a valid base (MRP) price" };
+  }
+  if (!Number.isFinite(disc) || disc < 0) {
+    return { success: false, error: "Enter a valid discounted / selling price" };
+  }
+  if (disc > base) {
+    return {
+      success: false,
+      error: "Selling price cannot be higher than base price (discounted ≤ base).",
+    };
+  }
+
+  const minQ = input.min_quantity ?? 1;
+  const maxQ = input.max_quantity ?? 100;
+  if (!Number.isFinite(minQ) || minQ <= 0) {
+    return { success: false, error: "Min quantity must be a positive number" };
+  }
+  if (!Number.isFinite(maxQ) || maxQ < minQ) {
+    return { success: false, error: "Max quantity must be ≥ min quantity" };
+  }
+
+  let rating = input.rating ?? 4;
+  if (!Number.isFinite(rating) || rating < 0 || rating > 5) {
+    return { success: false, error: "Rating must be between 0 and 5" };
+  }
+  const ratingCount =
+    input.rating_count !== undefined && Number.isFinite(input.rating_count)
+      ? Math.max(0, Math.floor(input.rating_count))
+      : 0;
+
+  const cat = await ensureCategoryExists(input.category);
+  if (!cat.ok) return { success: false, error: cat.error };
+
+  const brandTrim = input.brand?.trim() ?? "";
+  const descTrim = input.description?.trim() ?? "";
+  const insertRow = {
+    name: productName,
+    category: cat.name,
+    brand: brandTrim || null,
+    description: descTrim || null,
+    image_url: img,
+    base_price: base,
+    discounted_price: disc,
+    unit,
+    is_loose: Boolean(input.is_loose),
+    min_quantity: minQ,
+    max_quantity: maxQ,
+    rating,
+    rating_count: ratingCount,
+    is_active: input.is_active !== false,
+  };
+
+  const { data: masterRow, error: masterErr } = await supabase
+    .from("master_products")
+    .insert(insertRow)
+    .select("id")
+    .single();
+
+  if (masterErr || !masterRow?.id) {
+    return {
+      success: false,
+      error: masterErr?.message ?? "Failed to create master product",
+    };
+  }
+
+  const masterId = String(masterRow.id);
+  return {
+    success: true,
+    masterProductId: masterId,
+  };
+}
+
 /**
  * Toggle a product's active state.
  * Active   → is_active=true

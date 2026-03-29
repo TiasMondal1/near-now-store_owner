@@ -44,7 +44,7 @@ module.exports = () => ({
   extra: {
     apiBaseUrl:
       process.env.EXPO_PUBLIC_API_BASE_URL ||
-      "https://near-and-now-backend-production.up.railway.app/",
+      "https://near-and-now-frontend.vercel.app/",
     supabaseUrl:
       process.env.EXPO_PUBLIC_SUPABASE_URL ||
       process.env.VITE_SUPABASE_URL ||

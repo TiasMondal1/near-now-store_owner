@@ -9,6 +9,7 @@ import {
   TextInput,
   Alert,
   Image,
+  Switch,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
@@ -18,7 +19,14 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { config } from "../../lib/config";
 import { colors, radius, spacing } from "../../lib/theme";
-import { getMergedInventoryFromDb, upsertStoreProduct } from "../../lib/storeProducts";
+import {
+  addCustomMasterProduct,
+  formatMasterProductUnit,
+  getMergedInventoryFromDb,
+  unitForLoosePricingBasis,
+  upsertStoreProduct,
+  type LoosePricingBasis,
+} from "../../lib/storeProducts";
 
 const API_BASE = config.API_BASE;
 
@@ -36,6 +44,7 @@ export default function StockTab() {
   const [storeId, setStoreId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState<"inventory" | "custom">("inventory");
+  const [inventoryRefreshKey, setInventoryRefreshKey] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -123,18 +132,30 @@ export default function StockTab() {
         </View>
 
         {activeView === "inventory" && (
-          <InventoryCatalogSection storeId={storeId} token={session?.token} />
+          <InventoryCatalogSection
+            storeId={storeId}
+            token={session?.token}
+            refreshKey={inventoryRefreshKey}
+          />
         )}
 
         {activeView === "custom" && (
-          <AddCustomSection storeId={storeId} token={session?.token} />
+          <AddCustomSection onAdded={() => setInventoryRefreshKey((k) => k + 1)} />
         )}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function InventoryCatalogSection({ storeId, token }: { storeId?: string | null; token?: string }) {
+function InventoryCatalogSection({
+  storeId,
+  token,
+  refreshKey,
+}: {
+  storeId?: string | null;
+  token?: string;
+  refreshKey?: number;
+}) {
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState<any[]>([]);
   const [search, setSearch] = useState("");
@@ -211,7 +232,7 @@ function InventoryCatalogSection({ storeId, token }: { storeId?: string | null; 
         setLoading(false);
       }
     })();
-  }, [storeId, token]);
+  }, [storeId, token, refreshKey]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -398,15 +419,24 @@ function InventoryCatalogSection({ storeId, token }: { storeId?: string | null; 
   );
 }
 
-function AddCustomSection({ storeId, token }: { storeId?: string | null; token?: string }) {
+function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
   const [name, setName] = useState("");
   const [brand, setBrand] = useState("");
   const [category, setCategory] = useState("");
-  const [subcategory, setSubcategory] = useState("");
-  const [unit, setUnit] = useState("");
-  const [price, setPrice] = useState("");
+  const [description, setDescription] = useState("");
+  const [isLoose, setIsLoose] = useState(false);
+  const [looseBasis, setLooseBasis] = useState<LoosePricingBasis | null>(null);
+  const [packAmount, setPackAmount] = useState("");
+  const [packSuffix, setPackSuffix] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [imageUrlLink, setImageUrlLink] = useState("");
+  const [basePrice, setBasePrice] = useState("");
+  const [discountedPrice, setDiscountedPrice] = useState("");
+  const [minQty, setMinQty] = useState("");
+  const [maxQty, setMaxQty] = useState("");
+  const [isActive, setIsActive] = useState(true);
+  const [rating, setRating] = useState("");
   const [saving, setSaving] = useState(false);
 
   const UNITS = ["kg", "g", "l", "ml", "pcs", "units", "bunch", "pack"];
@@ -440,56 +470,111 @@ function AddCustomSection({ storeId, token }: { storeId?: string | null; token?:
   };
 
   const addCustom = async () => {
-    if (!storeId || !token) {
-      Alert.alert("Not ready", "Store information is still loading. Please try again in a moment.");
+    if (!name.trim() || !category.trim()) {
+      Alert.alert("Missing fields", "Name and category are required.");
       return;
     }
-    if (!name || !category || !unit || !price || !imageUri || !imageBase64) {
-      Alert.alert("Missing fields", "All fields marked * are required.");
+
+    const imageUrl =
+      imageBase64 != null
+        ? `data:image/jpeg;base64,${imageBase64}`
+        : imageUrlLink.trim();
+    if (!imageUrl) {
+      Alert.alert("Image required", "Add a photo or paste an image URL.");
       return;
     }
-    try {
-      setSaving(true);
-      const res = await fetch(
-        `${API_BASE}/store-owner/stores/${storeId}/products/custom`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            name,
-            brand,
-            category,
-            subcategory,
-            unit,
-            image_url: `data:image/jpeg;base64,${imageBase64}`,
-            price: Number(price),
-            quantity: 100,
-          }),
-        }
-      );
-      const raw = await res.text();
-      let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {
-        json = null;
-      }
-      if (!res.ok || !json?.success) {
-        Alert.alert("Error", "Failed to add product.");
+
+    let unitStr = "";
+    if (isLoose) {
+      if (!looseBasis) {
+        Alert.alert("Loose item", "Choose per 1 kg or per 1 litre.");
         return;
       }
-      Alert.alert("Success", "Custom product added to your stock!");
+      unitStr = unitForLoosePricingBasis(looseBasis);
+    } else {
+      const pa = Number(String(packAmount).replace(/,/g, "").trim());
+      if (!packSuffix || !Number.isFinite(pa) || pa <= 0) {
+        Alert.alert("Pack size", "Enter pack amount and unit (e.g. 200 + g).");
+        return;
+      }
+      unitStr = formatMasterProductUnit(pa, packSuffix);
+    }
+
+    const base = Number(String(basePrice).replace(/,/g, "").trim());
+    const disc = Number(String(discountedPrice).replace(/,/g, "").trim());
+    if (!Number.isFinite(base) || base < 0 || !Number.isFinite(disc) || disc < 0) {
+      Alert.alert("Pricing", "Enter valid base and selling prices.");
+      return;
+    }
+    if (disc > base) {
+      Alert.alert("Pricing", "Selling price cannot be higher than base (MRP).");
+      return;
+    }
+
+    const minParsed = minQty.trim() === "" ? 1 : Number(String(minQty).replace(/,/g, "").trim());
+    const maxParsed = maxQty.trim() === "" ? 100 : Number(String(maxQty).replace(/,/g, "").trim());
+    if (!Number.isFinite(minParsed) || minParsed <= 0) {
+      Alert.alert("Quantities", "Min quantity must be positive.");
+      return;
+    }
+    if (!Number.isFinite(maxParsed) || maxParsed < minParsed) {
+      Alert.alert("Quantities", "Max quantity must be ≥ min quantity.");
+      return;
+    }
+
+    let ratingVal = 4;
+    if (rating.trim() !== "") {
+      ratingVal = Number(String(rating).replace(/,/g, "").trim());
+      if (!Number.isFinite(ratingVal) || ratingVal < 0 || ratingVal > 5) {
+        Alert.alert("Rating", "Rating must be between 0 and 5.");
+        return;
+      }
+    }
+
+    try {
+      setSaving(true);
+      const result = await addCustomMasterProduct({
+        name: name.trim(),
+        brand,
+        category,
+        description: description.trim() || null,
+        image_url: imageUrl,
+        unit: unitStr,
+        base_price: base,
+        discounted_price: disc,
+        is_loose: isLoose,
+        min_quantity: minParsed,
+        max_quantity: maxParsed,
+        is_active: isActive,
+        rating: ratingVal,
+        rating_count: 0,
+      });
+      if (!result.success) {
+        Alert.alert("Error", result.error || "Failed to add product.");
+        return;
+      }
+      onAdded?.();
+      Alert.alert(
+        "Success",
+        "Product added to the catalog. Add it to your store from the Inventory tab when ready."
+      );
       setName("");
       setBrand("");
       setCategory("");
-      setSubcategory("");
-      setUnit("");
-      setPrice("");
+      setDescription("");
+      setIsLoose(false);
+      setLooseBasis(null);
+      setPackAmount("");
+      setPackSuffix("");
       setImageUri(null);
       setImageBase64(null);
+      setImageUrlLink("");
+      setBasePrice("");
+      setDiscountedPrice("");
+      setMinQty("");
+      setMaxQty("");
+      setIsActive(true);
+      setRating("");
     } finally {
       setSaving(false);
     }
@@ -498,7 +583,9 @@ function AddCustomSection({ storeId, token }: { storeId?: string | null; token?:
   return (
     <View style={styles.addCustomCard}>
       <Text style={styles.addCustomTitle}>Add Custom Product</Text>
-      <Text style={styles.addCustomSubtitle}>Create a product unique to your store.</Text>
+      <Text style={styles.addCustomSubtitle}>
+        Adds to catalog only. Use Inventory to add it to your store.
+      </Text>
 
       <Text style={styles.addCustomLabel}>Product Name *</Text>
       <TextInput
@@ -527,39 +614,105 @@ function AddCustomSection({ storeId, token }: { storeId?: string | null; token?:
         style={styles.addCustomInput}
       />
 
-      <Text style={styles.addCustomLabel}>Subcategory</Text>
-      <TextInput
-        value={subcategory}
-        onChangeText={setSubcategory}
-        placeholder="e.g. Leafy Greens"
-        placeholderTextColor={colors.textTertiary}
-        style={styles.addCustomInput}
-      />
-
-      <Text style={styles.addCustomLabel}>Unit *</Text>
-      <View style={styles.addCustomChipsRow}>
-        {UNITS.map((u) => (
-          <TouchableOpacity
-            key={u}
-            onPress={() => setUnit(u)}
-            style={[
-              styles.addCustomChip,
-              unit === u && styles.addCustomChipActive,
-            ]}
-          >
-            <Text
-              style={[
-                styles.addCustomChipText,
-                unit === u && styles.addCustomChipTextActive,
-              ]}
-            >
-              {u}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      <View style={styles.addCustomDescriptionBlock}>
+        <Text style={styles.addCustomLabel}>Description</Text>
+        <TextInput
+          value={description}
+          onChangeText={setDescription}
+          placeholder="Optional"
+          placeholderTextColor={colors.textTertiary}
+          style={[styles.addCustomInput, styles.addCustomInputMultiline]}
+          multiline
+          textAlignVertical="top"
+        />
       </View>
 
-      <Text style={styles.addCustomLabel}>Product Image *</Text>
+      <View style={styles.addCustomSwitchRow}>
+        <View style={styles.addCustomSwitchTextCol}>
+          <Text style={styles.addCustomSwitchLabel}>Loose item</Text>
+          <Text style={styles.addCustomSwitchHint}>
+            On: loose at counter — no pack size. Off: set pack amount and unit below.
+          </Text>
+        </View>
+        <Switch
+          value={isLoose}
+          onValueChange={(on) => {
+            setIsLoose(on);
+            if (on) setLooseBasis((b) => b ?? "kg");
+            else setLooseBasis(null);
+          }}
+          trackColor={{ false: colors.border, true: colors.primary }}
+        />
+      </View>
+
+      {isLoose && (
+        <>
+          <Text style={styles.addCustomLabel}>Priced per *</Text>
+          <Text style={styles.addCustomAmountHint}>
+            Base and selling prices are per 1 kg or 1 litre (unit 1kg or 1l).
+          </Text>
+          <View style={styles.addCustomChipsRow}>
+            <TouchableOpacity
+              onPress={() => setLooseBasis("kg")}
+              style={[styles.addCustomChip, looseBasis === "kg" && styles.addCustomChipActive]}
+            >
+              <Text style={[styles.addCustomChipText, looseBasis === "kg" && styles.addCustomChipTextActive]}>1 kg</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setLooseBasis("l")}
+              style={[styles.addCustomChip, looseBasis === "l" && styles.addCustomChipActive]}
+            >
+              <Text style={[styles.addCustomChipText, looseBasis === "l" && styles.addCustomChipTextActive]}>1 litre</Text>
+            </TouchableOpacity>
+          </View>
+          {looseBasis ? (
+            <Text style={styles.addCustomUnitPreview}>
+              Stored unit:{" "}
+              <Text style={styles.addCustomUnitPreviewValue}>{unitForLoosePricingBasis(looseBasis)}</Text>
+            </Text>
+          ) : null}
+        </>
+      )}
+
+      {!isLoose && (
+        <>
+          <Text style={styles.addCustomLabel}>Pack amount *</Text>
+          <TextInput
+            value={packAmount}
+            onChangeText={setPackAmount}
+            placeholder="e.g. 200, 0.5"
+            placeholderTextColor={colors.textTertiary}
+            style={styles.addCustomInput}
+            keyboardType="decimal-pad"
+          />
+          <Text style={styles.addCustomLabel}>Pack unit *</Text>
+          <View style={styles.addCustomChipsRow}>
+            {UNITS.map((u) => (
+              <TouchableOpacity
+                key={u}
+                onPress={() => setPackSuffix(u)}
+                style={[styles.addCustomChip, packSuffix === u && styles.addCustomChipActive]}
+              >
+                <Text style={[styles.addCustomChipText, packSuffix === u && styles.addCustomChipTextActive]}>{u}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {(() => {
+            const p = Number(String(packAmount).replace(/,/g, "").trim());
+            if (!packSuffix || !Number.isFinite(p) || p <= 0) return null;
+            return (
+              <Text style={styles.addCustomUnitPreview}>
+                Stored unit:{" "}
+                <Text style={styles.addCustomUnitPreviewValue}>
+                  {formatMasterProductUnit(p, packSuffix)}
+                </Text>
+              </Text>
+            );
+          })()}
+        </>
+      )}
+
+      <Text style={styles.addCustomLabel}>Product image *</Text>
       {imageUri ? (
         <View style={styles.addCustomImageBlock}>
           <Image source={{ uri: imageUri }} style={styles.addCustomImage} />
@@ -584,7 +737,7 @@ function AddCustomSection({ storeId, token }: { storeId?: string | null; token?:
       ) : (
         <View style={styles.addCustomImagePicker}>
           <Text style={styles.addCustomImageIcon}>📷</Text>
-          <Text style={styles.addCustomImageLabel}>Add a photo of your product</Text>
+          <Text style={styles.addCustomImageLabel}>Add a photo or use URL below</Text>
           <View style={styles.addCustomImageActions}>
             <TouchableOpacity style={styles.addCustomSmallBtn} onPress={pickFromCamera}>
               <Text style={styles.addCustomSmallBtnText}>Camera</Text>
@@ -595,19 +748,78 @@ function AddCustomSection({ storeId, token }: { storeId?: string | null; token?:
           </View>
         </View>
       )}
-
-      <Text style={styles.addCustomLabel}>Price (₹) *</Text>
+      <Text style={styles.addCustomLabel}>Image URL (optional)</Text>
       <TextInput
-        value={price}
-        onChangeText={setPrice}
+        value={imageUrlLink}
+        onChangeText={setImageUrlLink}
+        placeholder="https://… if no photo"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.addCustomInput}
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+
+      <Text style={styles.addCustomLabel}>
+        {isLoose
+          ? `Base / MRP (₹) per ${looseBasis === "l" ? "1 litre" : "1 kg"} *`
+          : "Base / MRP (₹) *"}
+      </Text>
+      <TextInput
+        value={basePrice}
+        onChangeText={setBasePrice}
         placeholder="0"
         placeholderTextColor={colors.textTertiary}
         style={styles.addCustomInput}
-        keyboardType="numeric"
+        keyboardType="decimal-pad"
       />
-      <Text style={styles.addCustomHint}>
-        Product will be active and visible when your store is online.
+      <Text style={styles.addCustomLabel}>
+        {isLoose
+          ? `Selling (₹) per ${looseBasis === "l" ? "1 litre" : "1 kg"} *`
+          : "Selling price (₹) *"}
       </Text>
+      <TextInput
+        value={discountedPrice}
+        onChangeText={setDiscountedPrice}
+        placeholder="≤ base"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.addCustomInput}
+        keyboardType="decimal-pad"
+      />
+
+      <Text style={styles.addCustomLabel}>Min qty (optional)</Text>
+      <TextInput
+        value={minQty}
+        onChangeText={setMinQty}
+        placeholder="Default 1"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.addCustomInput}
+        keyboardType="decimal-pad"
+      />
+      <Text style={styles.addCustomLabel}>Max qty (optional)</Text>
+      <TextInput
+        value={maxQty}
+        onChangeText={setMaxQty}
+        placeholder="Default 100"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.addCustomInput}
+        keyboardType="decimal-pad"
+      />
+      <Text style={styles.addCustomLabel}>Rating (optional)</Text>
+      <TextInput
+        value={rating}
+        onChangeText={setRating}
+        placeholder="0–5, default 4"
+        placeholderTextColor={colors.textTertiary}
+        style={styles.addCustomInput}
+        keyboardType="decimal-pad"
+      />
+
+      <View style={styles.addCustomSwitchRow}>
+        <Text style={styles.addCustomSwitchLabel}>Product active</Text>
+        <Switch value={isActive} onValueChange={setIsActive} trackColor={{ false: colors.border, true: colors.primary }} />
+      </View>
+
+      <Text style={styles.addCustomHint}>Visible when your store is online if active.</Text>
 
       <TouchableOpacity
         style={[styles.addCustomSubmit, saving && styles.addCustomSubmitDisabled]}
@@ -870,6 +1082,44 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginBottom: spacing.md,
   },
+  addCustomDescriptionBlock: {
+    marginBottom: spacing.md,
+    width: "100%",
+  },
+  addCustomSwitchRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    gap: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  addCustomSwitchTextCol: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: spacing.sm,
+  },
+  addCustomSwitchLabel: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  addCustomSwitchHint: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    marginTop: 6,
+    lineHeight: 16,
+  },
+  addCustomInputMultiline: {
+    minHeight: 72,
+    paddingTop: 10,
+    marginBottom: 0,
+    width: "100%",
+    alignSelf: "stretch",
+  },
   addCustomLabel: {
     color: colors.textTertiary,
     fontSize: 12,
@@ -964,6 +1214,23 @@ const styles = StyleSheet.create({
     color: colors.error,
     fontSize: 12,
     fontWeight: "500",
+  },
+  addCustomAmountHint: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    marginTop: -6,
+    marginBottom: spacing.sm,
+    lineHeight: 15,
+  },
+  addCustomUnitPreview: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  addCustomUnitPreviewValue: {
+    color: colors.textPrimary,
+    fontWeight: "600",
   },
   addCustomHint: {
     color: colors.textTertiary,

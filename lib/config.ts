@@ -20,7 +20,7 @@ import Constants from "expo-constants";
 
 const extra = (Constants.expoConfig?.extra ?? {}) as Record<string, string>;
 
-const defaultApi = "https://near-and-now-backend-production.up.railway.app/";
+const defaultApi = "https://near-and-now-frontend.vercel.app/";
 
 export const config = {
   /** Store owner REST API base URL */

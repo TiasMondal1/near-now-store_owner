@@ -13,6 +13,7 @@ import {
   Alert,
   Animated,
   InteractionManager,
+  TextInput,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
@@ -59,8 +60,16 @@ export default function HomeTab() {
   const [storeProductsLoading, setStoreProductsLoading] = useState(false);
   const [togglingProductId, setTogglingProductId] = useState<string | null>(null);
   const [stockExpanded, setStockExpanded] = useState(false);
+  const [stockSearchOpen, setStockSearchOpen] = useState(false);
+  const [stockSearchQuery, setStockSearchQuery] = useState("");
 
   const selectedStore = stores[0];
+
+  const filteredStoreProducts = useMemo(() => {
+    const q = stockSearchQuery.trim().toLowerCase();
+    if (!q) return storeProducts;
+    return storeProducts.filter((p) => (p.name || "").toLowerCase().includes(q));
+  }, [storeProducts, stockSearchQuery]);
 
   const getStatusColor = (status: string) => {
     const s = (status || "").toLowerCase();
@@ -696,25 +705,86 @@ export default function HomeTab() {
           </View>
 
           <View style={styles.stockSection}>
-            <TouchableOpacity
-              style={styles.stockHeader}
-              onPress={() => setStockExpanded(!stockExpanded)}
-              activeOpacity={0.7}
+            <View
+              style={[
+                styles.stockHeader,
+                stockSearchOpen ? { marginBottom: spacing.xs } : { marginBottom: spacing.lg },
+              ]}
             >
-              <View>
-                <Text style={styles.stockTitle}>Your Stock</Text>
-                <Text style={styles.stockSubtitle}>
-                  {storeProducts.length} product{storeProducts.length !== 1 ? "s" : ""} in store
-                </Text>
-              </View>
+              <TouchableOpacity
+                style={styles.stockHeaderTitleArea}
+                onPress={() => setStockExpanded(!stockExpanded)}
+                activeOpacity={0.7}
+              >
+                <View>
+                  <Text style={styles.stockTitle}>Your Stock</Text>
+                  <Text style={styles.stockSubtitle}>
+                    {stockSearchQuery.trim()
+                      ? filteredStoreProducts.length === storeProducts.length
+                        ? `${storeProducts.length} product${storeProducts.length !== 1 ? "s" : ""} in store`
+                        : `${filteredStoreProducts.length} of ${storeProducts.length} match`
+                      : `${storeProducts.length} product${storeProducts.length !== 1 ? "s" : ""} in store`}
+                  </Text>
+                </View>
+              </TouchableOpacity>
               <View style={styles.stockHeaderRight}>
-                <Ionicons
-                  name={stockExpanded ? "chevron-up" : "chevron-down"}
-                  size={24}
-                  color={colors.textTertiary}
-                />
+                <TouchableOpacity
+                  onPress={() => {
+                    if (stockSearchOpen) {
+                      setStockSearchOpen(false);
+                      setStockSearchQuery("");
+                    } else {
+                      setStockSearchOpen(true);
+                    }
+                  }}
+                  style={styles.stockSearchIconBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel={stockSearchOpen ? "Close stock search" : "Search stock"}
+                >
+                  <Ionicons
+                    name={stockSearchOpen ? "close-outline" : "search-outline"}
+                    size={22}
+                    color={colors.textSecondary}
+                  />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setStockExpanded(!stockExpanded)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel={stockExpanded ? "Collapse stock list" : "Expand stock list"}
+                >
+                  <Ionicons
+                    name={stockExpanded ? "chevron-up" : "chevron-down"}
+                    size={24}
+                    color={colors.textTertiary}
+                  />
+                </TouchableOpacity>
               </View>
-            </TouchableOpacity>
+            </View>
+
+            {stockSearchOpen && (
+              <View style={styles.stockSearchBar}>
+                <Ionicons name="search" size={18} color={colors.textTertiary} style={styles.stockSearchIcon} />
+                <TextInput
+                  value={stockSearchQuery}
+                  onChangeText={setStockSearchQuery}
+                  placeholder="Search products by name…"
+                  placeholderTextColor={colors.textTertiary}
+                  style={styles.stockSearchInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  clearButtonMode="while-editing"
+                />
+                {stockSearchQuery.length > 0 ? (
+                  <TouchableOpacity
+                    onPress={() => setStockSearchQuery("")}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityLabel="Clear search"
+                  >
+                    <Ionicons name="close-circle" size={20} color={colors.textTertiary} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            )}
 
             {!stockExpanded && storeProducts.length > 0 && (
               <ScrollView
@@ -722,32 +792,40 @@ export default function HomeTab() {
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.chipScroll}
               >
-                {storeProducts.slice(0, 15).map((p) => (
-                  <View
-                    key={p.id}
-                    style={[
-                      styles.productChip,
-                      p.is_active !== false && styles.productChipActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.productChipText,
-                        p.is_active !== false && styles.productChipTextActive,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {p.name || "Product"}
-                    </Text>
+                {filteredStoreProducts.length === 0 ? (
+                  <View style={styles.stockNoMatchesChip}>
+                    <Text style={styles.stockNoMatchesChipText}>No products match “{stockSearchQuery.trim()}”</Text>
                   </View>
-                ))}
-                {storeProducts.length > 15 && (
-                  <TouchableOpacity
-                    style={styles.moreChip}
-                    onPress={() => setStockExpanded(true)}
-                  >
-                    <Text style={styles.moreChipText}>+{storeProducts.length - 15} more</Text>
-                  </TouchableOpacity>
+                ) : (
+                  <>
+                    {filteredStoreProducts.slice(0, 15).map((p) => (
+                      <View
+                        key={p.id}
+                        style={[
+                          styles.productChip,
+                          p.is_active !== false && styles.productChipActive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.productChipText,
+                            p.is_active !== false && styles.productChipTextActive,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {p.name || "Product"}
+                        </Text>
+                      </View>
+                    ))}
+                    {filteredStoreProducts.length > 15 && (
+                      <TouchableOpacity
+                        style={styles.moreChip}
+                        onPress={() => setStockExpanded(true)}
+                      >
+                        <Text style={styles.moreChipText}>+{filteredStoreProducts.length - 15} more</Text>
+                      </TouchableOpacity>
+                    )}
+                  </>
                 )}
               </ScrollView>
             )}
@@ -775,10 +853,18 @@ export default function HomeTab() {
                       : "Go online to set product quantities and accept orders"}
                   </Text>
                 </View>
+              ) : filteredStoreProducts.length === 0 ? (
+                <View style={styles.emptyStock}>
+                  <Ionicons name="search-outline" size={40} color={colors.textTertiary} />
+                  <Text style={styles.emptyStockTitle}>No matches</Text>
+                  <Text style={styles.emptyStockText}>
+                    Nothing in your stock matches “{stockSearchQuery.trim()}”. Try a different name or clear the search.
+                  </Text>
+                </View>
               ) : (
                 <View style={styles.stockList}>
-                  {storeProducts.map((p, index) => (
-                    <View key={p.id} style={[styles.stockItemCard, index === storeProducts.length - 1 && { marginBottom: 0 }]}>
+                  {filteredStoreProducts.map((p, index) => (
+                    <View key={p.id} style={[styles.stockItemCard, index === filteredStoreProducts.length - 1 && { marginBottom: 0 }]}>
                       <TouchableOpacity
                         style={styles.deleteBtn}
                         onPress={() => deleteProduct(p)}
@@ -1099,7 +1185,43 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  stockHeaderTitleArea: {
+    flex: 1,
+    marginRight: spacing.sm,
+  },
+  stockSearchIconBtn: {
+    padding: spacing.xs,
+    marginRight: spacing.xs,
+  },
+  stockSearchBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    paddingHorizontal: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  stockSearchIcon: {
+    marginRight: spacing.xs,
+  },
+  stockSearchInput: {
+    flex: 1,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: colors.textPrimary,
+  },
+  stockNoMatchesChip: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    maxWidth: 280,
+  },
+  stockNoMatchesChipText: {
+    color: colors.textTertiary,
+    fontSize: 13,
   },
   stockTitle: {
     color: colors.textPrimary,

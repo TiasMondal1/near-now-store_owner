@@ -9,44 +9,45 @@ import {
   ActivityIndicator,
   Image,
   Alert,
+  Switch,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { getSession } from "../session";
-import { config } from "../lib/config";
+import {
+  addCustomMasterProduct,
+  formatMasterProductUnit,
+  unitForLoosePricingBasis,
+  type LoosePricingBasis,
+} from "../lib/storeProducts";
 import { colors, radius, spacing } from "../lib/theme";
-const API_BASE = config.API_BASE;
-
 const UNITS = ["kg", "g", "l", "ml", "pcs", "units", "bunch", "pack"];
 
 export default function AddCustomProductScreen() {
-  const [token, setToken] = useState<string | null>(null);
-  const [storeId, setStoreId] = useState<string | null>(null);
-
   const [name, setName] = useState("");
   const [brand, setBrand] = useState("");
   const [category, setCategory] = useState("");
-  const [subcategory, setSubcategory] = useState("");
-  const [unit, setUnit] = useState("");
-  const [price, setPrice] = useState("");
+  const [description, setDescription] = useState("");
+  const [isLoose, setIsLoose] = useState(false);
+  const [looseBasis, setLooseBasis] = useState<LoosePricingBasis | null>(null);
+  const [packAmount, setPackAmount] = useState("");
+  const [packSuffix, setPackSuffix] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [imageUrlLink, setImageUrlLink] = useState("");
+  const [basePrice, setBasePrice] = useState("");
+  const [discountedPrice, setDiscountedPrice] = useState("");
+  const [minQty, setMinQty] = useState("");
+  const [maxQty, setMaxQty] = useState("");
+  const [isActive, setIsActive] = useState(true);
+  const [rating, setRating] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     (async () => {
       const s: any = await getSession();
-      if (!s?.token) return;
-      setToken(s.token);
-      const userId = s.user?.id;
-      const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
-        headers: { Authorization: `Bearer ${s.token}` },
-      });
-      const raw = await res.text();
-      let json: any = null;
-      try { json = raw ? JSON.parse(raw) : null; } catch { json = null; }
-      if (json?.stores?.length) setStoreId(json.stores[0].id);
+      if (!s?.token) router.replace("/landing");
     })();
   }, []);
 
@@ -82,56 +83,116 @@ export default function AddCustomProductScreen() {
   };
 
   const addCustom = async () => {
-    if (!name || !category || !unit || !price || !imageUri || !imageBase64) {
-      Alert.alert("Missing fields", "All fields are required.");
+    if (!name.trim() || !category.trim()) {
+      Alert.alert("Missing fields", "Name and category are required.");
       return;
+    }
+
+    const imageUrl =
+      imageBase64 != null
+        ? `data:image/jpeg;base64,${imageBase64}`
+        : imageUrlLink.trim();
+    if (!imageUrl) {
+      Alert.alert("Image required", "Add a photo or paste an image URL.");
+      return;
+    }
+
+    let unitStr = "";
+    if (isLoose) {
+      if (!looseBasis) {
+        Alert.alert("Loose item", "Choose whether prices are per 1 kg or per 1 litre.");
+        return;
+      }
+      unitStr = unitForLoosePricingBasis(looseBasis);
+    } else {
+      const pa = Number(String(packAmount).replace(/,/g, "").trim());
+      if (!packSuffix || !Number.isFinite(pa) || pa <= 0) {
+        Alert.alert(
+          "Pack size",
+          "Enter pack amount and unit (e.g. 200 + g for a 200g pack)."
+        );
+        return;
+      }
+      unitStr = formatMasterProductUnit(pa, packSuffix);
+    }
+
+    const base = Number(String(basePrice).replace(/,/g, "").trim());
+    const disc = Number(String(discountedPrice).replace(/,/g, "").trim());
+    if (!Number.isFinite(base) || base < 0 || !Number.isFinite(disc) || disc < 0) {
+      Alert.alert("Pricing", "Enter valid base and selling prices.");
+      return;
+    }
+    if (disc > base) {
+      Alert.alert("Pricing", "Selling price cannot be higher than base (MRP).");
+      return;
+    }
+
+    const minParsed = minQty.trim() === "" ? 1 : Number(String(minQty).replace(/,/g, "").trim());
+    const maxParsed = maxQty.trim() === "" ? 100 : Number(String(maxQty).replace(/,/g, "").trim());
+    if (!Number.isFinite(minParsed) || minParsed <= 0) {
+      Alert.alert("Quantities", "Min quantity must be a positive number.");
+      return;
+    }
+    if (!Number.isFinite(maxParsed) || maxParsed < minParsed) {
+      Alert.alert("Quantities", "Max quantity must be at least min quantity.");
+      return;
+    }
+
+    let ratingVal = 4;
+    if (rating.trim() !== "") {
+      ratingVal = Number(String(rating).replace(/,/g, "").trim());
+      if (!Number.isFinite(ratingVal) || ratingVal < 0 || ratingVal > 5) {
+        Alert.alert("Rating", "Rating must be between 0 and 5.");
+        return;
+      }
     }
 
     try {
       setSaving(true);
 
-      const res = await fetch(
-        `${API_BASE}/store-owner/stores/${storeId}/products/custom`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            name,
-            brand,
-            category,
-            subcategory,
-            unit,
-            image_url: `data:image/jpeg;base64,${imageBase64}`,
-            price: Number(price),
-            quantity: 100,
-          }),
-        }
-      );
-      const resRaw = await res.text();
-      let json: any = null;
-      try {
-        json = resRaw ? JSON.parse(resRaw) : null;
-      } catch {
-        json = null;
-      }
-      if (!res.ok || !json?.success) {
-        Alert.alert("Error", "Failed to add product.");
+      const result = await addCustomMasterProduct({
+        name: name.trim(),
+        brand,
+        category,
+        description: description.trim() || null,
+        image_url: imageUrl,
+        unit: unitStr,
+        base_price: base,
+        discounted_price: disc,
+        is_loose: isLoose,
+        min_quantity: minParsed,
+        max_quantity: maxParsed,
+        is_active: isActive,
+        rating: ratingVal,
+        rating_count: 0,
+      });
+
+      if (!result.success) {
+        Alert.alert("Error", result.error || "Failed to add product.");
         return;
       }
 
-      Alert.alert("Success", "Custom product added.");
+      Alert.alert(
+        "Success",
+        "Product added to the catalog. Add it to your store from Inventory when you are ready."
+      );
       setName("");
       setBrand("");
       setCategory("");
-      setSubcategory("");
-      setUnit("");
-      setPrice("");
+      setDescription("");
+      setIsLoose(false);
+      setLooseBasis(null);
+      setPackAmount("");
+      setPackSuffix("");
       setImageUri(null);
       setImageBase64(null);
-
+      setImageUrlLink("");
+      setBasePrice("");
+      setDiscountedPrice("");
+      setMinQty("");
+      setMaxQty("");
+      setIsActive(true);
+      setRating("");
     } finally {
       setSaving(false);
     }
@@ -145,7 +206,7 @@ export default function AddCustomProductScreen() {
         </TouchableOpacity>
         <View style={styles.headerText}>
           <Text style={styles.title}>Add Custom Product</Text>
-          <Text style={styles.subtitle}>Create a product unique to your store</Text>
+          <Text style={styles.subtitle}>Adds to catalog only — link to your store from Inventory</Text>
         </View>
       </View>
 
@@ -155,20 +216,98 @@ export default function AddCustomProductScreen() {
           <Field label="Product Name *" value={name} onChange={setName} placeholder="e.g. Fresh Tomatoes" />
           <Field label="Brand" value={brand} onChange={setBrand} placeholder="e.g. Local Farm (optional)" />
           <Field label="Category *" value={category} onChange={setCategory} placeholder="e.g. Vegetables" />
-          <Field label="Subcategory" value={subcategory} onChange={setSubcategory} placeholder="e.g. Leafy Greens" />
+          <FieldMultiline
+            label="Description"
+            value={description}
+            onChange={setDescription}
+            placeholder="Short description (optional)"
+          />
 
-          <Text style={styles.label}>Unit *</Text>
-          <View style={styles.chips}>
-            {UNITS.map((u) => (
-              <TouchableOpacity
-                key={u}
-                onPress={() => setUnit(u)}
-                style={[styles.chip, unit === u && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, unit === u && styles.chipTextActive]}>{u}</Text>
-              </TouchableOpacity>
-            ))}
+          <View style={styles.switchRow}>
+            <View style={styles.switchRowText}>
+              <Text style={styles.switchLabel}>Loose item</Text>
+              <Text style={styles.switchHint}>
+                On: sold loose at counter — no pack size. Off: set pack amount and unit below.
+              </Text>
+            </View>
+            <Switch
+              value={isLoose}
+              onValueChange={(on) => {
+                setIsLoose(on);
+                if (on) setLooseBasis((b) => b ?? "kg");
+                else setLooseBasis(null);
+              }}
+              trackColor={{ false: colors.border, true: colors.primary }}
+            />
           </View>
+
+          {isLoose && (
+            <>
+              <Text style={styles.label}>Priced per *</Text>
+              <Text style={styles.hintBelowField}>
+                Base and selling prices apply to 1 kg or 1 litre (stored as unit 1kg or 1l).
+              </Text>
+              <View style={styles.chips}>
+                <TouchableOpacity
+                  onPress={() => setLooseBasis("kg")}
+                  style={[styles.chip, looseBasis === "kg" && styles.chipActive]}
+                >
+                  <Text style={[styles.chipText, looseBasis === "kg" && styles.chipTextActive]}>1 kg</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setLooseBasis("l")}
+                  style={[styles.chip, looseBasis === "l" && styles.chipActive]}
+                >
+                  <Text style={[styles.chipText, looseBasis === "l" && styles.chipTextActive]}>1 litre</Text>
+                </TouchableOpacity>
+              </View>
+              {looseBasis ? (
+                <Text style={styles.unitPreview}>
+                  Stored unit:{" "}
+                  <Text style={styles.unitPreviewValue}>{unitForLoosePricingBasis(looseBasis)}</Text>
+                </Text>
+              ) : null}
+            </>
+          )}
+
+          {!isLoose && (
+            <>
+              <Field
+                label="Pack amount (number) *"
+                value={packAmount}
+                onChange={setPackAmount}
+                keyboardType="decimal-pad"
+                placeholder="e.g. 200, 0.5, 300"
+              />
+              <Text style={styles.hintBelowField}>
+                Fixed pack: number + unit below (e.g. 200 + g → 200g).
+              </Text>
+              <Text style={styles.label}>Pack unit *</Text>
+              <View style={styles.chips}>
+                {UNITS.map((u) => (
+                  <TouchableOpacity
+                    key={u}
+                    onPress={() => setPackSuffix(u)}
+                    style={[styles.chip, packSuffix === u && styles.chipActive]}
+                  >
+                    <Text style={[styles.chipText, packSuffix === u && styles.chipTextActive]}>{u}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {(() => {
+                const p = Number(String(packAmount).replace(/,/g, "").trim());
+                if (!packSuffix || !Number.isFinite(p) || p <= 0) return null;
+                return (
+                  <Text style={styles.unitPreview}>
+                    Stored unit:{" "}
+                    <Text style={styles.unitPreviewValue}>
+                      {formatMasterProductUnit(p, packSuffix)}
+                    </Text>
+                  </Text>
+                );
+              })()}
+            </>
+          )}
         </View>
 
         <View style={styles.card}>
@@ -194,12 +333,78 @@ export default function AddCustomProductScreen() {
               </View>
             </View>
           )}
+          <Field
+            label="Or paste image URL (https://…)"
+            value={imageUrlLink}
+            onChange={setImageUrlLink}
+            placeholder="Optional if you added a photo above"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
         </View>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Pricing</Text>
-          <Field label="Price (₹) *" value={price} onChange={setPrice} keyboardType="numeric" placeholder="0" />
-          <Text style={styles.stockNote}>Stock is automatically set to 100 when the product is active.</Text>
+          <Field
+            label={
+              isLoose
+                ? `Base price / MRP (₹) per ${looseBasis === "l" ? "1 litre" : "1 kg"} *`
+                : "Base price / MRP (₹) *"
+            }
+            value={basePrice}
+            onChange={setBasePrice}
+            keyboardType="decimal-pad"
+            placeholder="0"
+          />
+          <Field
+            label={
+              isLoose
+                ? `Selling price (₹) per ${looseBasis === "l" ? "1 litre" : "1 kg"} *`
+                : "Selling / discounted price (₹) *"
+            }
+            value={discountedPrice}
+            onChange={setDiscountedPrice}
+            keyboardType="decimal-pad"
+            placeholder="Must be ≤ base price"
+          />
+          <Text style={styles.hintBelowField}>
+            {isLoose
+              ? "Loose: both prices are for the same 1 kg or 1 litre basis. Selling ≤ base."
+              : "Selling price cannot exceed base (MRP)."}
+          </Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Order limits & visibility</Text>
+          <Field
+            label="Min quantity (optional)"
+            value={minQty}
+            onChange={setMinQty}
+            keyboardType="decimal-pad"
+            placeholder="Default 1"
+          />
+          <Field
+            label="Max quantity (optional)"
+            value={maxQty}
+            onChange={setMaxQty}
+            keyboardType="decimal-pad"
+            placeholder="Default 100"
+          />
+          <Field
+            label="Rating (optional)"
+            value={rating}
+            onChange={setRating}
+            keyboardType="decimal-pad"
+            placeholder="0–5, default 4"
+          />
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Product active</Text>
+            <Switch
+              value={isActive}
+              onValueChange={setIsActive}
+              trackColor={{ false: colors.border, true: colors.primary }}
+            />
+          </View>
         </View>
 
         <View style={{ height: 20 }} />
@@ -233,6 +438,23 @@ function Field({ label, value, onChange, placeholder, ...props }: any) {
         {...props}
       />
     </>
+  );
+}
+
+function FieldMultiline({ label, value, onChange, placeholder }: any) {
+  return (
+    <View style={styles.fieldMultilineWrapper}>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={onChange}
+        style={[styles.input, styles.inputMultiline]}
+        placeholder={placeholder}
+        placeholderTextColor={colors.textTertiary}
+        multiline
+        textAlignVertical="top"
+      />
+    </View>
   );
 }
 
@@ -289,6 +511,10 @@ const styles = StyleSheet.create({
   },
 
   label: { color: colors.textTertiary, fontSize: 12, marginBottom: 6, marginTop: 2 },
+  fieldMultilineWrapper: {
+    marginBottom: spacing.md,
+    width: "100%",
+  },
   input: {
     backgroundColor: colors.surfaceVariant,
     borderRadius: radius.md,
@@ -349,11 +575,42 @@ const styles = StyleSheet.create({
   removeBtn: { paddingVertical: 9, paddingHorizontal: 12 },
   removeBtnText: { color: colors.error, fontSize: 13, fontWeight: "500" },
 
-  stockNote: {
+  switchRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    marginBottom: 14,
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    gap: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  switchRowText: { flex: 1, minWidth: 0, paddingRight: spacing.sm },
+  switchLabel: { color: colors.textPrimary, fontSize: 14, fontWeight: "600" },
+  switchHint: { color: colors.textTertiary, fontSize: 11, marginTop: 6, lineHeight: 16 },
+  inputMultiline: {
+    minHeight: 88,
+    paddingTop: 12,
+    marginBottom: 0,
+    width: "100%",
+    alignSelf: "stretch",
+  },
+  hintBelowField: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    marginTop: -6,
+    marginBottom: 12,
+    lineHeight: 15,
+  },
+  unitPreview: {
     color: colors.textTertiary,
     fontSize: 12,
-    marginTop: 4,
-    fontStyle: "italic",
+    marginTop: 10,
+  },
+  unitPreviewValue: {
+    color: colors.textPrimary,
+    fontWeight: "600",
   },
   submitBtn: {
     backgroundColor: colors.primary,
