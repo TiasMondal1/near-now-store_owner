@@ -94,10 +94,12 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <ErrorBoundary>
         <Stack
-          screenOptions={{
+          screenOptions={({ route }) => ({
             headerShown: false,
             animation: "default",
-          }}
+            // Logged-in main shell: do not swipe back into landing/login
+            gestureEnabled: route.name !== "(tabs)",
+          })}
         />
       </ErrorBoundary>
     </SafeAreaProvider>

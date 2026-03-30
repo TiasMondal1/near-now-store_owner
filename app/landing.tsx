@@ -45,7 +45,7 @@ export default function LandingScreen() {
       
       if (session?.token && session?.user?.id) {
         console.log("[landing] ✅ Valid session found, redirecting to dashboard");
-        router.replace("/owner-home");
+        router.replace("/(tabs)/home");
       } else {
         console.log("[landing] No valid session, showing login screen");
         setChecking(false);
@@ -78,7 +78,7 @@ export default function LandingScreen() {
         <View style={styles.buttons}>
           <TouchableOpacity
             style={styles.primaryButton}
-            onPress={() => router.push("/App")}
+            onPress={() => router.replace("/App")}
             activeOpacity={0.85}
           >
             <Text style={styles.primaryButtonText}>Login</Text>
@@ -89,7 +89,7 @@ export default function LandingScreen() {
 
           <TouchableOpacity
             style={styles.secondaryButton}
-            onPress={() => router.push("/App")}
+            onPress={() => router.replace("/App")}
             activeOpacity={0.85}
           >
             <Text style={styles.secondaryButtonText}>New store</Text>

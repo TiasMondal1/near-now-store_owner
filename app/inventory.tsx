@@ -344,7 +344,7 @@ export default function InventoryScreen() {
       : filteredBySearch.filter((p) => (p.category || "").trim() === selectedCategory);
   const sorted = filtered.slice(0, q === "" ? 200 : 100);
 
-  const goToDashboard = () => router.replace("/owner-home");
+  const goToDashboard = () => router.replace("/(tabs)/home");
 
   const scrollCategoryToSelected = useCallback(() => {
     const cat = selectedCategory === null || selectedCategory === "All" ? "All" : selectedCategory;

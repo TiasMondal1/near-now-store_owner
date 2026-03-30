@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { View, Text, StyleSheet, Animated, Easing, Image } from "react-native";
 import { useRouter } from "expo-router";
+import { getSession } from "../session";
 import { colors } from "../lib/theme";
 
 const SPLASH_DURATION_MS = 2200;
@@ -46,9 +47,22 @@ export default function SplashScreen() {
     );
     pulseLoop.start();
 
-    const t = setTimeout(() => {
+    const t = setTimeout(async () => {
       pulseLoop.stop();
-      router.replace("/landing");
+      try {
+        const session = await getSession();
+        const ok =
+          session?.token &&
+          session?.user?.id &&
+          session.user.role !== "customer";
+        if (ok) {
+          router.replace("/(tabs)/home");
+        } else {
+          router.replace("/landing");
+        }
+      } catch {
+        router.replace("/landing");
+      }
     }, SPLASH_DURATION_MS);
 
     return () => clearTimeout(t);

@@ -81,7 +81,7 @@ export default function StoreOwnerPhoneScreen() {
             })(),
           },
         });
-        router.replace("/owner-home");
+        router.replace("/(tabs)/home");
         return;
       }
 
@@ -179,7 +179,7 @@ export default function StoreOwnerPhoneScreen() {
     }
 
     try {
-      router.push({
+      router.replace({
         pathname: "/otp",
         params: {
           phone: fullPhone,

@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useEffect } from "react";
+import { BackHandler, Platform } from "react-native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { Platform } from "react-native";
+import { useSegments } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../../lib/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -14,7 +15,20 @@ const Tab = createBottomTabNavigator();
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
-  
+  const segments = useSegments();
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      const inTabs = segments[0] === "(tabs)";
+      if (inTabs && segments.length <= 2) {
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [segments]);
+
   return (
     <Tab.Navigator
       screenOptions={{

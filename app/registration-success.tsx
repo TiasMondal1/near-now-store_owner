@@ -10,7 +10,7 @@ export default function RegistrationSuccessScreen() {
 
   useEffect(() => {
     const t = setTimeout(() => {
-      router.replace("/owner-home");
+      router.replace("/(tabs)/home");
     }, DELAY_MS);
     return () => clearTimeout(t);
   }, []);

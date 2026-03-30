@@ -193,7 +193,7 @@ export default function StoreOwnerOtpScreen() {
           },
         };
         await saveSession(sessionData);
-        router.replace("/owner-home");
+        router.replace("/(tabs)/home");
         return;
       }
 
