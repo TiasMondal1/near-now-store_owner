@@ -85,6 +85,7 @@ The app requires a Node.js/Express backend. See `NAMECHEAP_MIGRATION.md` for dep
 ## 📖 Documentation
 
 - **[APP_STATUS.md](./APP_STATUS.md)** - Current app status and features
+- **[PROJECT_STATUS.md](./PROJECT_STATUS.md)** - Real-time done vs left tracker
 - **[IMPLEMENTATION_GUIDE.md](./IMPLEMENTATION_GUIDE.md)** - New features implementation guide
 - **[NAMECHEAP_MIGRATION.md](./NAMECHEAP_MIGRATION.md)** - Backend deployment guide
 
