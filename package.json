@@ -9,6 +9,7 @@
     "web": "expo start --web",
     "build": "expo export",
     "build:apk": "node scripts/build-apk-with-env.js",
+    "build:aab": "node scripts/build-apk-with-env.js aab",
     "build:apk:raw": "cd android && JAVA_TOOL_OPTIONS=\"--enable-native-access=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED\" ./gradlew assembleRelease",
     "build:apk:raw:win": "cd android && set JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED && gradlew.bat assembleRelease",
     "build:apk:java17": "bash scripts/build-apk.sh",

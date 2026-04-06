@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
- * Build release APK with .env loaded so EXPO_PUBLIC_* are baked into the bundle.
- * Run from project root: node scripts/build-apk-with-env.js
+ * Build release APK or AAB with .env loaded so EXPO_PUBLIC_* are baked into the bundle.
+ * Run from project root:
+ *   node scripts/build-apk-with-env.js        → APK (assembleRelease)
+ *   node scripts/build-apk-with-env.js aab    → AAB (bundleRelease, Play Store)
  */
 const path = require("path");
 const fs = require("fs");
@@ -38,11 +40,11 @@ if (fs.existsSync(envPath)) {
   console.log("  EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=", mapsKey ? mapsKey.slice(0, 8) + "… (native manifest + JS)" : "(not set — MapView may crash or show blank in release)");
   if (!supaUrl || !supaKey) {
     console.error("\nERROR: EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY is missing from .env");
-    console.error("The built APK will have no Supabase connection. Add them to .env and rebuild.\n");
+    console.error("The built app will have no Supabase connection. Add them to .env and rebuild.\n");
   }
   if (!apiUrl || apiUrl.includes("localhost") || apiUrl.includes("127.0.0.1")) {
     console.warn("");
-    console.warn("WARNING: EXPO_PUBLIC_API_BASE_URL is not set or is localhost. The APK will not reach your backend on a real device.");
+    console.warn("WARNING: EXPO_PUBLIC_API_BASE_URL is not set or is localhost. The build will not reach your backend on a real device.");
     console.warn("Set EXPO_PUBLIC_API_BASE_URL in .env to your production URL (e.g. https://api.yourdomain.com) or your computer LAN IP (e.g. http://192.168.1.5:3000), then run this again.");
     console.warn("");
   }
@@ -97,10 +99,23 @@ bundleDirs.forEach((dir) => {
   }
 });
 
-const result = run(["assembleRelease"]);
+const target = (process.argv[2] || "apk").toLowerCase();
+const gradleTask = target === "aab" ? "bundleRelease" : "assembleRelease";
+const outputHint =
+  target === "aab"
+    ? "android/app/build/outputs/bundle/release/app-release.aab"
+    : "android/app/build/outputs/apk/release/app-release.apk";
+
+console.log(`Gradle task: ${gradleTask} → ${outputHint}\n`);
+
+const result = run([gradleTask]);
 
 if (result.error) {
   console.error("Gradle failed to start:", result.error.message || result.error);
+}
+
+if ((result.status ?? 1) === 0) {
+  console.log(`\nDone. Output: ${path.join(rootDir, outputHint)}`);
 }
 
 process.exit(result.status ?? 1);

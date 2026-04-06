@@ -81,6 +81,26 @@ def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBu
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+// Release signing for Play Store: android/keystore.properties (gitignored) or env vars (CI).
+def keystoreProperties = new Properties()
+def keystorePropsFile = rootProject.file("keystore.properties")
+if (keystorePropsFile.exists()) {
+    def ksBytes = keystorePropsFile.bytes
+    def off = 0
+    if (ksBytes.length >= 3 && (ksBytes[0] & 0xFF) == 0xEF && (ksBytes[1] & 0xFF) == 0xBB && (ksBytes[2] & 0xFF) == 0xBF) {
+        off = 3
+    }
+    keystoreProperties.load(new ByteArrayInputStream(ksBytes, off, ksBytes.length - off))
+}
+def releaseStoreFile = System.getenv("ANDROID_UPLOAD_STORE_FILE") ?: keystoreProperties.getProperty("storeFile")
+def releaseStorePassword = System.getenv("ANDROID_UPLOAD_STORE_PASSWORD") ?: keystoreProperties.getProperty("storePassword")
+def releaseKeyAlias = System.getenv("ANDROID_UPLOAD_KEY_ALIAS") ?: keystoreProperties.getProperty("keyAlias")
+def releaseKeyPassword = System.getenv("ANDROID_UPLOAD_KEY_PASSWORD") ?: keystoreProperties.getProperty("keyPassword")
+def hasReleaseSigning = releaseStoreFile?.trim()
+    && releaseStorePassword?.trim()
+    && releaseKeyAlias?.trim()
+    && releaseKeyPassword?.trim()
+
 android {
     ndkVersion rootProject.ext.ndkVersion
 
@@ -108,15 +128,21 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            signingConfig hasReleaseSigning ? signingConfigs.release : signingConfigs.debug
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
@@ -133,6 +159,19 @@ android {
     }
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+}
+
+tasks.matching { it.name == "bundleRelease" || it.name == "assembleRelease" }.configureEach {
+    doFirst {
+        if (!hasReleaseSigning) {
+            throw new GradleException(
+                "Release signing is not configured. Google Play rejects debug-signed AAB/APK. " +
+                "Copy android/keystore.properties.example to android/keystore.properties, add your upload keystore path and passwords " +
+                "(paths in storeFile are relative to android/app/), " +
+                "or set ANDROID_UPLOAD_STORE_FILE, ANDROID_UPLOAD_STORE_PASSWORD, ANDROID_UPLOAD_KEY_ALIAS, ANDROID_UPLOAD_KEY_PASSWORD."
+            )
+        }
     }
 }
 
