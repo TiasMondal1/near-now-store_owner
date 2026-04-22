@@ -4,6 +4,7 @@
 
 import { config } from './config';
 import { errorHandler, ErrorSeverity } from './error-handler';
+import { apiUrl } from './apiUrl';
 
 interface RequestConfig {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -29,6 +30,10 @@ class ApiClient {
     this.baseUrl = baseUrl;
   }
 
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
   /**
    * Make API request with error handling and retry logic
    */
@@ -44,7 +49,7 @@ class ApiClient {
       retries = this.defaultRetries,
     } = config;
 
-    const url = `${this.baseUrl}${endpoint}`;
+    const url = apiUrl(this.baseUrl, endpoint);
     let lastError: any;
 
     for (let attempt = 0; attempt <= retries; attempt++) {

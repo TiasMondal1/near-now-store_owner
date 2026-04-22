@@ -5,9 +5,13 @@
 
 import { config } from '../lib/config';
 import { createLogger } from '../utils/logger';
+import { apiUrl } from '../lib/apiUrl';
+import { fetchJson } from '../lib/fetchJson';
 
 const API_BASE = config.API_BASE;
 const logger = createLogger('OrderService');
+
+const orderEndpoint = (path: string) => apiUrl(API_BASE, path);
 
 export interface Order {
   id: string;
@@ -27,12 +31,12 @@ export class OrderService {
     try {
       logger.debug('Fetching orders', { storeId });
       
-      const res = await fetch(`${API_BASE}/store-owner/stores/${storeId}/orders`, {
+      const { json } = await fetchJson<{ success?: boolean; orders?: Order[] }>(
+        orderEndpoint(`/store-owner/stores/${storeId}/orders`),
+        {
         headers: { Authorization: `Bearer ${token}` },
-      });
-
-      const raw = await res.text();
-      const json = raw ? JSON.parse(raw) : null;
+        }
+      );
 
       if (!json?.success) {
         logger.warn('Failed to fetch orders', { response: json });
@@ -40,7 +44,7 @@ export class OrderService {
       }
 
       logger.info(`Fetched ${json.orders?.length || 0} orders`);
-      return json.orders || [];
+      return json?.orders || [];
     } catch (error) {
       logger.error('Error fetching orders', error);
       throw error;
@@ -54,19 +58,19 @@ export class OrderService {
     try {
       logger.debug('Fetching order details', { orderId });
 
-      const res = await fetch(`${API_BASE}/store-owner/orders/${orderId}`, {
+      const { json } = await fetchJson<{ success?: boolean; order?: Order }>(
+        orderEndpoint(`/store-owner/orders/${orderId}`),
+        {
         headers: { Authorization: `Bearer ${token}` },
-      });
-
-      const raw = await res.text();
-      const json = raw ? JSON.parse(raw) : null;
+        }
+      );
 
       if (!json?.success) {
         logger.warn('Failed to fetch order details', { orderId });
         return null;
       }
 
-      return json.order;
+      return json.order || null;
     } catch (error) {
       logger.error('Error fetching order details', error);
       return null;
@@ -80,10 +84,13 @@ export class OrderService {
     try {
       logger.info('Accepting order', { orderId });
 
-      const res = await fetch(`${API_BASE}/store-owner/orders/${orderId}/accept`, {
+      const { res } = await fetchJson(
+        orderEndpoint(`/store-owner/orders/${orderId}/accept`),
+        {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
-      });
+        }
+      );
 
       if (!res.ok) {
         logger.error('Failed to accept order', { status: res.status });
@@ -105,10 +112,13 @@ export class OrderService {
     try {
       logger.info('Rejecting order', { orderId });
 
-      const res = await fetch(`${API_BASE}/store-owner/orders/${orderId}/reject`, {
+      const { res } = await fetchJson(
+        orderEndpoint(`/store-owner/orders/${orderId}/reject`),
+        {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
-      });
+        }
+      );
 
       if (!res.ok) {
         logger.error('Failed to reject order', { status: res.status });
@@ -134,17 +144,17 @@ export class OrderService {
     try {
       logger.debug('Verifying QR code', { orderId });
 
-      const res = await fetch(`${API_BASE}/store-owner/orders/${orderId}/verify-qr`, {
+      const { res, json } = await fetchJson<{ success?: boolean; error_code?: string }>(
+        orderEndpoint(`/store-owner/orders/${orderId}/verify-qr`),
+        {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ token: qrToken }),
-      });
-
-      const raw = await res.text();
-      const json = raw ? JSON.parse(raw) : null;
+        }
+      );
 
       if (!res.ok || !json?.success) {
         logger.warn('QR verification failed', { error: json?.error_code });

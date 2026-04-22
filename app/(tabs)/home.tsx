@@ -21,6 +21,7 @@ import { router } from "expo-router";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Haptics from "expo-haptics";
 import { config } from "../../lib/config";
 import { colors, radius, spacing } from "../../lib/theme";
 import {
@@ -48,6 +49,7 @@ export default function HomeTab() {
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const slideAnim = useRef(new Animated.Value(24)).current;
   const scaleAnim = useRef(new Animated.Value(1)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
 
   const [session, setSession] = useState<any | null>(null);
   const [stores, setStores] = useState<StoreRow[]>([]);
@@ -64,6 +66,7 @@ export default function HomeTab() {
   const [stockSearchQuery, setStockSearchQuery] = useState("");
 
   const selectedStore = stores[0];
+  const isStoreOnline = !!selectedStore?.is_active;
 
   const filteredStoreProducts = useMemo(() => {
     const q = stockSearchQuery.trim().toLowerCase();
@@ -98,6 +101,18 @@ export default function HomeTab() {
       (o: any) => !DELIVERED.includes((o.status || "").toLowerCase().replace(/-/g, "_"))
     );
   }, [orders]);
+
+  useEffect(() => {
+    if (!isStoreOnline) return;
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.35, duration: 800, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [isStoreOnline, pulseAnim]);
 
   useEffect(() => {
     let cancelled = false;
@@ -442,6 +457,11 @@ export default function HomeTab() {
     }
   };
 
+  const handleStatusToggle = async (value: boolean) => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await toggleOnline(value);
+  };
+
   const toggleProductActive = useCallback(async (product: any) => {
     if (!product.storeProductId) return;
 
@@ -528,11 +548,70 @@ export default function HomeTab() {
             </View>
           </View>
           <View style={styles.headerActions}>
+            <View style={styles.statusChip}>
+              <Animated.View
+                style={[
+                  styles.statusDot,
+                  {
+                    backgroundColor: isStoreOnline ? colors.success : colors.textTertiary,
+                    transform: [{ scale: isStoreOnline ? pulseAnim : 1 }],
+                  },
+                ]}
+              />
+              <Text
+                style={[
+                  styles.statusLabel,
+                  { color: isStoreOnline ? colors.success : colors.textTertiary },
+                ]}
+              >
+                {isStoreOnline ? "Online" : "Offline"}
+              </Text>
+            </View>
+            <Switch
+              value={isStoreOnline}
+              onValueChange={handleStatusToggle}
+              trackColor={{ false: colors.border, true: colors.primaryLight }}
+              thumbColor={isStoreOnline ? colors.primary : colors.textTertiary}
+              ios_backgroundColor={colors.border}
+            />
             <TouchableOpacity onPress={() => router.push("/profile")} style={styles.iconBtn}>
               <Ionicons name="person-circle-outline" size={24} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
         </View>
+
+        {selectedStore && (
+          <View style={[styles.statusBanner, isStoreOnline ? styles.bannerOnline : styles.bannerOffline]}>
+            <View style={[styles.bannerIcon, isStoreOnline ? styles.bannerIconOnline : styles.bannerIconOffline]}>
+              <Ionicons
+                name={isStoreOnline ? "storefront-outline" : "power-outline"}
+                size={24}
+                color={isStoreOnline ? colors.primary : colors.textSecondary}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.bannerTitle}>
+                {isStoreOnline ? "You're Online" : "You're Offline"}
+              </Text>
+              <Text style={styles.bannerSubtext}>
+                {isStoreOnline
+                  ? activeOrders.length > 0
+                    ? `${activeOrders.length} active order${activeOrders.length > 1 ? "s" : ""}`
+                    : "Waiting for new orders..."
+                  : "Go online to receive orders"}
+              </Text>
+            </View>
+            {!isStoreOnline && (
+              <TouchableOpacity
+                style={styles.goOnlineBtn}
+                onPress={() => handleStatusToggle(true)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.goOnlineBtnText}>Go Online</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
         <Modal visible={!!selectedOrder} transparent animationType="fade">
           <View style={styles.overlay}>
@@ -611,22 +690,7 @@ export default function HomeTab() {
               </Text>
             </View>
             <View style={{ alignItems: "flex-end" }}>
-              <Text style={[
-                styles.switchLabel,
-                { color: selectedStore.is_active ? colors.success : colors.error }
-              ]}>
-                {selectedStore.is_active ? "Online" : "Offline"}
-              </Text>
-              <Switch
-                value={selectedStore.is_active}
-                onValueChange={toggleOnline}
-                trackColor={{
-                  false: colors.error + "40",
-                  true: colors.success + "40"
-                }}
-                thumbColor={selectedStore.is_active ? colors.success : colors.error}
-                ios_backgroundColor={colors.error + "40"}
-              />
+              <Text style={styles.switchLabel}>Status shown in header</Text>
             </View>
           </View>
         )}
@@ -936,6 +1000,19 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     alignItems: "center",
   },
+  statusChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusLabel: { fontSize: 12, fontWeight: "600" },
   brand: {
     color: colors.textPrimary,
     fontSize: 18,
@@ -1017,7 +1094,44 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginBottom: 6,
     fontWeight: "600",
+    color: colors.textTertiary,
   },
+  statusBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    gap: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  bannerOnline: {
+    backgroundColor: colors.primaryLight + "22",
+    borderWidth: 1,
+    borderColor: colors.primary + "33",
+  },
+  bannerOffline: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  bannerIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bannerIconOnline: { backgroundColor: colors.surface },
+  bannerIconOffline: { backgroundColor: colors.surfaceVariant },
+  bannerTitle: { color: colors.textPrimary, fontSize: 16, fontWeight: "700" },
+  bannerSubtext: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
+  goOnlineBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+  },
+  goOnlineBtnText: { color: colors.surface, fontSize: 13, fontWeight: "700" },
 
   overlay: {
     flex: 1,

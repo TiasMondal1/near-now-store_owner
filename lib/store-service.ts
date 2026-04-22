@@ -4,7 +4,8 @@
  */
 
 import { apiClient } from './api-client';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { apiUrl } from './apiUrl';
+import { fetchJson } from './fetchJson';
 
 export interface Store {
   id: string;
@@ -243,7 +244,8 @@ class StoreService {
         name: 'store-image.jpg',
       } as any);
 
-      const response = await fetch(`${apiClient['baseUrl']}/store-owner/stores/${storeId}/image`, {
+      const url = apiUrl(apiClient.getBaseUrl(), `/store-owner/stores/${storeId}/image`);
+      const { res, json } = await fetchJson<{ image_url?: string }>(url, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -251,11 +253,9 @@ class StoreService {
         body: formData,
       });
 
-      const data = await response.json();
-
-      if (response.ok && data.image_url) {
+      if (res.ok && json?.image_url) {
         this.invalidateCache();
-        return data.image_url;
+        return json.image_url;
       }
 
       return null;
