@@ -118,8 +118,6 @@ export default function StoreOwnerPhoneScreen() {
     if (!isValid || loading) return;
     const fullPhone = `+91${phone}`;
 
-    const baseUrl = API_BASE.replace(/\/+$/, "");
-
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20000);
 

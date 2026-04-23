@@ -219,9 +219,10 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[
 
   const { data: storeOrdersData, error: soError } = await supabase
     .from("store_orders")
-    .select("*")
+    .select("id, store_id, customer_order_id, status, subtotal_amount, delivery_fee, created_at, delivered_at, cancelled_at")
     .eq("store_id", storeId)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(200);
 
   if (soError) {
     console.warn("[orders-db] store_orders error:", soError.message);
@@ -234,30 +235,31 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[
   if (storeOrders.length === 0) {
     const linked = await getOrdersFromDbViaCustomerOrders(storeId);
     if (linked.length > 0) {
-      console.log("[orders-db] got", linked.length, "orders via customer_orders fallback");
       return linked;
     }
-    // Fallback 2: fetch store_orders without filter and match store_id in JS (handles type/format mismatch)
+    // Fallback 2: store_id format/case mismatch — fetch recent rows and match in JS.
+    // Scoped to last 90 days and capped at 100 rows to limit payload.
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
     const { data: allRows, error: allErr } = await supabase
       .from("store_orders")
-      .select("*")
+      .select("id, store_id, customer_order_id, status, subtotal_amount, delivery_fee, created_at, delivered_at, cancelled_at")
+      .gte("created_at", ninetyDaysAgo)
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(100);
     if (!allErr && Array.isArray(allRows) && allRows.length > 0) {
       const storeIdStr = String(storeId).toLowerCase().trim();
       const matched = (allRows as StoreOrderRow[]).filter(
         (so) => so.store_id && (String(so.store_id).toLowerCase().trim() === storeIdStr || so.store_id === storeId)
       );
       if (matched.length > 0) {
-        console.log("[orders-db] got", matched.length, "orders via unfiltered store_orders + JS match");
         storeOrders = matched;
         // continue below to fetch customer_orders and items
       } else {
-        console.warn("[orders-db] store_orders exist but none for store_id=" + storeId + ". Sample store_ids:", [...new Set((allRows as StoreOrderRow[]).map((r) => r.store_id).filter(Boolean))].slice(0, 3));
+        if (__DEV__) console.warn("[orders-db] store_orders exist but none for store_id=" + storeId);
         return [];
       }
     } else {
-      if (allRows?.length) {
+      if (__DEV__ && allRows?.length) {
         console.warn("[orders-db] store_orders exist but none for store_id=" + storeId);
       }
       return [];
@@ -269,7 +271,7 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[
   if (customerOrderIds.length > 0) {
     const { data: coData, error: coError } = await supabase
       .from("customer_orders")
-      .select("*")
+      .select("id, order_code, status, total_amount, placed_at, delivered_at, cancelled_at")
       .in("id", customerOrderIds);
     if (!coError && Array.isArray(coData)) {
       (coData as CustomerOrderRow[]).forEach((co) => {
@@ -281,7 +283,7 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[
   const storeOrderIds = storeOrders.map((so) => so.id);
   const { data: itemsData, error: itemsError } = await supabase
     .from("order_items")
-    .select("*")
+    .select("id, store_order_id, product_name, unit, image_url, unit_price, quantity")
     .in("store_order_id", storeOrderIds);
 
   if (itemsError) {
@@ -329,12 +331,12 @@ export async function getOrderByIdFromDb(orderId: string): Promise<OrderForStore
 
   const { data: storeOrderData, error: soError } = await supabase
     .from("store_orders")
-    .select("*")
+    .select("id, store_id, customer_order_id, status, subtotal_amount, delivery_fee, created_at, delivered_at, cancelled_at")
     .eq("id", orderId)
     .maybeSingle();
 
   if (soError || !storeOrderData) {
-    if (soError) console.warn("[orders-db] getOrderByIdFromDb store_orders error:", soError.message);
+    if (soError) console.warn("[orders-db] getOrderByIdFromDb error:", soError.message);
     return null;
   }
 
@@ -344,7 +346,7 @@ export async function getOrderByIdFromDb(orderId: string): Promise<OrderForStore
   if (so.customer_order_id) {
     const { data: coData } = await supabase
       .from("customer_orders")
-      .select("*")
+      .select("id, order_code, status, total_amount, placed_at, delivered_at, cancelled_at")
       .eq("id", so.customer_order_id)
       .maybeSingle();
     co = coData as CustomerOrderRow | null;
@@ -352,7 +354,7 @@ export async function getOrderByIdFromDb(orderId: string): Promise<OrderForStore
 
   const { data: itemsData, error: itemsError } = await supabase
     .from("order_items")
-    .select("*")
+    .select("id, store_order_id, product_name, unit, image_url, unit_price, quantity")
     .eq("store_order_id", orderId);
 
   if (itemsError) {

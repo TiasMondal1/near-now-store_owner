@@ -60,10 +60,8 @@ export function useProducts(token: string | null, storeId: string | null) {
     }
   }, [token, storeId]);
 
-  // Fetch from API
-  const fetchProductsFromAPI = async (authToken: string, storeIdVal: string) => {
+  const fetchProductsFromAPI = useCallback(async (authToken: string, storeIdVal: string) => {
     try {
-      // Try Supabase first
       const fromDb = await getMergedInventoryFromDb(storeIdVal);
       if (Array.isArray(fromDb) && fromDb.length > 0) {
         setProducts(fromDb);
@@ -71,7 +69,6 @@ export function useProducts(token: string | null, storeId: string | null) {
         return;
       }
 
-      // Fallback to API
       const res = await fetch(
         `${API_BASE}/store-owner/stores/${storeIdVal}/products`,
         { headers: { Authorization: `Bearer ${authToken}` } }
@@ -83,10 +80,8 @@ export function useProducts(token: string | null, storeId: string | null) {
 
       setProducts(productList);
       await AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(productList));
-    } catch (err) {
-      console.error('[useProducts] Error fetching from API:', err);
-    }
-  };
+    } catch { /* non-fatal */ }
+  }, []);
 
 
   // Invalidate cache

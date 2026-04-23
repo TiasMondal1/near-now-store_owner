@@ -24,6 +24,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { config } from "../../lib/config";
 import { colors, radius, spacing } from "../../lib/theme";
+import { supabase } from "../../lib/supabase";
 import {
   getStockListFromDb,
   updateProductActiveState,
@@ -31,6 +32,8 @@ import {
   restoreActiveProductsOnline,
 } from "../../lib/storeProducts";
 import { getOrdersFromDb, getOrderByIdFromDb } from "../../lib/orders-db";
+import { getStatusColor, formatStatus } from "../../lib/order-utils";
+import { useSmartPoll } from "../../lib/useSmartPoll";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
@@ -64,36 +67,25 @@ export default function HomeTab() {
   const [stockExpanded, setStockExpanded] = useState(false);
   const [stockSearchOpen, setStockSearchOpen] = useState(false);
   const [stockSearchQuery, setStockSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True when at least one Supabase channel reaches SUBSCRIBED — used to slow down polling
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+
+  const handleStockSearchChange = useCallback((text: string) => {
+    setStockSearchQuery(text);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => setDebouncedSearchQuery(text), 200);
+  }, []);
 
   const selectedStore = stores[0];
   const isStoreOnline = !!selectedStore?.is_active;
 
   const filteredStoreProducts = useMemo(() => {
-    const q = stockSearchQuery.trim().toLowerCase();
+    const q = debouncedSearchQuery.trim().toLowerCase();
     if (!q) return storeProducts;
     return storeProducts.filter((p) => (p.name || "").toLowerCase().includes(q));
-  }, [storeProducts, stockSearchQuery]);
-
-  const getStatusColor = (status: string) => {
-    const s = (status || "").toLowerCase();
-    if (s === "pending_store" || s === "pending_at_store") return "#F59E0B";
-    if (s === "accepted") return colors.success;
-    if (s === "rejected" || s === "cancelled") return colors.error;
-    if (s === "ready") return "#3B82F6";
-    if (s === "delivered" || s === "order_delivered") return colors.textTertiary;
-    return colors.textTertiary;
-  };
-
-  const formatStatus = (status: string) => {
-    const s = (status || "").toLowerCase();
-    if (s === "pending_store" || s === "pending_at_store") return "Pending";
-    if (s === "accepted") return "Accepted";
-    if (s === "rejected") return "Rejected";
-    if (s === "ready") return "Ready";
-    if (s === "delivered" || s === "order_delivered") return "Delivered";
-    if (s === "cancelled") return "Cancelled";
-    return status;
-  };
+  }, [storeProducts, debouncedSearchQuery]);
 
   const activeOrders = useMemo(() => {
     const DELIVERED = ["delivered", "order_delivered"];
@@ -154,25 +146,14 @@ export default function HomeTab() {
     } catch { /* non-fatal */ }
   }, []);
 
+  // Initial data load when session + store are ready
   useEffect(() => {
     if (!session || !selectedStore) return;
-
-    let cancelled = false;
-    let interval: ReturnType<typeof setInterval> | null = null;
-
     const task = InteractionManager.runAfterInteractions(() => {
-      if (cancelled) return;
-
       fetchOrders();
       fetchStoreProducts();
-      interval = setInterval(fetchOrders, 10000);
     });
-
-    return () => {
-      cancelled = true;
-      task.cancel && task.cancel();
-      if (interval) clearInterval(interval);
-    };
+    return () => { task.cancel && task.cancel(); };
   }, [session, selectedStore]);
 
   useEffect(() => {
@@ -182,10 +163,7 @@ export default function HomeTab() {
     let channel: any = null;
 
     const task = InteractionManager.runAfterInteractions(() => {
-      if (cancelled || !selectedStore?.id) return;
-
-      const { supabase } = require("../../lib/supabase");
-      if (!supabase) return;
+      if (cancelled || !selectedStore?.id || !supabase) return;
 
       channel = supabase
         .channel(`products-${selectedStore.id}`)
@@ -199,19 +177,19 @@ export default function HomeTab() {
           },
           () => { fetchStoreProducts(true); }
         )
-        .subscribe();
+        .subscribe((status) => {
+          if (!cancelled) setRealtimeConnected(status === "SUBSCRIBED");
+        });
     });
 
     return () => {
       cancelled = true;
       task.cancel && task.cancel();
       if (channel) {
-        try {
-          const { supabase } = require("../../lib/supabase");
-          supabase?.removeChannel(channel);
-        } catch { /* ignore cleanup errors */ }
+        supabase?.removeChannel(channel);
         channel = null;
       }
+      setRealtimeConnected(false);
     };
   }, [selectedStore?.id]);
 
@@ -222,10 +200,7 @@ export default function HomeTab() {
     let channel: any = null;
 
     const task = InteractionManager.runAfterInteractions(() => {
-      if (cancelled || !selectedStore?.id || !session?.token) return;
-
-      const { supabase } = require("../../lib/supabase");
-      if (!supabase) return;
+      if (cancelled || !selectedStore?.id || !session?.token || !supabase) return;
 
       channel = supabase
         .channel(`store-${selectedStore.id}`)
@@ -248,10 +223,7 @@ export default function HomeTab() {
       cancelled = true;
       task.cancel && task.cancel();
       if (channel) {
-        try {
-          const { supabase } = require("../../lib/supabase");
-          supabase?.removeChannel(channel);
-        } catch { /* ignore cleanup errors */ }
+        supabase?.removeChannel(channel);
         channel = null;
       }
     };
@@ -340,6 +312,15 @@ export default function HomeTab() {
     }
   }, [session, selectedStore]);
 
+  // Smart polling: pauses in background, immediate refresh on foreground,
+  // slows to 30s when realtime WebSocket is healthy.
+  useSmartPoll(fetchOrders, {
+    intervalMs: 10_000,
+    slowIntervalMs: 30_000,
+    isRealtimeHealthy: realtimeConnected,
+    enabled: !!(session && selectedStore),
+  });
+
   const openOrderDetails = useCallback(async (orderId: string) => {
     if (!session) return;
 
@@ -361,10 +342,7 @@ export default function HomeTab() {
   const toggleOnline = async (value: boolean) => {
     if (!session || !selectedStore) return;
 
-    if (selectedStore.is_active === value) {
-      console.log("Store already in desired state:", value ? "online" : "offline");
-      return;
-    }
+    if (selectedStore.is_active === value) return;
 
     try {
       if (value) {
@@ -396,8 +374,7 @@ export default function HomeTab() {
                   await fetchStoreProducts(true);
 
                   Alert.alert("Store Online", "Your store is now visible to customers.");
-                } catch (error) {
-                  console.error("Error going online:", error);
+                } catch {
                   Alert.alert("Error", "Failed to update store status. Please try again.");
                   fetchStores(session.token, session.user?.id);
                 }
@@ -438,8 +415,7 @@ export default function HomeTab() {
                   fetchStoreProducts(true).catch(() => {});
 
                   Alert.alert("Store Offline", "Store is now hidden from customers. Your products are saved.");
-                } catch (error) {
-                  console.error("Error going offline:", error);
+                } catch {
                   Alert.alert("Error", "Failed to update store status. Please try again.");
                   fetchStores(session.token, session.user?.id);
                   fetchStoreProducts(true);
@@ -451,8 +427,7 @@ export default function HomeTab() {
           ]
         );
       }
-    } catch (error) {
-      console.error("Error toggling store status:", error);
+    } catch {
       Alert.alert("Error", "An unexpected error occurred. Please try again.");
     }
   };
@@ -504,28 +479,18 @@ export default function HomeTab() {
   }, [session?.token, fetchStoreProducts]);
 
   const deleteProduct = useCallback(async (product: any) => {
-    if (!product.storeProductId) return;
+    if (!product.storeProductId || !supabase) return;
 
-    try {
-      const { supabase } = require("../../lib/supabase");
-      if (!supabase) return;
+    const { error } = await supabase
+      .from("products")
+      .delete()
+      .eq("id", product.storeProductId);
 
-      const { error } = await supabase
-        .from("products")
-        .delete()
-        .eq("id", product.storeProductId);
+    if (error) return;
 
-      if (error) {
-        if (__DEV__) console.error("Failed to delete product:", error);
-        return;
-      }
-
-      setStoreProducts((prev) => prev.filter((p) => p.id !== product.id));
-      await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
-      await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
-    } catch (error) {
-      if (__DEV__) console.error("Error deleting product:", error);
-    }
+    setStoreProducts((prev) => prev.filter((p) => p.id !== product.id));
+    await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
+    await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
   }, []);
 
   if (loading) {
@@ -830,7 +795,7 @@ export default function HomeTab() {
                 <Ionicons name="search" size={18} color={colors.textTertiary} style={styles.stockSearchIcon} />
                 <TextInput
                   value={stockSearchQuery}
-                  onChangeText={setStockSearchQuery}
+                  onChangeText={handleStockSearchChange}
                   placeholder="Search products by name…"
                   placeholderTextColor={colors.textTertiary}
                   style={styles.stockSearchInput}
@@ -926,9 +891,17 @@ export default function HomeTab() {
                   </Text>
                 </View>
               ) : (
-                <View style={styles.stockList}>
-                  {filteredStoreProducts.map((p, index) => (
-                    <View key={p.id} style={[styles.stockItemCard, index === filteredStoreProducts.length - 1 && { marginBottom: 0 }]}>
+                <FlatList
+                  data={filteredStoreProducts}
+                  keyExtractor={(p) => p.id}
+                  scrollEnabled={false}
+                  initialNumToRender={10}
+                  maxToRenderPerBatch={10}
+                  windowSize={5}
+                  removeClippedSubviews={false}
+                  contentContainerStyle={styles.stockList}
+                  renderItem={({ item: p, index }) => (
+                    <View style={[styles.stockItemCard, index === filteredStoreProducts.length - 1 && { marginBottom: 0 }]}>
                       <TouchableOpacity
                         style={styles.deleteBtn}
                         onPress={() => deleteProduct(p)}
@@ -961,8 +934,8 @@ export default function HomeTab() {
                         )}
                       </TouchableOpacity>
                     </View>
-                  ))}
-                </View>
+                  )}
+                />
               )
             )}
           </View>

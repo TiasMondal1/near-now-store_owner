@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  ScrollView,
+  FlatList,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
@@ -15,6 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { config } from "../../lib/config";
 import { colors, radius, spacing } from "../../lib/theme";
 import { getOrderByIdFromDb, getOrdersFromDb } from "../../lib/orders-db";
+import { getStatusColor, formatStatus, isDelivered } from "../../lib/order-utils";
 
 const API_BASE = config.API_BASE;
 
@@ -30,30 +31,6 @@ export default function PreviousOrdersTab() {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const getStatusColor = (status: string) => {
-    const s = (status || "").toLowerCase();
-    if (s === "pending_store" || s === "pending_at_store") return "#F59E0B";
-    if (s === "accepted") return colors.success;
-    if (s === "rejected" || s === "cancelled") return colors.error;
-    if (s === "ready") return "#3B82F6";
-    if (s === "delivered" || s === "order_delivered") return colors.textTertiary;
-    return colors.textTertiary;
-  };
-
-  const formatStatus = (status: string) => {
-    const s = (status || "").toLowerCase();
-    if (s === "pending_store" || s === "pending_at_store") return "Pending";
-    if (s === "accepted") return "Accepted";
-    if (s === "rejected") return "Rejected";
-    if (s === "ready") return "Ready";
-    if (s === "delivered" || s === "order_delivered") return "Delivered";
-    if (s === "cancelled") return "Cancelled";
-    return status;
-  };
-
-  const DELIVERED_STATUSES = ["delivered", "order_delivered"];
-  const isDelivered = (o: any) =>
-    DELIVERED_STATUSES.includes((o.status || "").toLowerCase().replace(/-/g, "_"));
   const toNumber = (v: any) => {
     if (typeof v === "number") return Number.isFinite(v) ? v : NaN;
     if (typeof v === "string") {
@@ -91,7 +68,10 @@ export default function PreviousOrdersTab() {
     }
     return 0;
   };
-  const previousOrders = orders.filter((o: any) => isDelivered(o));
+  const previousOrders = useMemo(
+    () => orders.filter((o: any) => isDelivered(o.status)),
+    [orders]
+  );
 
   useEffect(() => {
     (async () => {
@@ -141,7 +121,7 @@ export default function PreviousOrdersTab() {
     }, [session?.token, storeId])
   );
 
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     if (!session || !storeId) return;
 
     try {
@@ -163,9 +143,7 @@ export default function PreviousOrdersTab() {
         setOrders(withRecoveredTotals);
         return;
       }
-    } catch (e) {
-      console.warn("[fetchOrders] DB failed:", e);
-    }
+    } catch { /* fall through to HTTP */ }
 
     try {
       const res = await fetch(
@@ -174,18 +152,13 @@ export default function PreviousOrdersTab() {
       );
       const raw = await res.text();
       let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {
-        return;
-      }
+      try { json = raw ? JSON.parse(raw) : null; } catch { return; }
       if (!json?.success) return;
-
       setOrders(json.orders || []);
     } catch {
       setOrders([]);
     }
-  };
+  }, [session, storeId]);
 
   if (loading) {
     return (
@@ -197,74 +170,81 @@ export default function PreviousOrdersTab() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container}>
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Ionicons name="time-outline" size={24} color={colors.primary} />
-            <View>
-              <Text style={styles.brand}>Previous Orders</Text>
-              <Text style={styles.subtitle}>Order History</Text>
-            </View>
-          </View>
-          <TouchableOpacity onPress={fetchOrders} style={styles.refreshBtn}>
-            <Ionicons name="refresh-outline" size={18} color={colors.primary} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.ordersSection}>
-          <View style={styles.ordersSectionHeader}>
-            <View>
-              <Text style={styles.ordersSectionTitle}>Previous Orders</Text>
-              <Text style={styles.ordersSectionSubtitle}>
-                {previousOrders.length === 0
-                  ? "No past orders yet"
-                  : `${previousOrders.length} order${previousOrders.length > 1 ? "s" : ""}`}
-              </Text>
-            </View>
-          </View>
-          {previousOrders.length === 0 ? (
-            <View style={styles.waitingCard}>
-              <Ionicons name="receipt-outline" size={36} color={colors.textTertiary} />
-              <Text style={styles.waitingTitle}>No previous orders</Text>
-              <Text style={styles.waitingText}>Orders that have been delivered will appear here</Text>
-            </View>
-          ) : (
-            previousOrders.map((o) => (
-              <TouchableOpacity
-                key={o.id}
-                style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
-                onPress={() => router.push(`/invoice/${o.id}`)}
-                activeOpacity={0.75}
-              >
-                <View style={styles.orderCardLeft}>
-                  <Text style={styles.orderCardCode}>#{o.order_code}</Text>
-                  {(() => {
-                    const rawDate = o.created_at ?? o.createdAt ?? o.updated_at ?? o.updatedAt;
-                    if (!rawDate) return null;
-                    const parsed = new Date(rawDate);
-                    if (Number.isNaN(parsed.getTime())) return null;
-                    return (
-                      <Text style={styles.orderCardTime}>
-                        {parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                        {" · "}
-                        {parsed.toLocaleDateString()}
-                      </Text>
-                    );
-                  })()}
+      <FlatList
+        data={previousOrders}
+        keyExtractor={(o) => o.id}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+        contentContainerStyle={styles.container}
+        ListHeaderComponent={
+          <>
+            <View style={styles.header}>
+              <View style={styles.headerLeft}>
+                <Ionicons name="time-outline" size={24} color={colors.primary} />
+                <View>
+                  <Text style={styles.brand}>Previous Orders</Text>
+                  <Text style={styles.subtitle}>Order History</Text>
                 </View>
-                <View style={styles.orderCardRight}>
-                  <View style={[styles.statusBadge, { backgroundColor: getStatusColor(o.status) + "22" }]}>
-                    <Text style={[styles.statusBadgeText, { color: getStatusColor(o.status) }]}>
-                      {formatStatus(o.status)}
-                    </Text>
-                  </View>
-                  <Text style={styles.orderCardAmount}>{formatMoneyINR(getDisplayTotal(o))}</Text>
-                </View>
+              </View>
+              <TouchableOpacity onPress={fetchOrders} style={styles.refreshBtn}>
+                <Ionicons name="refresh-outline" size={18} color={colors.primary} />
               </TouchableOpacity>
-            ))
-          )}
-        </View>
-      </ScrollView>
+            </View>
+            <View style={styles.ordersSection}>
+              <View style={styles.ordersSectionHeader}>
+                <View>
+                  <Text style={styles.ordersSectionTitle}>Previous Orders</Text>
+                  <Text style={styles.ordersSectionSubtitle}>
+                    {previousOrders.length === 0
+                      ? "No past orders yet"
+                      : `${previousOrders.length} order${previousOrders.length > 1 ? "s" : ""}`}
+                  </Text>
+                </View>
+              </View>
+              {previousOrders.length === 0 && (
+                <View style={styles.waitingCard}>
+                  <Ionicons name="receipt-outline" size={36} color={colors.textTertiary} />
+                  <Text style={styles.waitingTitle}>No previous orders</Text>
+                  <Text style={styles.waitingText}>Orders that have been delivered will appear here</Text>
+                </View>
+              )}
+            </View>
+          </>
+        }
+        renderItem={({ item: o }) => {
+          const rawDate = o.created_at ?? o.createdAt ?? o.updated_at ?? o.updatedAt;
+          const parsed = rawDate ? new Date(rawDate) : null;
+          const validDate = parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
+          const statusColor = getStatusColor(o.status);
+          return (
+            <TouchableOpacity
+              style={[styles.orderCard, { borderLeftColor: statusColor }]}
+              onPress={() => router.push(`/invoice/${o.id}`)}
+              activeOpacity={0.75}
+            >
+              <View style={styles.orderCardLeft}>
+                <Text style={styles.orderCardCode}>#{o.order_code}</Text>
+                {validDate && (
+                  <Text style={styles.orderCardTime}>
+                    {validDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    {" · "}
+                    {validDate.toLocaleDateString()}
+                  </Text>
+                )}
+              </View>
+              <View style={styles.orderCardRight}>
+                <View style={[styles.statusBadge, { backgroundColor: statusColor + "22" }]}>
+                  <Text style={[styles.statusBadgeText, { color: statusColor }]}>
+                    {formatStatus(o.status)}
+                  </Text>
+                </View>
+                <Text style={styles.orderCardAmount}>{formatMoneyINR(getDisplayTotal(o))}</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        }}
+      />
     </SafeAreaView>
   );
 }

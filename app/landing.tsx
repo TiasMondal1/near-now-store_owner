@@ -12,18 +12,10 @@ export default function LandingScreen() {
 
   useEffect(() => {
     (async () => {
-      console.log("[landing] Checking for existing session...");
       const session = await getSession();
-      console.log("[landing] Session check result:", {
-        exists: !!session,
-        hasToken: !!session?.token,
-        hasUserId: !!session?.user?.id,
-        userRole: session?.user?.role,
-      });
-      
+
       // CRITICAL: Store Owner app should NEVER have a customer session
       if (session?.user?.role === "customer") {
-        console.error("[landing] ❌ WRONG SESSION TYPE: customer session in store owner app!");
         Alert.alert(
           "Wrong Account Type",
           "You're logged in as a customer, but this is the Store Owner app. Please clear the session and log in with your shopkeeper account.",
@@ -44,10 +36,8 @@ export default function LandingScreen() {
       }
       
       if (session?.token && session?.user?.id) {
-        console.log("[landing] ✅ Valid session found, redirecting to dashboard");
         router.replace("/(tabs)/home");
       } else {
-        console.log("[landing] No valid session, showing login screen");
         setChecking(false);
       }
     })();
