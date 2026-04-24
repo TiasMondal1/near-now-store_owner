@@ -34,6 +34,7 @@ import {
 import { getOrdersFromDb, getOrderByIdFromDb } from "../../lib/orders-db";
 import { getStatusColor, formatStatus } from "../../lib/order-utils";
 import { useSmartPoll } from "../../lib/useSmartPoll";
+import { StoreStatusCard } from "../../components/StoreStatusCard";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
@@ -60,7 +61,7 @@ export default function HomeTab() {
   const [loading, setLoading] = useState(true);
 
   const [storeProducts, setStoreProducts] = useState<
-    Array<{ id: string; name: string; storeProductId?: string; is_active?: boolean }>
+    Array<{ id: string; name: string; unit?: string; storeProductId?: string; is_active?: boolean; quantity?: number }>
   >([]);
   const [storeProductsLoading, setStoreProductsLoading] = useState(false);
   const [togglingProductId, setTogglingProductId] = useState<string | null>(null);
@@ -71,6 +72,15 @@ export default function HomeTab() {
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True when at least one Supabase channel reaches SUBSCRIBED — used to slow down polling
   const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<{
+    title: string;
+    message: string;
+    confirmText: string;
+    confirmColor: string;
+    iconName: React.ComponentProps<typeof Ionicons>["name"];
+    onConfirm: () => Promise<void>;
+  } | null>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
 
   const handleStockSearchChange = useCallback((text: string) => {
     setStockSearchQuery(text);
@@ -247,6 +257,7 @@ export default function HomeTab() {
         const mapped = fromDb.map((item: any) => ({
           id: item.id,
           name: (item.name || item.product_name || "").trim() || "Product",
+          unit: item.unit || "",
           storeProductId: item.storeProductId,
           is_active: item.is_active !== false,
         }));
@@ -339,102 +350,66 @@ export default function HomeTab() {
     } catch { /* ignore */ }
   }, [session]);
 
-  const toggleOnline = async (value: boolean) => {
+  const toggleOnline = (value: boolean) => {
     if (!session || !selectedStore) return;
-
     if (selectedStore.is_active === value) return;
 
-    try {
-      if (value) {
-        Alert.alert(
-          "Go Online?",
-          "Your store will become visible to customers. All active products will be available with stock of 100.",
-          [
-            {
-              text: "Cancel",
-              style: "cancel",
-              onPress: () => fetchStores(session.token, session.user?.id),
+    if (value) {
+      setConfirmModal({
+        title: "Go Online?",
+        message: "Your store will become visible to customers. All active products will be available.",
+        confirmText: "Go Online",
+        confirmColor: colors.success,
+        iconName: "storefront",
+        onConfirm: async () => {
+          const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
+            method: "PATCH",
+            headers: {
+              Authorization: `Bearer ${session.token}`,
+              "Content-Type": "application/json",
             },
-            {
-              text: "Go Online",
-              onPress: async () => {
-                try {
-                  const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
-                    method: "PATCH",
-                    headers: {
-                      Authorization: `Bearer ${session.token}`,
-                      "Content-Type": "application/json",
-                    },
-                    body: JSON.stringify({ is_active: true }),
-                  });
-                  if (!response.ok) throw new Error(`Failed: ${response.status}`);
-
-                  await restoreActiveProductsOnline(selectedStore.id);
-                  await fetchStores(session.token, session.user?.id);
-                  await fetchStoreProducts(true);
-
-                  Alert.alert("Store Online", "Your store is now visible to customers.");
-                } catch {
-                  Alert.alert("Error", "Failed to update store status. Please try again.");
-                  fetchStores(session.token, session.user?.id);
-                }
+            body: JSON.stringify({ is_active: true }),
+          });
+          if (!response.ok) throw new Error(`Failed: ${response.status}`);
+          await restoreActiveProductsOnline(selectedStore.id);
+          await fetchStores(session.token, session.user?.id);
+          await fetchStoreProducts(true);
+        },
+      });
+    } else {
+      setConfirmModal({
+        title: "Go Offline?",
+        message: "Your store will be hidden from customers. Your product list is preserved.",
+        confirmText: "Go Offline",
+        confirmColor: colors.error,
+        iconName: "power",
+        onConfirm: async () => {
+          setStoreProductsLoading(true);
+          try {
+            await setAllProductsOffline(selectedStore.id);
+            const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
+              method: "PATCH",
+              headers: {
+                Authorization: `Bearer ${session.token}`,
+                "Content-Type": "application/json",
               },
-            },
-          ]
-        );
-      } else {
-        Alert.alert(
-          "Go Offline?",
-          "Your store will be hidden from customers. Product list is preserved.",
-          [
-            {
-              text: "Cancel",
-              style: "cancel",
-              onPress: () => fetchStores(session.token, session.user?.id),
-            },
-            {
-              text: "Go Offline",
-              style: "destructive",
-              onPress: async () => {
-                setStoreProductsLoading(true);
-                try {
-                  await setAllProductsOffline(selectedStore.id);
-
-                  const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
-                    method: "PATCH",
-                    headers: {
-                      Authorization: `Bearer ${session.token}`,
-                      "Content-Type": "application/json",
-                    },
-                    body: JSON.stringify({ is_active: false }),
-                  });
-                  if (!response.ok) throw new Error(`Failed: ${response.status}`);
-
-                  await invalidateAllCaches();
-                  await fetchStores(session.token, session.user?.id);
-                  fetchStoreProducts(true).catch(() => {});
-
-                  Alert.alert("Store Offline", "Store is now hidden from customers. Your products are saved.");
-                } catch {
-                  Alert.alert("Error", "Failed to update store status. Please try again.");
-                  fetchStores(session.token, session.user?.id);
-                  fetchStoreProducts(true);
-                } finally {
-                  setStoreProductsLoading(false);
-                }
-              },
-            },
-          ]
-        );
-      }
-    } catch {
-      Alert.alert("Error", "An unexpected error occurred. Please try again.");
+              body: JSON.stringify({ is_active: false }),
+            });
+            if (!response.ok) throw new Error(`Failed: ${response.status}`);
+            await invalidateAllCaches();
+            await fetchStores(session.token, session.user?.id);
+            fetchStoreProducts(true).catch(() => {});
+          } finally {
+            setStoreProductsLoading(false);
+          }
+        },
+      });
     }
   };
 
   const handleStatusToggle = async (value: boolean) => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    await toggleOnline(value);
+    toggleOnline(value);
   };
 
   const toggleProductActive = useCallback(async (product: any) => {
@@ -518,7 +493,7 @@ export default function HomeTab() {
                 style={[
                   styles.statusDot,
                   {
-                    backgroundColor: isStoreOnline ? colors.success : colors.textTertiary,
+                    backgroundColor: isStoreOnline ? colors.success : colors.error,
                     transform: [{ scale: isStoreOnline ? pulseAnim : 1 }],
                   },
                 ]}
@@ -526,7 +501,7 @@ export default function HomeTab() {
               <Text
                 style={[
                   styles.statusLabel,
-                  { color: isStoreOnline ? colors.success : colors.textTertiary },
+                  { color: isStoreOnline ? colors.success : colors.error },
                 ]}
               >
                 {isStoreOnline ? "Online" : "Offline"}
@@ -535,8 +510,8 @@ export default function HomeTab() {
             <Switch
               value={isStoreOnline}
               onValueChange={handleStatusToggle}
-              trackColor={{ false: colors.border, true: colors.primaryLight }}
-              thumbColor={isStoreOnline ? colors.primary : colors.textTertiary}
+              trackColor={{ false: colors.error + "55", true: colors.primaryLight }}
+              thumbColor={isStoreOnline ? colors.primary : colors.error}
               ios_backgroundColor={colors.border}
             />
             <TouchableOpacity onPress={() => router.push("/profile")} style={styles.iconBtn}>
@@ -546,37 +521,60 @@ export default function HomeTab() {
         </View>
 
         {selectedStore && (
-          <View style={[styles.statusBanner, isStoreOnline ? styles.bannerOnline : styles.bannerOffline]}>
-            <View style={[styles.bannerIcon, isStoreOnline ? styles.bannerIconOnline : styles.bannerIconOffline]}>
-              <Ionicons
-                name={isStoreOnline ? "storefront-outline" : "power-outline"}
-                size={24}
-                color={isStoreOnline ? colors.primary : colors.textSecondary}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.bannerTitle}>
-                {isStoreOnline ? "You're Online" : "You're Offline"}
-              </Text>
-              <Text style={styles.bannerSubtext}>
-                {isStoreOnline
-                  ? activeOrders.length > 0
-                    ? `${activeOrders.length} active order${activeOrders.length > 1 ? "s" : ""}`
-                    : "Waiting for new orders..."
-                  : "Go online to receive orders"}
-              </Text>
-            </View>
-            {!isStoreOnline && (
-              <TouchableOpacity
-                style={styles.goOnlineBtn}
-                onPress={() => handleStatusToggle(true)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.goOnlineBtnText}>Go Online</Text>
-              </TouchableOpacity>
-            )}
-          </View>
+          <StoreStatusCard
+            store={selectedStore}
+            isOnline={isStoreOnline}
+            activeOrderCount={activeOrders.length}
+            onToggle={handleStatusToggle}
+          />
         )}
+
+        {/* Store status confirm modal */}
+        <Modal visible={!!confirmModal} transparent animationType="fade">
+          <View style={styles.confirmOverlay}>
+            <View style={styles.confirmSheet}>
+              {confirmModal && (
+                <>
+                  <View style={[styles.confirmIconWrap, { backgroundColor: confirmModal.confirmColor + "18" }]}>
+                    <Ionicons name={confirmModal.iconName} size={32} color={confirmModal.confirmColor} />
+                  </View>
+                  <Text style={styles.confirmTitle}>{confirmModal.title}</Text>
+                  <Text style={styles.confirmMsg}>{confirmModal.message}</Text>
+                  <TouchableOpacity
+                    style={[styles.confirmActionBtn, { backgroundColor: confirmModal.confirmColor }]}
+                    activeOpacity={0.85}
+                    disabled={confirmLoading}
+                    onPress={async () => {
+                      setConfirmLoading(true);
+                      try {
+                        await confirmModal.onConfirm();
+                      } catch {
+                        Alert.alert("Error", "Failed to update store status. Please try again.");
+                      } finally {
+                        setConfirmLoading(false);
+                        setConfirmModal(null);
+                      }
+                    }}
+                  >
+                    {confirmLoading ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.confirmActionBtnText}>{confirmModal.confirmText}</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.confirmCancelBtn}
+                    activeOpacity={0.75}
+                    disabled={confirmLoading}
+                    onPress={() => setConfirmModal(null)}
+                  >
+                    <Text style={styles.confirmCancelBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
 
         <Modal visible={!!selectedOrder} transparent animationType="fade">
           <View style={styles.overlay}>
@@ -636,29 +634,6 @@ export default function HomeTab() {
           </View>
         </Modal>
 
-        {selectedStore && (
-          <View style={[
-            styles.storeCard,
-            !selectedStore.is_active && styles.storeCardOffline
-          ]}>
-            <View style={{ flex: 1 }}>
-              <View style={styles.storeHeader}>
-                <Text style={styles.storeName}>{selectedStore.name}</Text>
-                {!selectedStore.is_active && (
-                  <View style={styles.offlineBadge}>
-                    <Text style={styles.offlineBadgeText}>OFFLINE</Text>
-                  </View>
-                )}
-              </View>
-              <Text style={styles.storeAddress}>
-                {selectedStore.address || "No address"}
-              </Text>
-            </View>
-            <View style={{ alignItems: "flex-end" }}>
-              <Text style={styles.switchLabel}>Status shown in header</Text>
-            </View>
-          </View>
-        )}
 
         <View>
           <View style={styles.ordersSection}>
@@ -745,16 +720,23 @@ export default function HomeTab() {
                 onPress={() => setStockExpanded(!stockExpanded)}
                 activeOpacity={0.7}
               >
-                <View>
+                <View style={styles.stockTitleRow}>
                   <Text style={styles.stockTitle}>Your Stock</Text>
-                  <Text style={styles.stockSubtitle}>
-                    {stockSearchQuery.trim()
-                      ? filteredStoreProducts.length === storeProducts.length
-                        ? `${storeProducts.length} product${storeProducts.length !== 1 ? "s" : ""} in store`
-                        : `${filteredStoreProducts.length} of ${storeProducts.length} match`
-                      : `${storeProducts.length} product${storeProducts.length !== 1 ? "s" : ""} in store`}
-                  </Text>
+                  {storeProducts.length > 0 && (
+                    <View style={styles.stockCountBadge}>
+                      <Text style={styles.stockCountBadgeText}>
+                        {storeProducts.filter((p) => p.is_active !== false).length} active
+                      </Text>
+                    </View>
+                  )}
                 </View>
+                <Text style={styles.stockSubtitle}>
+                  {stockSearchQuery.trim()
+                    ? filteredStoreProducts.length === storeProducts.length
+                      ? `${storeProducts.length} product${storeProducts.length !== 1 ? "s" : ""} in store`
+                      : `${filteredStoreProducts.length} of ${storeProducts.length} match`
+                    : `${storeProducts.length} product${storeProducts.length !== 1 ? "s" : ""} in store`}
+                </Text>
               </TouchableOpacity>
               <View style={styles.stockHeaderRight}>
                 <TouchableOpacity
@@ -827,25 +809,27 @@ export default function HomeTab() {
                   </View>
                 ) : (
                   <>
-                    {filteredStoreProducts.slice(0, 15).map((p) => (
-                      <View
-                        key={p.id}
-                        style={[
-                          styles.productChip,
-                          p.is_active !== false && styles.productChipActive,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.productChipText,
-                            p.is_active !== false && styles.productChipTextActive,
-                          ]}
-                          numberOfLines={1}
+                    {filteredStoreProducts.slice(0, 15).map((p) => {
+                      const isActive = p.is_active !== false;
+                      const qty = p.quantity ?? 0;
+                      return (
+                        <View
+                          key={p.id}
+                          style={[styles.productChip, isActive ? styles.productChipActive : styles.productChipInactive]}
                         >
-                          {p.name || "Product"}
-                        </Text>
-                      </View>
-                    ))}
+                          <View style={[styles.productChipDot, { backgroundColor: isActive ? colors.success : colors.textTertiary }]} />
+                          <Text
+                            style={[styles.productChipText, isActive ? styles.productChipTextActive : styles.productChipTextInactive]}
+                            numberOfLines={1}
+                          >
+                            {p.name || "Product"}
+                          </Text>
+                          <Text style={[styles.productChipQty, isActive ? styles.productChipQtyActive : styles.productChipQtyInactive]}>
+                            {qty}
+                          </Text>
+                        </View>
+                      );
+                    })}
                     {filteredStoreProducts.length > 15 && (
                       <TouchableOpacity
                         style={styles.moreChip}
@@ -900,41 +884,39 @@ export default function HomeTab() {
                   windowSize={5}
                   removeClippedSubviews={false}
                   contentContainerStyle={styles.stockList}
-                  renderItem={({ item: p, index }) => (
-                    <View style={[styles.stockItemCard, index === filteredStoreProducts.length - 1 && { marginBottom: 0 }]}>
-                      <TouchableOpacity
-                        style={styles.deleteBtn}
-                        onPress={() => deleteProduct(p)}
-                      >
-                        <Ionicons name="close-circle" size={22} color={colors.error} />
-                      </TouchableOpacity>
-                      <View style={styles.stockItemInfo}>
-                        <Text style={styles.stockItemName} numberOfLines={1}>
-                          {p.name || "Product"}
-                        </Text>
+                  renderItem={({ item: p, index }) => {
+                    const isActive = p.is_active !== false;
+                    return (
+                      <View style={[styles.stockItemCard, index === filteredStoreProducts.length - 1 && { marginBottom: 0 }]}>
+                        <View style={[styles.stockItemAccent, { backgroundColor: isActive ? colors.success : colors.border }]} />
+                        <View style={styles.stockItemInfo}>
+                          <Text style={styles.stockItemName} numberOfLines={1}>{p.name || "Product"}</Text>
+                          {p.unit ? (
+                            <Text style={styles.stockItemUnit}>{p.unit}</Text>
+                          ) : null}
+                        </View>
+                        <View style={styles.stockItemActions}>
+                          <TouchableOpacity
+                            style={[styles.activeToggleBtn, isActive ? styles.activeToggleBtnOn : styles.activeToggleBtnOff]}
+                            onPress={() => toggleProductActive(p)}
+                            disabled={togglingProductId === p.id || !selectedStore?.is_active}
+                            activeOpacity={0.75}
+                          >
+                            {togglingProductId === p.id ? (
+                              <ActivityIndicator size="small" color={isActive ? colors.surface : colors.textSecondary} />
+                            ) : (
+                              <Text style={isActive ? styles.activeToggleTextOn : styles.activeToggleTextOff}>
+                                {isActive ? "Active" : "Inactive"}
+                              </Text>
+                            )}
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.deleteBtn} onPress={() => deleteProduct(p)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Ionicons name="trash-outline" size={17} color={colors.error} />
+                          </TouchableOpacity>
+                        </View>
                       </View>
-                      <TouchableOpacity
-                        style={[
-                          styles.activeToggleBtn,
-                          p.is_active !== false ? styles.activeToggleBtnOn : styles.activeToggleBtnOff,
-                        ]}
-                        onPress={() => toggleProductActive(p)}
-                        disabled={togglingProductId === p.id || !selectedStore?.is_active}
-                        activeOpacity={0.75}
-                      >
-                        {togglingProductId === p.id ? (
-                          <ActivityIndicator
-                            size="small"
-                            color={p.is_active !== false ? colors.surface : colors.textSecondary}
-                          />
-                        ) : (
-                          <Text style={p.is_active !== false ? styles.activeToggleTextOn : styles.activeToggleTextOff}>
-                            {p.is_active !== false ? "Active" : "Inactive"}
-                          </Text>
-                        )}
-                      </TouchableOpacity>
-                    </View>
-                  )}
+                    );
+                  }}
                 />
               )
             )}
@@ -1008,103 +990,6 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
 
-  storeCard: {
-    flexDirection: "row",
-    gap: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 2,
-    borderColor: colors.success + "30",
-    marginBottom: spacing.lg,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  storeCardOffline: {
-    backgroundColor: colors.error + "08",
-    borderColor: colors.error + "60",
-    shadowColor: colors.error,
-  },
-  storeHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    marginBottom: 4,
-  },
-  offlineBadge: {
-    backgroundColor: colors.error,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: radius.sm,
-  },
-  offlineBadgeText: {
-    color: colors.surface,
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 0.5,
-  },
-  storeName: {
-    color: colors.textPrimary,
-    fontSize: 18,
-    fontWeight: "700",
-    letterSpacing: -0.3,
-  },
-  storeAddress: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    marginTop: 4,
-    lineHeight: 18,
-  },
-  storeMeta: {
-    color: colors.textTertiary,
-    fontSize: 12,
-    marginTop: 6,
-  },
-  switchLabel: {
-    fontSize: 13,
-    marginBottom: 6,
-    fontWeight: "600",
-    color: colors.textTertiary,
-  },
-  statusBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: spacing.lg,
-    borderRadius: radius.lg,
-    gap: spacing.md,
-    marginBottom: spacing.lg,
-  },
-  bannerOnline: {
-    backgroundColor: colors.primaryLight + "22",
-    borderWidth: 1,
-    borderColor: colors.primary + "33",
-  },
-  bannerOffline: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  bannerIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  bannerIconOnline: { backgroundColor: colors.surface },
-  bannerIconOffline: { backgroundColor: colors.surfaceVariant },
-  bannerTitle: { color: colors.textPrimary, fontSize: 16, fontWeight: "700" },
-  bannerSubtext: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
-  goOnlineBtn: {
-    backgroundColor: colors.primary,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 10,
-  },
-  goOnlineBtnText: { color: colors.surface, fontSize: 13, fontWeight: "700" },
 
   overlay: {
     flex: 1,
@@ -1310,16 +1195,34 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     fontSize: 13,
   },
+  stockTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
   stockTitle: {
     color: colors.textPrimary,
     fontSize: 18,
     fontWeight: "700",
     letterSpacing: -0.3,
   },
+  stockCountBadge: {
+    backgroundColor: colors.success + "18",
+    borderRadius: radius.full,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: colors.success + "40",
+  },
+  stockCountBadgeText: {
+    color: colors.success,
+    fontSize: 11,
+    fontWeight: "700",
+  },
   stockSubtitle: {
     color: colors.textTertiary,
     fontSize: 12,
-    marginTop: 2,
+    marginTop: 3,
   },
   stockHeaderRight: {
     flexDirection: "row",
@@ -1349,33 +1252,42 @@ const styles = StyleSheet.create({
   },
   stockItemCard: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    padding: spacing.md,
-    backgroundColor: colors.surfaceVariant,
+    backgroundColor: colors.surface,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: colors.borderLight,
-    position: "relative",
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+  stockItemAccent: {
+    width: 4,
+    alignSelf: "stretch",
   },
   deleteBtn: {
-    position: "absolute",
-    left: -8,
-    top: "50%",
-    transform: [{ translateY: -12 }],
-    zIndex: 10,
-    padding: 4,
+    padding: spacing.xs,
   },
   stockItemInfo: {
     flex: 1,
-    marginRight: spacing.md,
-    marginLeft: 20,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
   },
   stockItemName: {
     color: colors.textPrimary,
     fontSize: 14,
     fontWeight: "600",
     marginBottom: 2,
+  },
+  stockItemUnit: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    fontWeight: "500",
+    marginTop: 2,
+  },
+  stockItemActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingRight: spacing.md,
   },
   activeToggleBtn: {
     paddingHorizontal: 14,
@@ -1411,26 +1323,84 @@ const styles = StyleSheet.create({
     flexDirection: "row",
   },
   productChip: {
-    backgroundColor: colors.surfaceVariant,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
     borderRadius: radius.full,
     paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingVertical: 6,
     borderWidth: 1,
-    borderColor: colors.border,
-    maxWidth: 120,
+    maxWidth: 150,
   },
   productChipActive: {
-    backgroundColor: colors.success + "20",
-    borderColor: colors.success + "60",
+    backgroundColor: colors.success + "15",
+    borderColor: colors.success + "50",
+  },
+  productChipInactive: {
+    backgroundColor: colors.surfaceVariant,
+    borderColor: colors.border,
+  },
+  productChipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    flexShrink: 0,
   },
   productChipText: {
-    color: colors.textSecondary,
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   productChipTextActive: {
     color: colors.success,
     fontWeight: "600",
+  },
+  productChipTextInactive: {
+    color: colors.textSecondary,
+    fontWeight: "500",
+  },
+  productChipQty: {
+    fontSize: 11,
+    fontWeight: "700",
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 8,
+    overflow: "hidden",
+    minWidth: 18,
+    textAlign: "center",
+  },
+  productChipQtyActive: {
+    backgroundColor: colors.success + "30",
+    color: colors.success,
+  },
+  productChipQtyInactive: {
+    backgroundColor: colors.surfaceVariant,
+    color: colors.textTertiary,
+  },
+
+  quantityStepper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+  stepperBtn: {
+    width: 30,
+    height: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepperValue: {
+    minWidth: 28,
+    textAlign: "center",
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  stepperValueZero: {
+    color: colors.textTertiary,
   },
   moreChip: {
     backgroundColor: colors.primary + "18",
@@ -1452,5 +1422,74 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     fontSize: 13,
     textAlign: "center",
+  },
+
+  // Store status confirm modal
+  confirmOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "flex-end",
+  },
+  confirmSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: 36,
+    alignItems: "center",
+    gap: spacing.md,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 20,
+  },
+  confirmIconWrap: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.sm,
+  },
+  confirmTitle: {
+    color: colors.textPrimary,
+    fontSize: 20,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+    textAlign: "center",
+  },
+  confirmMsg: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    textAlign: "center",
+    lineHeight: 20,
+    marginBottom: spacing.sm,
+  },
+  confirmActionBtn: {
+    width: "100%",
+    paddingVertical: 15,
+    borderRadius: radius.lg,
+    alignItems: "center",
+    marginTop: spacing.sm,
+  },
+  confirmActionBtnText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: 0.1,
+  },
+  confirmCancelBtn: {
+    width: "100%",
+    paddingVertical: 14,
+    borderRadius: radius.lg,
+    alignItems: "center",
+    backgroundColor: colors.surfaceVariant,
+  },
+  confirmCancelBtnText: {
+    color: colors.textSecondary,
+    fontSize: 15,
+    fontWeight: "600",
   },
 });

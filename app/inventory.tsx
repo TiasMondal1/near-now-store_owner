@@ -17,7 +17,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../session";
 import { config } from "../lib/config";
 import { colors, radius, spacing } from "../lib/theme";
-import { getMergedInventoryFromDb, upsertStoreProduct } from "../lib/storeProducts";
+import { Ionicons } from "@expo/vector-icons";
+import { getMergedInventoryFromDb, upsertStoreProduct, getMasterProductCategories } from "../lib/storeProducts";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
@@ -62,7 +63,9 @@ const ProductItem = memo(({
           {product.category ? formatCategoryLabel(product.category) : ""}
         </Text>
 
-        <Text style={styles.price}>₹{product.price ?? product.base_price ?? 0}</Text>
+        {product.description ? (
+          <Text style={styles.description} numberOfLines={2}>{product.description}</Text>
+        ) : null}
       </View>
 
       <TouchableOpacity
@@ -92,8 +95,15 @@ export default function InventoryScreen() {
   const [search, setSearch] = useState(() => persistedSearch);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [allCategories, setAllCategories] = useState<string[]>([]);
   const categoryScrollRef = useRef<ScrollView>(null);
   const categoryOffsetsRef = useRef<Record<number, number>>({});
+
+  useEffect(() => {
+    getMasterProductCategories().then((cats) => {
+      setAllCategories(["All", ...cats]);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const fromParams = typeof params.storeId === "string" && params.storeId.length > 0 ? params.storeId : null;
@@ -142,10 +152,10 @@ export default function InventoryScreen() {
       storeList = storeJson?.products || [];
     } catch { storeList = []; }
     if (!Array.isArray(masterList)) masterList = [];
-    const byMasterId: Record<string, { id: string; is_active: boolean }> = {};
+    const byMasterId: Record<string, { id: string; is_active: boolean; quantity: number }> = {};
     storeList.forEach((sp: any) => {
       const mid = sp.master_product_id ?? sp.masterProductId;
-      if (mid) byMasterId[mid] = { id: sp.id, is_active: sp.is_active !== false };
+      if (mid) byMasterId[mid] = { id: sp.id, is_active: sp.is_active !== false, quantity: sp.quantity ?? 0 };
     });
     return masterList.map((mp: any) => {
       const storeRow = byMasterId[mp.id];
@@ -154,6 +164,7 @@ export default function InventoryScreen() {
         price: mp.base_price ?? mp.price,
         storeProductId: storeRow?.id ?? null,
         is_active: storeRow?.is_active ?? false,
+        quantity: storeRow?.quantity ?? 0,
       };
     });
   };
@@ -162,10 +173,10 @@ export default function InventoryScreen() {
     masterList: any[],
     storeList: any[],
   ): any[] => {
-    const byMasterId: Record<string, { id: string; is_active: boolean }> = {};
+    const byMasterId: Record<string, { id: string; is_active: boolean; quantity: number }> = {};
     storeList.forEach((sp: any) => {
       const mid = sp.master_product_id ?? sp.masterProductId;
-      if (mid) byMasterId[mid] = { id: sp.id, is_active: sp.is_active !== false };
+      if (mid) byMasterId[mid] = { id: sp.id, is_active: sp.is_active !== false, quantity: sp.quantity ?? 0 };
     });
     return masterList.map((mp: any) => {
       const storeRow = byMasterId[mp.id];
@@ -174,6 +185,7 @@ export default function InventoryScreen() {
         price: mp.base_price ?? mp.price,
         storeProductId: storeRow?.id ?? null,
         is_active: storeRow?.is_active ?? false,
+        quantity: storeRow?.quantity ?? 0,
       };
     });
   };
@@ -305,7 +317,7 @@ export default function InventoryScreen() {
     setTogglingId(product.id);
 
     try {
-      const inserted = await upsertStoreProduct(storeId, product.id, 100);
+      const inserted = await upsertStoreProduct(storeId, product.id);
       if (inserted && "id" in inserted && inserted.id) {
         // Remove from Inventory list – it now lives in "Your Stock"
         setProducts((prev) => prev.filter((p) => p.id !== product.id));
@@ -322,16 +334,19 @@ export default function InventoryScreen() {
   };
 
   const q = search.trim().toLowerCase();
+  const inStore = products.filter((p) => !!p.storeProductId);
   const notInStore = products.filter((p) => !p.storeProductId);
 
-  const categories = React.useMemo(() => {
+  const derivedCategories = React.useMemo(() => {
+    if (allCategories.length > 1) return allCategories;
     const set = new Set<string>();
     notInStore.forEach((p) => {
       const c = (p.category || "").trim();
       if (c) set.add(c);
     });
     return ["All", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
-  }, [notInStore]);
+  }, [allCategories, notInStore]);
+  const categories = derivedCategories;
 
   const filteredBySearch = notInStore.filter((p) =>
     [p.name, p.product_name, p.brand, p.category]
@@ -342,7 +357,7 @@ export default function InventoryScreen() {
     !selectedCategory || selectedCategory === "All"
       ? filteredBySearch
       : filteredBySearch.filter((p) => (p.category || "").trim() === selectedCategory);
-  const sorted = filtered.slice(0, q === "" ? 200 : 100);
+  const sorted = filtered;
 
   const goToDashboard = () => router.replace("/(tabs)/home");
 
@@ -384,20 +399,70 @@ export default function InventoryScreen() {
     <>
       <View style={styles.headerRow}>
         <TouchableOpacity onPress={goToDashboard} style={styles.backBtn} activeOpacity={0.7}>
-          <Text style={styles.backBtnText}>← Back</Text>
+          <Ionicons name="arrow-back" size={20} color={colors.primary} />
+          <Text style={styles.backBtnText}>Dashboard</Text>
         </TouchableOpacity>
       </View>
-      <Text style={styles.title}>Inventory</Text>
+      <Text style={styles.title}>Add Products</Text>
       <Text style={styles.subtitle}>
-        Add products to your store. After adding, manage them (Active/Inactive) from "Your Stock" on the dashboard.
+        Browse the catalog and add products to your store. Manage them from "Your Stock" on the dashboard.
       </Text>
-      <TextInput
-        value={search}
-        onChangeText={setSearch}
-        placeholder="Search products, brands or categories"
-        placeholderTextColor={colors.textTertiary}
-        style={styles.search}
-      />
+
+      {/* In Your Store section */}
+      {inStore.length > 0 && (
+        <View style={styles.inStoreSection}>
+          <View style={styles.inStoreSectionHeader}>
+            <View style={styles.inStoreSectionHeaderLeft}>
+              <Ionicons name="cube" size={16} color={colors.success} />
+              <Text style={styles.inStoreSectionTitle}>In Your Store</Text>
+              <View style={styles.inStoreBadge}>
+                <Text style={styles.inStoreBadgeText}>{inStore.length}</Text>
+              </View>
+            </View>
+          </View>
+          {inStore.slice(0, 20).map((p) => {
+            const isActive = p.is_active !== false;
+            const name = p.name || p.product_name || "Product";
+            return (
+              <View key={p.id} style={styles.inStoreItem}>
+                <View style={[styles.inStoreAccent, { backgroundColor: isActive ? colors.success : colors.border }]} />
+                <View style={styles.inStoreItemInfo}>
+                  <Text style={styles.inStoreItemName} numberOfLines={1}>{name}</Text>
+                  {p.unit ? (
+                    <Text style={styles.inStoreItemUnit}>{p.unit}</Text>
+                  ) : null}
+                </View>
+                <View style={styles.inStoreItemRight}>
+                  <Text style={[styles.inStoreItemStatus, { color: isActive ? colors.success : colors.textTertiary }]}>
+                    {isActive ? "● Active" : "○ Inactive"}
+                  </Text>
+                </View>
+              </View>
+            );
+          })}
+          {inStore.length > 20 && (
+            <Text style={styles.inStoreMore}>+{inStore.length - 20} more — manage all from Your Stock on the dashboard</Text>
+          )}
+          <View style={styles.inStoreDivider} />
+        </View>
+      )}
+      <View style={styles.searchWrap}>
+        <Ionicons name="search" size={16} color={colors.textTertiary} style={styles.searchIcon} />
+        <TextInput
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Search products, brands or categories"
+          placeholderTextColor={colors.textTertiary}
+          style={styles.search}
+          autoCorrect={false}
+          autoCapitalize="none"
+        />
+        {search.length > 0 && (
+          <TouchableOpacity onPress={() => setSearch("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
+          </TouchableOpacity>
+        )}
+      </View>
       {categories.length > 1 && (
         <View style={styles.categoryRibbonWrap}>
           <ScrollView
@@ -421,6 +486,7 @@ export default function InventoryScreen() {
                   style={[styles.categoryChip, isSelected && styles.categoryChipActive]}
                   activeOpacity={0.75}
                 >
+                  {isSelected && <View style={styles.categoryChipDot} />}
                   <Text
                     style={[styles.categoryChipText, isSelected && styles.categoryChipTextActive]}
                     numberOfLines={1}
@@ -434,7 +500,7 @@ export default function InventoryScreen() {
         </View>
       )}
     </>
-  ), [search, goToDashboard, categories, selectedCategory]);
+  ), [search, goToDashboard, categories, selectedCategory, inStore]);
 
   const ListEmptyComponent = useCallback(() => {
     if (loading && products.length === 0) {
@@ -496,8 +562,8 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   container: { padding: spacing.lg },
   headerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
-  backBtn: { paddingVertical: 8, paddingRight: 12 },
-  backBtnText: { color: colors.primary, fontSize: 16, fontWeight: "600" },
+  backBtn: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 8, paddingRight: 12 },
+  backBtnText: { color: colors.primary, fontSize: 15, fontWeight: "600" },
   title: {
     color: colors.textPrimary,
     fontSize: 22,
@@ -541,34 +607,61 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: spacing.sm,
   },
-  search: {
+  searchWrap: {
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: colors.surface,
     borderRadius: radius.md,
-    padding: 12,
-    color: colors.textPrimary,
     borderWidth: 1,
     borderColor: colors.border,
+    paddingHorizontal: 12,
     marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  searchIcon: {
+    flexShrink: 0,
+  },
+  search: {
+    flex: 1,
+    paddingVertical: 11,
+    color: colors.textPrimary,
+    fontSize: 14,
   },
   categoryRibbonWrap: {
     marginBottom: spacing.lg,
   },
   categoryRibbon: {
     flexDirection: "row",
-    gap: spacing.sm,
-    paddingVertical: 4,
+    gap: spacing.xs,
+    paddingVertical: 2,
+    paddingHorizontal: 2,
   },
   categoryChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: 9,
     borderRadius: radius.full,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: colors.border,
-    backgroundColor: colors.surfaceVariant,
+    backgroundColor: colors.surface,
   },
   categoryChipActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  categoryChipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "rgba(255,255,255,0.75)",
+    flexShrink: 0,
   },
   categoryChipText: {
     color: colors.textSecondary,
@@ -577,6 +670,7 @@ const styles = StyleSheet.create({
   },
   categoryChipTextActive: {
     color: colors.surface,
+    fontWeight: "700",
   },
   card: {
     flexDirection: "row",
@@ -604,10 +698,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
-  price: {
-    color: colors.success,
-    fontWeight: "800",
-    marginTop: 4,
+  description: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 2,
   },
   activeBtn: {
     paddingHorizontal: 14,
@@ -638,6 +733,125 @@ const styles = StyleSheet.create({
     color: colors.surface,
   },
   activeBtnTextOff: {
+    color: colors.textTertiary,
+  },
+
+  // In Your Store section
+  inStoreSection: {
+    marginBottom: spacing.lg,
+  },
+  inStoreSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  inStoreSectionHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  inStoreSectionTitle: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  inStoreBadge: {
+    backgroundColor: colors.success + "20",
+    borderRadius: radius.full,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: colors.success + "40",
+  },
+  inStoreBadgeText: {
+    color: colors.success,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  inStoreItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.xs,
+    overflow: "hidden",
+  },
+  inStoreAccent: {
+    width: 4,
+    alignSelf: "stretch",
+  },
+  inStoreItemInfo: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: spacing.md,
+  },
+  inStoreItemName: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  inStoreItemUnit: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    fontWeight: "500",
+    marginTop: 2,
+  },
+  inStoreItemStatus: {
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  inStoreItemRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingRight: spacing.md,
+  },
+  inStoreQtyLabel: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  inStoreMore: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    textAlign: "center",
+    paddingVertical: spacing.sm,
+  },
+  inStoreDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
+  },
+
+  // Quantity stepper
+  quantityStepper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+  stepperBtn: {
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepperValue: {
+    minWidth: 24,
+    textAlign: "center",
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  stepperValueZero: {
     color: colors.textTertiary,
   },
 });

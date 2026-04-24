@@ -11,6 +11,7 @@ export type StoreProductRow = {
   store_id: string;
   master_product_id: string;
   is_active?: boolean;
+  quantity?: number;
   name?: string;
   phone?: string;
 };
@@ -24,21 +25,21 @@ export async function getStoreProductsFromDb(
   if (!supabase) return [];
   const { data, error } = await supabase
     .from("products")
-    .select("id, store_id, master_product_id, is_active, name, phone")
+    .select("id, store_id, master_product_id, is_active, quantity, name, phone")
     .eq("store_id", storeId)
     .order("created_at", { ascending: true });
   if (error) return [];
   return (data ?? []) as StoreProductRow[];
 }
 
-/** Fetch master_products from DB (for names). Falls back to empty if not available. */
+/** Fetch master_products from DB (for names and units). Falls back to empty if not available. */
 export async function getMasterProductsFromDb(): Promise<
-  Array<{ id: string; name: string }>
+  Array<{ id: string; name: string; unit?: string }>
 > {
   if (!supabase) return [];
-  const { data, error } = await supabase.from("master_products").select("id, name");
+  const { data, error } = await supabase.from("master_products").select("id, name, unit");
   if (error) return [];
-  return (data ?? []) as Array<{ id: string; name: string }>;
+  return (data ?? []) as Array<{ id: string; name: string; unit?: string }>;
 }
 
 /**
@@ -51,8 +52,8 @@ export async function getStoreProductsWithNames(
   if (!supabase) return [];
 
   const joinSelects = [
-    "id, store_id, master_product_id, is_active, name, phone, master_products(name)",
-    "id, store_id, master_product_id, is_active, name, phone, master_product(name)",
+    "id, store_id, master_product_id, is_active, name, phone, master_products(name, unit)",
+    "id, store_id, master_product_id, is_active, name, phone, master_product(name, unit)",
   ];
   for (const select of joinSelects) {
     const { data: joinedData, error: joinError } = await supabase
@@ -61,13 +62,14 @@ export async function getStoreProductsWithNames(
       .eq("store_id", storeId)
       .order("created_at", { ascending: true });
     if (!joinError && Array.isArray(joinedData) && joinedData.length > 0) {
-      const relationKey = select.includes("master_products(name)") ? "master_products" : "master_product";
+      const relationKey = select.includes("master_products(") ? "master_products" : "master_product";
       return (joinedData as any[]).map((row) => {
         const rel = row[relationKey];
         const fromMaster = rel?.name ?? (rel && (rel as any).name);
         const resolvedName = (fromMaster && String(fromMaster).trim()) || row.name || "Product";
+        const unitFromMaster = rel?.unit ? String(rel.unit) : "";
         const { master_products, master_product, ...rest } = row;
-        return { ...rest, name: resolvedName };
+        return { ...rest, name: resolvedName, unit: unitFromMaster };
       });
     }
   }
@@ -77,12 +79,12 @@ export async function getStoreProductsWithNames(
     getMasterProductsFromDb(),
   ]);
   const nameByMasterId: Record<string, string> = {};
+  const unitByMasterId: Record<string, string> = {};
   masterList.forEach((m) => {
     const n = (m as any).name ?? (m as any).product_name;
     const nameStr = n && String(n).trim() ? String(n).trim() : "";
-    if (nameStr) {
-      nameByMasterId[String(m.id)] = nameStr;
-    }
+    if (nameStr) nameByMasterId[String(m.id)] = nameStr;
+    if (m.unit && String(m.unit).trim()) unitByMasterId[String(m.id)] = String(m.unit).trim();
   });
   return storeRows.map((row) => {
     const key = String(row.master_product_id);
@@ -92,14 +94,15 @@ export async function getStoreProductsWithNames(
     return {
       ...row,
       name: name && String(name).trim() ? String(name).trim() : "Product",
+      unit: unitByMasterId[key] || "",
     };
   });
 }
 
-/** Your stock list: id, name, is_active for main page */
+/** Your stock list: id, name, unit, is_active for main page */
 export async function getStockListFromDb(
   storeId: string
-): Promise<Array<{ id: string; name: string; storeProductId: string; is_active: boolean }>> {
+): Promise<Array<{ id: string; name: string; unit: string; storeProductId: string; is_active: boolean; quantity: number }>> {
   const rows = await getStoreProductsWithNames(storeId);
   return rows.map((r) => {
     const rawName = r.name ?? (r as any).product_name;
@@ -108,9 +111,24 @@ export async function getStockListFromDb(
       id: r.master_product_id,
       storeProductId: r.id,
       name,
+      unit: (r as any).unit || "",
       is_active: r.is_active !== false,
+      quantity: r.quantity ?? 0,
     };
   });
+}
+
+/** Update available stock quantity for a store product. */
+export async function updateProductQuantity(
+  storeProductId: string,
+  quantity: number
+): Promise<boolean> {
+  if (!supabase) return false;
+  const { error } = await supabase
+    .from("products")
+    .update({ quantity, updated_at: new Date().toISOString() })
+    .eq("id", storeProductId);
+  return !error;
 }
 
 export type UpsertResult = { id: string } | { error: string };
@@ -405,12 +423,113 @@ export async function restoreActiveProductsOnline(_storeId: string): Promise<boo
   return true;
 }
 
-/** Fetch master_products full list from DB (id, name, image_url, base_price, etc.) */
+/**
+ * Fetch ALL master_products from DB, paginating through Supabase's 1000-row limit.
+ * Runs batched .range() queries until all rows are fetched.
+ */
 export async function getMasterProductsFullFromDb(): Promise<any[]> {
   if (!supabase) return [];
-  const { data, error } = await supabase.from("master_products").select("*");
-  if (error) return [];
-  return (data ?? []) as any[];
+  const PAGE_SIZE = 1000;
+  const allData: any[] = [];
+  let from = 0;
+  for (let page = 0; page < 100; page++) {
+    const { data, error } = await supabase
+      .from("master_products")
+      .select("*")
+      .range(from, from + PAGE_SIZE - 1);
+    if (error || !data || data.length === 0) break;
+    allData.push(...data);
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return allData;
+}
+
+/** Fetch all unique category names. Queries the categories table first (no row-limit issue),
+ *  then falls back to a paginated scan of master_products.category as a safety net. */
+export async function getMasterProductCategories(): Promise<string[]> {
+  if (!supabase) return [];
+
+  // Primary: categories table is small and has no 1000-row issue
+  const { data: catRows, error: catErr } = await supabase
+    .from("categories")
+    .select("name")
+    .order("name");
+
+  if (!catErr && catRows && catRows.length > 0) {
+    return (catRows as any[])
+      .map((r) => String(r.name ?? "").trim())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+  }
+
+  // Fallback: paginate master_products.category in case categories table is empty
+  const PAGE_SIZE = 1000;
+  const cats = new Set<string>();
+  let from = 0;
+  for (let page = 0; page < 100; page++) {
+    const { data, error } = await supabase
+      .from("master_products")
+      .select("category")
+      .not("category", "is", null)
+      .range(from, from + PAGE_SIZE - 1);
+    if (error || !data || data.length === 0) break;
+    (data as any[]).forEach((row) => {
+      const c = row.category;
+      if (c && String(c).trim()) cats.add(String(c).trim());
+    });
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return Array.from(cats).sort((a, b) => a.localeCompare(b));
+}
+
+export const CATALOG_PAGE_SIZE = 50;
+
+/**
+ * Fetch a page of master_products, optionally filtered by category and/or search.
+ * Use `from` + `CATALOG_PAGE_SIZE` for pagination.
+ */
+export async function getMasterProductsPage({
+  category,
+  search,
+  from,
+  pageSize = CATALOG_PAGE_SIZE,
+}: {
+  category?: string | null;
+  search?: string;
+  from: number;
+  pageSize?: number;
+}): Promise<{ data: any[]; hasMore: boolean }> {
+  if (!supabase) return { data: [], hasMore: false };
+
+  let query = supabase
+    .from("master_products")
+    .select(
+      "id, name, description, brand, category, image_url, base_price, discounted_price, unit, is_active, is_loose"
+    )
+    .range(from, from + pageSize - 1)
+    .order("name");
+
+  if (category && category !== "All") {
+    query = query.eq("category", category);
+  }
+
+  const trimmed = search?.trim() ?? "";
+  if (trimmed.length > 0) {
+    query = query.or(`name.ilike.%${trimmed}%,brand.ilike.%${trimmed}%`);
+  }
+
+  const { data, error } = await query;
+  if (error || !data) return { data: [], hasMore: false };
+
+  return {
+    data: (data as any[]).map((mp) => ({
+      ...mp,
+      price: mp.base_price ?? mp.discounted_price ?? 0,
+    })),
+    hasMore: data.length === pageSize,
+  };
 }
 
 /**

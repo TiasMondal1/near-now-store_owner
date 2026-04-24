@@ -12,7 +12,6 @@ import {
   Switch,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
@@ -22,9 +21,12 @@ import { colors, radius, spacing } from "../../lib/theme";
 import {
   addCustomMasterProduct,
   formatMasterProductUnit,
-  getMergedInventoryFromDb,
+  getMasterProductCategories,
+  getMasterProductsPage,
+  getStoreProductsFromDb,
   unitForLoosePricingBasis,
   upsertStoreProduct,
+  CATALOG_PAGE_SIZE,
   type LoosePricingBasis,
 } from "../../lib/storeProducts";
 
@@ -156,116 +158,104 @@ function InventoryCatalogSection({
   token?: string;
   refreshKey?: number;
 }) {
-  const [loading, setLoading] = useState(true);
-  const [products, setProducts] = useState<any[]>([]);
-  const [search, setSearch] = useState("");
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [categories, setCategories] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  // catalog products fetched from Supabase, paginated
+  const [products, setProducts] = useState<any[]>([]);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+
+  // store products map: masterProductId -> { id, is_active }
+  const [storeProductMap, setStoreProductMap] = useState<
+    Record<string, { id: string; is_active: boolean }>
+  >({});
+
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
+  const searchTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load category list (lightweight — just distinct category column)
   useEffect(() => {
-    (async () => {
-      if (!storeId || !token) {
-        setLoading(false);
-        return;
-      }
-      try {
-        const fromDb = await getMergedInventoryFromDb(storeId);
-        if (Array.isArray(fromDb) && fromDb.length > 0) {
-          setProducts(fromDb);
-          setLoading(false);
-          return;
-        }
-      } catch {
-        // fall through to network fetch
-      }
+    setCategoriesLoading(true);
+    getMasterProductCategories()
+      .then((cats) => setCategories(cats))
+      .catch(() => setCategories([]))
+      .finally(() => setCategoriesLoading(false));
+  }, []);
 
-      try {
-        const [masterRes, storeProductsRes] = await Promise.all([
-          fetch(`${API_BASE}/api/products/master-products?isActive=true`),
-          fetch(`${API_BASE}/store-owner/stores/${storeId}/products`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-        ]);
-        const [masterRaw, storeRaw] = await Promise.all([
-          masterRes.text(),
-          storeProductsRes.text(),
-        ]);
-        let masterList: any[] = [];
-        let storeList: any[] = [];
-        try {
-          masterList = masterRaw ? JSON.parse(masterRaw) : [];
-        } catch {
-          masterList = [];
-        }
-        try {
-          const storeJson = storeRaw ? JSON.parse(storeRaw) : null;
-          storeList = storeJson?.products || [];
-        } catch {
-          storeList = [];
-        }
-        if (!Array.isArray(masterList)) masterList = [];
-
-        const byMasterId: Record<string, { id: string; is_active: boolean }> = {};
-        storeList.forEach((sp: any) => {
-          const mid = sp.master_product_id ?? sp.masterProductId;
-          if (mid) {
-            byMasterId[mid] = {
-              id: sp.id,
-              is_active: sp.is_active !== false,
-            };
-          }
-        });
-
-        const merged = masterList.map((mp: any) => {
-          const storeRow = byMasterId[mp.id];
-          return {
-            ...mp,
-            price: mp.base_price ?? mp.price,
-            storeProductId: storeRow?.id ?? null,
-            is_active: storeRow?.is_active ?? false,
-          };
-        });
-        setProducts(merged);
-      } catch {
-        setProducts([]);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [storeId, token, refreshKey]);
-
-  useFocusEffect(
-    React.useCallback(() => {
-      if (storeId && token) {
-        // Optionally refresh on focus
-      }
-    }, [storeId, token])
-  );
-
-  const notInStore = products.filter((p) => !p.storeProductId);
-  const q = search.trim().toLowerCase();
-
-  const categories = React.useMemo(() => {
-    const set = new Set<string>();
-    notInStore.forEach((p) => {
-      const c = (p.category || "").trim();
-      if (c) set.add(c);
+  // Load store products so we know which master products are already added
+  useEffect(() => {
+    if (!storeId) return;
+    getStoreProductsFromDb(storeId).then((rows) => {
+      const map: Record<string, { id: string; is_active: boolean }> = {};
+      rows.forEach((sp) => {
+        map[sp.master_product_id] = { id: sp.id, is_active: sp.is_active !== false };
+      });
+      setStoreProductMap(map);
     });
-    return ["All", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
-  }, [notInStore]);
+  }, [storeId, refreshKey]);
 
-  const filteredBySearch = notInStore.filter((p) =>
-    [p.name, p.product_name, p.brand, p.category]
-      .filter(Boolean)
-      .some((x: string) => String(x).toLowerCase().includes(q))
-  );
-  const filtered =
-    !selectedCategory || selectedCategory === "All"
-      ? filteredBySearch
-      : filteredBySearch.filter(
-          (p) => (p.category || "").trim() === selectedCategory
-        );
-  const visible = filtered.slice(0, q === "" ? 40 : 60);
+  // Debounce search input
+  const handleSearch = (text: string) => {
+    setSearch(text);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      setDebouncedSearch(text);
+      setPage(0);
+      setProducts([]);
+      setHasMore(true);
+    }, 350);
+  };
+
+  // Category change — reset pagination
+  const selectCategory = (cat: string | null) => {
+    if (cat === selectedCategory) return;
+    setSelectedCategory(cat);
+    setPage(0);
+    setProducts([]);
+    setHasMore(true);
+  };
+
+  // Fetch products whenever category / search / page changes
+  useEffect(() => {
+    if (!storeId) return;
+    setLoadingProducts(true);
+    getMasterProductsPage({
+      category: selectedCategory,
+      search: debouncedSearch,
+      from: page * CATALOG_PAGE_SIZE,
+    })
+      .then(({ data, hasMore: more }) => {
+        let results = data;
+        if (page === 0 && !selectedCategory && !debouncedSearch) {
+          results = [...data].sort(() => Math.random() - 0.5);
+        }
+        setProducts((prev) => (page === 0 ? results : [...prev, ...results]));
+        setHasMore(more);
+      })
+      .catch(() => { if (page === 0) setProducts([]); })
+      .finally(() => setLoadingProducts(false));
+  }, [storeId, selectedCategory, debouncedSearch, page]);
+
+  // Products not yet added to this store, deduplicated by id
+  const displayProducts = React.useMemo(() => {
+    const seen = new Set<string>();
+    return products.filter((p) => {
+      if (storeProductMap[p.id] || seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
+  }, [products, storeProductMap]);
+
+  const loadMore = () => {
+    if (!hasMore || loadingProducts) return;
+    setPage((p) => p + 1);
+  };
 
   const addProduct = async (product: any) => {
     if (!storeId || !token) return;
@@ -273,17 +263,10 @@ function InventoryCatalogSection({
     try {
       const inserted = await upsertStoreProduct(storeId, product.id);
       if (inserted && "id" in inserted && inserted.id) {
-        setProducts((prev) =>
-          prev.map((p) =>
-            p.id === product.id
-              ? {
-                  ...p,
-                  storeProductId: inserted.id,
-                  is_active: true,
-                }
-              : p
-          )
-        );
+        setStoreProductMap((prev) => ({
+          ...prev,
+          [product.id]: { id: inserted.id, is_active: true },
+        }));
       } else if (inserted && "error" in inserted) {
         Alert.alert("Error", "Could not add product. Please try again.");
       }
@@ -296,34 +279,53 @@ function InventoryCatalogSection({
 
   return (
     <View style={styles.catalogCard}>
-      <Text style={styles.catalogTitle}>Add from Near&Now catalog</Text>
+      <Text style={styles.catalogTitle}>Add from Near&amp;Now catalog</Text>
       <Text style={styles.catalogSubtitle}>
         Browse master products and add them to your store.
       </Text>
 
       <TextInput
         value={search}
-        onChangeText={setSearch}
-        placeholder="Search products, brands or categories"
+        onChangeText={handleSearch}
+        placeholder="Search products or brands"
         placeholderTextColor={colors.textTertiary}
         style={styles.catalogSearch}
+        autoCorrect={false}
+        autoCapitalize="none"
       />
 
-      {categories.length > 1 && (
+      {/* Category chips */}
+      {!categoriesLoading && categories.length > 0 && (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.catalogCategoryRow}
         >
+          {/* All chip */}
+          <TouchableOpacity
+            onPress={() => selectCategory(null)}
+            style={[
+              styles.catalogCategoryChip,
+              !selectedCategory && styles.catalogCategoryChipActive,
+            ]}
+            activeOpacity={0.8}
+          >
+            <Text
+              style={[
+                styles.catalogCategoryText,
+                !selectedCategory && styles.catalogCategoryTextActive,
+              ]}
+            >
+              All
+            </Text>
+          </TouchableOpacity>
+
           {categories.map((cat) => {
-            const isAll = cat === "All";
-            const isSelected = isAll
-              ? !selectedCategory || selectedCategory === "All"
-              : selectedCategory === cat;
+            const isSelected = selectedCategory === cat;
             return (
               <TouchableOpacity
                 key={cat}
-                onPress={() => setSelectedCategory(isAll ? null : cat)}
+                onPress={() => selectCategory(cat)}
                 style={[
                   styles.catalogCategoryChip,
                   isSelected && styles.catalogCategoryChipActive,
@@ -345,7 +347,8 @@ function InventoryCatalogSection({
         </ScrollView>
       )}
 
-      {loading && products.length === 0 ? (
+      {/* Skeleton while first page loads */}
+      {loadingProducts && products.length === 0 ? (
         <View style={styles.catalogLoading}>
           <View style={styles.skeletonContainer}>
             {[...Array(5)].map((_, i) => (
@@ -361,42 +364,40 @@ function InventoryCatalogSection({
             ))}
           </View>
         </View>
-      ) : visible.length === 0 ? (
+      ) : displayProducts.length === 0 && !loadingProducts ? (
         <View style={styles.catalogEmpty}>
           <Text style={styles.catalogEmptyTitle}>
             {products.length === 0
-              ? "No products available"
-              : "No products match your filters"}
+              ? "No products found"
+              : "All products already in your store"}
           </Text>
           <Text style={styles.catalogEmptyText}>
             {products.length === 0
-              ? "Could not load master products. Check your connection."
-              : "Try a different search or clear the category filter."}
+              ? "Try a different search or category."
+              : "Check Your Stock on the Home tab to manage them."}
           </Text>
         </View>
       ) : (
         <View style={styles.catalogList}>
-          {visible.map((p) => {
+          {displayProducts.map((p) => {
             const name = p.name || p.product_name || "Product";
             const brand = p.brand;
             const cat = p.category ? formatCategoryLabel(p.category) : "";
             return (
               <View key={p.id} style={styles.catalogItem}>
-                <Image
-                  source={{ uri: p.image_url }}
-                  style={styles.catalogItemImage}
-                />
+                <Image source={{ uri: p.image_url }} style={styles.catalogItemImage} />
                 <View style={styles.catalogItemInfo}>
                   <Text style={styles.catalogItemName} numberOfLines={2}>
                     {name}
                   </Text>
                   <Text style={styles.catalogItemMeta} numberOfLines={1}>
-                    {brand ? `${brand} · ` : ""}
-                    {cat}
+                    {brand ? `${brand} · ` : ""}{cat}
                   </Text>
-                  <Text style={styles.catalogItemPrice}>
-                    ₹{p.price ?? p.base_price ?? 0}
-                  </Text>
+                  {p.description ? (
+                    <Text style={styles.catalogItemDesc} numberOfLines={2}>
+                      {p.description}
+                    </Text>
+                  ) : null}
                 </View>
                 <TouchableOpacity
                   style={styles.catalogAddBtn}
@@ -413,6 +414,22 @@ function InventoryCatalogSection({
               </View>
             );
           })}
+
+          {/* Load More */}
+          {hasMore && (
+            <TouchableOpacity
+              style={styles.loadMoreBtn}
+              onPress={loadMore}
+              disabled={loadingProducts}
+              activeOpacity={0.8}
+            >
+              {loadingProducts ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Text style={styles.loadMoreBtnText}>Load more</Text>
+              )}
+            </TouchableOpacity>
+          )}
         </View>
       )}
     </View>
@@ -582,44 +599,51 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
 
   return (
     <View style={styles.addCustomCard}>
-      <Text style={styles.addCustomTitle}>Add Custom Product</Text>
-      <Text style={styles.addCustomSubtitle}>
-        Adds to catalog only. Use Inventory to add it to your store.
-      </Text>
+      {/* Header */}
+      <View style={styles.addCustomHeader}>
+        <View style={styles.addCustomHeaderIcon}>
+          <Ionicons name="add-circle" size={24} color={colors.primary} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.addCustomTitle}>Add Custom Product</Text>
+          <Text style={styles.addCustomSubtitle}>Adds to catalog. Use Inventory to add it to your store.</Text>
+        </View>
+      </View>
 
-      <Text style={styles.addCustomLabel}>Product Name *</Text>
-      <TextInput
-        value={name}
-        onChangeText={setName}
-        placeholder="e.g. Fresh Tomatoes"
-        placeholderTextColor={colors.textTertiary}
-        style={styles.addCustomInput}
-      />
-
-      <Text style={styles.addCustomLabel}>Brand</Text>
-      <TextInput
-        value={brand}
-        onChangeText={setBrand}
-        placeholder="e.g. Local Farm (optional)"
-        placeholderTextColor={colors.textTertiary}
-        style={styles.addCustomInput}
-      />
-
-      <Text style={styles.addCustomLabel}>Category *</Text>
-      <TextInput
-        value={category}
-        onChangeText={setCategory}
-        placeholder="e.g. Vegetables"
-        placeholderTextColor={colors.textTertiary}
-        style={styles.addCustomInput}
-      />
-
-      <View style={styles.addCustomDescriptionBlock}>
-        <Text style={styles.addCustomLabel}>Description</Text>
+      {/* Section 1: Basic Info */}
+      <View style={styles.addCustomSection}>
+        <Text style={styles.addCustomSectionLabel}>BASIC INFO</Text>
+        <TextInput
+          value={name}
+          onChangeText={setName}
+          placeholder="Product name *"
+          placeholderTextColor={colors.textTertiary}
+          style={styles.addCustomInput}
+        />
+        <View style={styles.addCustomRow}>
+          <View style={{ flex: 1 }}>
+            <TextInput
+              value={brand}
+              onChangeText={setBrand}
+              placeholder="Brand (optional)"
+              placeholderTextColor={colors.textTertiary}
+              style={styles.addCustomInput}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <TextInput
+              value={category}
+              onChangeText={setCategory}
+              placeholder="Category *"
+              placeholderTextColor={colors.textTertiary}
+              style={styles.addCustomInput}
+            />
+          </View>
+        </View>
         <TextInput
           value={description}
           onChangeText={setDescription}
-          placeholder="Optional"
+          placeholder="Description (optional)"
           placeholderTextColor={colors.textTertiary}
           style={[styles.addCustomInput, styles.addCustomInputMultiline]}
           multiline
@@ -627,209 +651,169 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
         />
       </View>
 
-      <View style={styles.addCustomSwitchRow}>
-        <View style={styles.addCustomSwitchTextCol}>
-          <Text style={styles.addCustomSwitchLabel}>Loose item</Text>
-          <Text style={styles.addCustomSwitchHint}>
-            On: loose at counter — no pack size. Off: set pack amount and unit below.
-          </Text>
-        </View>
-        <Switch
-          value={isLoose}
-          onValueChange={(on) => {
-            setIsLoose(on);
-            if (on) setLooseBasis((b) => b ?? "kg");
-            else setLooseBasis(null);
-          }}
-          trackColor={{ false: colors.border, true: colors.primary }}
+      {/* Section 2: Product Image */}
+      <View style={styles.addCustomSection}>
+        <Text style={styles.addCustomSectionLabel}>PRODUCT IMAGE *</Text>
+        {imageUri ? (
+          <View style={styles.addCustomImageBlock}>
+            <Image source={{ uri: imageUri }} style={styles.addCustomImage} />
+            <View style={styles.addCustomImageOverlay}>
+              <TouchableOpacity style={styles.addCustomImgOverlayBtn} onPress={pickFromCamera}>
+                <Ionicons name="camera" size={16} color="#fff" />
+                <Text style={styles.addCustomImgOverlayText}>Retake</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.addCustomImgOverlayBtn} onPress={pickFromGallery}>
+                <Ionicons name="images" size={16} color="#fff" />
+                <Text style={styles.addCustomImgOverlayText}>Gallery</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.addCustomImgOverlayBtn, styles.addCustomImgOverlayBtnDanger]} onPress={() => { setImageUri(null); setImageBase64(null); }}>
+                <Ionicons name="trash" size={16} color="#fff" />
+                <Text style={styles.addCustomImgOverlayText}>Remove</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.addCustomImagePicker}>
+            <View style={styles.addCustomImagePickerButtons}>
+              <TouchableOpacity style={styles.addCustomImgPickBtn} onPress={pickFromCamera} activeOpacity={0.8}>
+                <Ionicons name="camera-outline" size={22} color={colors.primary} />
+                <Text style={styles.addCustomImgPickBtnText}>Camera</Text>
+              </TouchableOpacity>
+              <View style={styles.addCustomImgPickDivider} />
+              <TouchableOpacity style={styles.addCustomImgPickBtn} onPress={pickFromGallery} activeOpacity={0.8}>
+                <Ionicons name="images-outline" size={22} color={colors.primary} />
+                <Text style={styles.addCustomImgPickBtnText}>Gallery</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.addCustomImageLabel}>or use an image URL below</Text>
+          </View>
+        )}
+        <TextInput
+          value={imageUrlLink}
+          onChangeText={setImageUrlLink}
+          placeholder="https://… paste URL if no photo"
+          placeholderTextColor={colors.textTertiary}
+          style={[styles.addCustomInput, { marginTop: spacing.sm }]}
+          autoCapitalize="none"
+          autoCorrect={false}
         />
       </View>
 
-      {isLoose && (
-        <>
-          <Text style={styles.addCustomLabel}>Priced per *</Text>
-          <Text style={styles.addCustomAmountHint}>
-            Base and selling prices are per 1 kg or 1 litre (unit 1kg or 1l).
-          </Text>
-          <View style={styles.addCustomChipsRow}>
-            <TouchableOpacity
-              onPress={() => setLooseBasis("kg")}
-              style={[styles.addCustomChip, looseBasis === "kg" && styles.addCustomChipActive]}
-            >
-              <Text style={[styles.addCustomChipText, looseBasis === "kg" && styles.addCustomChipTextActive]}>1 kg</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => setLooseBasis("l")}
-              style={[styles.addCustomChip, looseBasis === "l" && styles.addCustomChipActive]}
-            >
-              <Text style={[styles.addCustomChipText, looseBasis === "l" && styles.addCustomChipTextActive]}>1 litre</Text>
-            </TouchableOpacity>
-          </View>
-          {looseBasis ? (
-            <Text style={styles.addCustomUnitPreview}>
-              Stored unit:{" "}
-              <Text style={styles.addCustomUnitPreviewValue}>{unitForLoosePricingBasis(looseBasis)}</Text>
+      {/* Section 3: Packaging */}
+      <View style={styles.addCustomSection}>
+        <Text style={styles.addCustomSectionLabel}>PACKAGING</Text>
+        <View style={styles.addCustomSwitchRow}>
+          <View style={styles.addCustomSwitchTextCol}>
+            <Text style={styles.addCustomSwitchLabel}>Loose item (weighed at counter)</Text>
+            <Text style={styles.addCustomSwitchHint}>
+              Off = fixed pack size (e.g. 200g, 1L). On = priced per kg or litre.
             </Text>
-          ) : null}
-        </>
-      )}
-
-      {!isLoose && (
-        <>
-          <Text style={styles.addCustomLabel}>Pack amount *</Text>
-          <TextInput
-            value={packAmount}
-            onChangeText={setPackAmount}
-            placeholder="e.g. 200, 0.5"
-            placeholderTextColor={colors.textTertiary}
-            style={styles.addCustomInput}
-            keyboardType="decimal-pad"
+          </View>
+          <Switch
+            value={isLoose}
+            onValueChange={(on) => { setIsLoose(on); if (on) setLooseBasis((b) => b ?? "kg"); else setLooseBasis(null); }}
+            trackColor={{ false: colors.border, true: colors.primary }}
           />
-          <Text style={styles.addCustomLabel}>Pack unit *</Text>
-          <View style={styles.addCustomChipsRow}>
-            {UNITS.map((u) => (
-              <TouchableOpacity
-                key={u}
-                onPress={() => setPackSuffix(u)}
-                style={[styles.addCustomChip, packSuffix === u && styles.addCustomChipActive]}
-              >
-                <Text style={[styles.addCustomChipText, packSuffix === u && styles.addCustomChipTextActive]}>{u}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          {(() => {
-            const p = Number(String(packAmount).replace(/,/g, "").trim());
-            if (!packSuffix || !Number.isFinite(p) || p <= 0) return null;
-            return (
-              <Text style={styles.addCustomUnitPreview}>
-                Stored unit:{" "}
-                <Text style={styles.addCustomUnitPreviewValue}>
-                  {formatMasterProductUnit(p, packSuffix)}
-                </Text>
-              </Text>
-            );
-          })()}
-        </>
-      )}
-
-      <Text style={styles.addCustomLabel}>Product image *</Text>
-      {imageUri ? (
-        <View style={styles.addCustomImageBlock}>
-          <Image source={{ uri: imageUri }} style={styles.addCustomImage} />
-          <View style={styles.addCustomImageActions}>
-            <TouchableOpacity style={styles.addCustomSmallBtn} onPress={pickFromCamera}>
-              <Text style={styles.addCustomSmallBtnText}>Retake</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.addCustomSmallBtn} onPress={pickFromGallery}>
-              <Text style={styles.addCustomSmallBtnText}>Gallery</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.addCustomRemoveBtn}
-              onPress={() => {
-                setImageUri(null);
-                setImageBase64(null);
-              }}
-            >
-              <Text style={styles.addCustomRemoveBtnText}>Remove</Text>
-            </TouchableOpacity>
-          </View>
         </View>
-      ) : (
-        <View style={styles.addCustomImagePicker}>
-          <Text style={styles.addCustomImageIcon}>📷</Text>
-          <Text style={styles.addCustomImageLabel}>Add a photo or use URL below</Text>
-          <View style={styles.addCustomImageActions}>
-            <TouchableOpacity style={styles.addCustomSmallBtn} onPress={pickFromCamera}>
-              <Text style={styles.addCustomSmallBtnText}>Camera</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.addCustomSmallBtn} onPress={pickFromGallery}>
-              <Text style={styles.addCustomSmallBtnText}>Gallery</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-      <Text style={styles.addCustomLabel}>Image URL (optional)</Text>
-      <TextInput
-        value={imageUrlLink}
-        onChangeText={setImageUrlLink}
-        placeholder="https://… if no photo"
-        placeholderTextColor={colors.textTertiary}
-        style={styles.addCustomInput}
-        autoCapitalize="none"
-        autoCorrect={false}
-      />
 
-      <Text style={styles.addCustomLabel}>
-        {isLoose
-          ? `Base / MRP (₹) per ${looseBasis === "l" ? "1 litre" : "1 kg"} *`
-          : "Base / MRP (₹) *"}
-      </Text>
-      <TextInput
-        value={basePrice}
-        onChangeText={setBasePrice}
-        placeholder="0"
-        placeholderTextColor={colors.textTertiary}
-        style={styles.addCustomInput}
-        keyboardType="decimal-pad"
-      />
-      <Text style={styles.addCustomLabel}>
-        {isLoose
-          ? `Selling (₹) per ${looseBasis === "l" ? "1 litre" : "1 kg"} *`
-          : "Selling price (₹) *"}
-      </Text>
-      <TextInput
-        value={discountedPrice}
-        onChangeText={setDiscountedPrice}
-        placeholder="≤ base"
-        placeholderTextColor={colors.textTertiary}
-        style={styles.addCustomInput}
-        keyboardType="decimal-pad"
-      />
-
-      <Text style={styles.addCustomLabel}>Min qty (optional)</Text>
-      <TextInput
-        value={minQty}
-        onChangeText={setMinQty}
-        placeholder="Default 1"
-        placeholderTextColor={colors.textTertiary}
-        style={styles.addCustomInput}
-        keyboardType="decimal-pad"
-      />
-      <Text style={styles.addCustomLabel}>Max qty (optional)</Text>
-      <TextInput
-        value={maxQty}
-        onChangeText={setMaxQty}
-        placeholder="Default 100"
-        placeholderTextColor={colors.textTertiary}
-        style={styles.addCustomInput}
-        keyboardType="decimal-pad"
-      />
-      <Text style={styles.addCustomLabel}>Rating (optional)</Text>
-      <TextInput
-        value={rating}
-        onChangeText={setRating}
-        placeholder="0–5, default 4"
-        placeholderTextColor={colors.textTertiary}
-        style={styles.addCustomInput}
-        keyboardType="decimal-pad"
-      />
-
-      <View style={styles.addCustomSwitchRow}>
-        <Text style={styles.addCustomSwitchLabel}>Product active</Text>
-        <Switch value={isActive} onValueChange={setIsActive} trackColor={{ false: colors.border, true: colors.primary }} />
+        {isLoose ? (
+          <>
+            <Text style={styles.addCustomLabel}>Priced per *</Text>
+            <View style={styles.addCustomChipsRow}>
+              {(["kg", "l"] as LoosePricingBasis[]).map((b) => (
+                <TouchableOpacity key={b} onPress={() => setLooseBasis(b)} style={[styles.addCustomChip, looseBasis === b && styles.addCustomChipActive]}>
+                  <Text style={[styles.addCustomChipText, looseBasis === b && styles.addCustomChipTextActive]}>1 {b === "kg" ? "kg" : "litre"}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        ) : (
+          <>
+            <View style={styles.addCustomRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.addCustomLabel}>Pack amount *</Text>
+                <TextInput value={packAmount} onChangeText={setPackAmount} placeholder="e.g. 200" placeholderTextColor={colors.textTertiary} style={styles.addCustomInput} keyboardType="decimal-pad" />
+              </View>
+              <View style={{ flex: 2 }}>
+                <Text style={styles.addCustomLabel}>Pack unit *</Text>
+                <View style={[styles.addCustomChipsRow, { flexWrap: "wrap" }]}>
+                  {UNITS.map((u) => (
+                    <TouchableOpacity key={u} onPress={() => setPackSuffix(u)} style={[styles.addCustomChip, packSuffix === u && styles.addCustomChipActive]}>
+                      <Text style={[styles.addCustomChipText, packSuffix === u && styles.addCustomChipTextActive]}>{u}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            </View>
+          </>
+        )}
+        {(() => {
+          if (isLoose && looseBasis) return (
+            <Text style={styles.addCustomUnitPreview}>Unit: <Text style={styles.addCustomUnitPreviewValue}>{unitForLoosePricingBasis(looseBasis)}</Text></Text>
+          );
+          const p = Number(String(packAmount).replace(/,/g, "").trim());
+          if (!isLoose && packSuffix && Number.isFinite(p) && p > 0) return (
+            <Text style={styles.addCustomUnitPreview}>Unit: <Text style={styles.addCustomUnitPreviewValue}>{formatMasterProductUnit(p, packSuffix)}</Text></Text>
+          );
+          return null;
+        })()}
       </View>
 
-      <Text style={styles.addCustomHint}>Visible when your store is online if active.</Text>
+      {/* Section 4: Pricing */}
+      <View style={styles.addCustomSection}>
+        <Text style={styles.addCustomSectionLabel}>PRICING (₹){isLoose ? ` — per ${looseBasis === "l" ? "1 litre" : "1 kg"}` : ""}</Text>
+        <View style={styles.addCustomRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.addCustomLabel}>MRP / Base *</Text>
+            <TextInput value={basePrice} onChangeText={setBasePrice} placeholder="0.00" placeholderTextColor={colors.textTertiary} style={styles.addCustomInput} keyboardType="decimal-pad" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.addCustomLabel}>Selling price *</Text>
+            <TextInput value={discountedPrice} onChangeText={setDiscountedPrice} placeholder="≤ base" placeholderTextColor={colors.textTertiary} style={styles.addCustomInput} keyboardType="decimal-pad" />
+          </View>
+        </View>
+      </View>
+
+      {/* Section 5: Order limits */}
+      <View style={styles.addCustomSection}>
+        <Text style={styles.addCustomSectionLabel}>ORDER LIMITS (optional)</Text>
+        <View style={styles.addCustomRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.addCustomLabel}>Min qty</Text>
+            <TextInput value={minQty} onChangeText={setMinQty} placeholder="Default 1" placeholderTextColor={colors.textTertiary} style={styles.addCustomInput} keyboardType="decimal-pad" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.addCustomLabel}>Max qty</Text>
+            <TextInput value={maxQty} onChangeText={setMaxQty} placeholder="Default 100" placeholderTextColor={colors.textTertiary} style={styles.addCustomInput} keyboardType="decimal-pad" />
+          </View>
+        </View>
+      </View>
+
+      {/* Section 6: Settings */}
+      <View style={[styles.addCustomSection, { marginBottom: 0 }]}>
+        <Text style={styles.addCustomSectionLabel}>SETTINGS</Text>
+        <View style={styles.addCustomSwitchRow}>
+          <View style={styles.addCustomSwitchTextCol}>
+            <Text style={styles.addCustomSwitchLabel}>Active on launch</Text>
+            <Text style={styles.addCustomSwitchHint}>Product will be visible to customers when your store is online.</Text>
+          </View>
+          <Switch value={isActive} onValueChange={setIsActive} trackColor={{ false: colors.border, true: colors.primary }} />
+        </View>
+      </View>
 
       <TouchableOpacity
         style={[styles.addCustomSubmit, saving && styles.addCustomSubmitDisabled]}
         onPress={addCustom}
         disabled={saving}
+        activeOpacity={0.85}
       >
         {saving ? (
           <ActivityIndicator color={colors.surface} />
         ) : (
-          <Text style={styles.addCustomSubmitText}>Add Custom Product</Text>
+          <>
+            <Ionicons name="checkmark-circle" size={18} color={colors.surface} />
+            <Text style={styles.addCustomSubmitText}>Add to Catalog</Text>
+          </>
         )}
       </TouchableOpacity>
     </View>
@@ -954,13 +938,21 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   catalogLoading: {
-    alignItems: "center",
     paddingVertical: spacing.lg,
-    gap: spacing.sm,
   },
-  catalogLoadingText: {
-    color: colors.textTertiary,
+  loadMoreBtn: {
+    paddingVertical: spacing.md,
+    alignItems: "center",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginTop: spacing.sm,
+    backgroundColor: colors.surfaceVariant,
+  },
+  loadMoreBtnText: {
+    color: colors.primary,
     fontSize: 13,
+    fontWeight: "600",
   },
   skeletonContainer: {
     gap: spacing.sm,
@@ -1046,10 +1038,11 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     fontSize: 11,
   },
-  catalogItemPrice: {
-    color: colors.textPrimary,
-    fontSize: 13,
-    fontWeight: "700",
+  catalogItemDesc: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 2,
   },
   catalogAddBtn: {
     paddingHorizontal: 12,
@@ -1070,32 +1063,58 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     marginBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  addCustomHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.md,
+    marginBottom: spacing.xs,
+  },
+  addCustomHeaderIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
+    backgroundColor: colors.primary + "12",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
   },
   addCustomTitle: {
     color: colors.textPrimary,
-    fontSize: 18,
-    fontWeight: "700",
-    marginBottom: spacing.xs,
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: -0.2,
   },
   addCustomSubtitle: {
     color: colors.textTertiary,
     fontSize: 12,
-    marginBottom: spacing.md,
+    marginTop: 2,
+    lineHeight: 17,
   },
-  addCustomDescriptionBlock: {
-    marginBottom: spacing.md,
-    width: "100%",
+  addCustomSection: {
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  addCustomSectionLabel: {
+    color: colors.textTertiary,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.8,
+    marginBottom: spacing.xs,
+  },
+  addCustomRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
   },
   addCustomSwitchRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
-    marginBottom: spacing.sm,
-    marginTop: spacing.sm,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.xs,
     gap: spacing.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
   },
   addCustomSwitchTextCol: {
     flex: 1,
@@ -1110,25 +1129,23 @@ const styles = StyleSheet.create({
   addCustomSwitchHint: {
     color: colors.textTertiary,
     fontSize: 11,
-    marginTop: 6,
-    lineHeight: 16,
+    marginTop: 4,
+    lineHeight: 15,
   },
   addCustomInputMultiline: {
-    minHeight: 72,
+    minHeight: 68,
     paddingTop: 10,
-    marginBottom: 0,
-    width: "100%",
-    alignSelf: "stretch",
   },
   addCustomLabel: {
-    color: colors.textTertiary,
-    fontSize: 12,
-    marginBottom: 6,
-    marginTop: 8,
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: "600",
+    marginBottom: 4,
+    marginTop: 4,
   },
   addCustomInput: {
-    backgroundColor: colors.surfaceVariant,
-    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
     paddingHorizontal: 12,
     paddingVertical: 10,
     color: colors.textPrimary,
@@ -1139,15 +1156,16 @@ const styles = StyleSheet.create({
   addCustomChipsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: spacing.sm,
+    gap: spacing.xs,
+    marginTop: spacing.xs,
   },
   addCustomChip: {
     paddingHorizontal: 12,
     paddingVertical: 7,
-    borderRadius: 20,
-    borderWidth: 1,
+    borderRadius: radius.full,
+    borderWidth: 1.5,
     borderColor: colors.border,
-    backgroundColor: colors.surfaceVariant,
+    backgroundColor: colors.surface,
   },
   addCustomChipActive: {
     backgroundColor: colors.primary,
@@ -1155,82 +1173,100 @@ const styles = StyleSheet.create({
   },
   addCustomChipText: {
     color: colors.textSecondary,
-    fontSize: 12,
+    fontSize: 13,
+    fontWeight: "600",
   },
   addCustomChipTextActive: {
     color: colors.surface,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   addCustomImageBlock: {
-    marginTop: spacing.xs,
-    marginBottom: spacing.sm,
+    borderRadius: radius.md,
+    overflow: "hidden",
+    position: "relative",
   },
   addCustomImage: {
     width: "100%",
-    height: 160,
+    height: 180,
     borderRadius: radius.md,
-    marginBottom: spacing.sm,
+  },
+  addCustomImageOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    gap: spacing.xs,
+    padding: spacing.sm,
+    backgroundColor: "rgba(0,0,0,0.45)",
+  },
+  addCustomImgOverlayBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  addCustomImgOverlayBtnDanger: {
+    backgroundColor: "rgba(239,68,68,0.45)",
+    marginLeft: "auto",
+  },
+  addCustomImgOverlayText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600",
   },
   addCustomImagePicker: {
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: colors.border,
     borderRadius: radius.md,
-    paddingVertical: spacing.md,
-    alignItems: "center",
-    marginBottom: spacing.sm,
-    gap: spacing.xs,
+    borderStyle: "dashed",
+    overflow: "hidden",
+    backgroundColor: colors.surface,
   },
-  addCustomImageIcon: {
-    fontSize: 28,
+  addCustomImagePickerButtons: {
+    flexDirection: "row",
+    alignItems: "stretch",
+  },
+  addCustomImgPickBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.lg,
+  },
+  addCustomImgPickBtnText: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  addCustomImgPickDivider: {
+    width: 1,
+    backgroundColor: colors.border,
+    marginVertical: spacing.md,
   },
   addCustomImageLabel: {
     color: colors.textTertiary,
-    fontSize: 12,
-  },
-  addCustomImageActions: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-    alignItems: "center",
-  },
-  addCustomSmallBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: radius.md,
-    backgroundColor: colors.surfaceVariant,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  addCustomSmallBtnText: {
-    color: colors.textPrimary,
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  addCustomRemoveBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-  },
-  addCustomRemoveBtnText: {
-    color: colors.error,
-    fontSize: 12,
-    fontWeight: "500",
+    fontSize: 11,
+    textAlign: "center",
+    paddingBottom: spacing.md,
   },
   addCustomAmountHint: {
     color: colors.textTertiary,
     fontSize: 11,
-    marginTop: -6,
-    marginBottom: spacing.sm,
     lineHeight: 15,
   },
   addCustomUnitPreview: {
     color: colors.textTertiary,
     fontSize: 12,
     marginTop: spacing.xs,
-    marginBottom: spacing.sm,
   },
   addCustomUnitPreviewValue: {
-    color: colors.textPrimary,
-    fontWeight: "600",
+    color: colors.primary,
+    fontWeight: "700",
   },
   addCustomHint: {
     color: colors.textTertiary,
@@ -1238,14 +1274,24 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   addCustomSubmit: {
-    marginTop: spacing.lg,
+    marginTop: spacing.xs,
     backgroundColor: colors.primary,
     borderRadius: radius.md,
-    paddingVertical: 14,
+    paddingVertical: 15,
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
   },
   addCustomSubmitDisabled: {
     opacity: 0.6,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   addCustomSubmitText: {
     color: colors.surface,

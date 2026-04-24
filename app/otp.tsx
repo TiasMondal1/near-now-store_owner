@@ -1,5 +1,5 @@
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -35,12 +35,6 @@ export default function StoreOwnerOtpScreen() {
   const [secondsLeft, setSecondsLeft] = useState(60);
 
   const inputsRef = useRef<Array<TextInput | null>>([]);
-
-  useLayoutEffect(() => {
-    if (__DEV__) {
-      router.replace("/App");
-    }
-  }, []);
 
   useEffect(() => {
     if (secondsLeft <= 0) return;

@@ -72,9 +72,7 @@ export default function LandingScreen() {
             activeOpacity={0.85}
           >
             <Text style={styles.primaryButtonText}>Login</Text>
-            <Text style={styles.primaryHint}>
-              {__DEV__ ? "Phone number, then Dev Login (no OTP)" : "Use your phone number & OTP"}
-            </Text>
+            <Text style={styles.primaryHint}>Use your phone number &amp; OTP</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -83,44 +81,13 @@ export default function LandingScreen() {
             activeOpacity={0.85}
           >
             <Text style={styles.secondaryButtonText}>New store</Text>
-            <Text style={styles.secondaryHint}>
-              {__DEV__ ? "Phone number, then Dev: New Store" : "Set up your store (phone + OTP)"}
-            </Text>
+            <Text style={styles.secondaryHint}>Set up your store (phone + OTP)</Text>
           </TouchableOpacity>
         </View>
 
         <Text style={styles.footer}>
-          {__DEV__
-            ? "Development build — OTP is disabled. Production uses phone & OTP only."
-            : "Same verification as the main Near&Now app — phone & OTP only."}
+          Same verification as the main Near&amp;Now app — phone &amp; OTP only.
         </Text>
-
-        {__DEV__ && (
-          <TouchableOpacity
-            style={styles.devButton}
-            onPress={async () => {
-              Alert.alert(
-                "Clear All Cache",
-                "This will clear session, inventory, and all cached data. You'll need to log in again.",
-                [
-                  { text: "Cancel", style: "cancel" },
-                  {
-                    text: "Clear",
-                    style: "destructive",
-                    onPress: async () => {
-                      await clearSession();
-                      await AsyncStorage.removeItem("inventory_persisted_state");
-                      await AsyncStorage.removeItem("inventory_products_cache");
-                      Alert.alert("Success", "All cache cleared. Please reload the app.");
-                    },
-                  },
-                ]
-              );
-            }}
-          >
-            <Text style={styles.devButtonText}>🧹 Clear Cache (Dev)</Text>
-          </TouchableOpacity>
-        )}
       </View>
     </SafeAreaView>
   );
@@ -212,18 +179,5 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     textAlign: "center",
     lineHeight: 16,
-  },
-  devButton: {
-    backgroundColor: "#ff4444",
-    borderRadius: radius.md,
-    paddingVertical: 12,
-    paddingHorizontal: spacing.lg,
-    marginTop: spacing.lg,
-    alignItems: "center",
-  },
-  devButtonText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#fff",
   },
 });

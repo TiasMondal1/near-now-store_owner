@@ -52,7 +52,8 @@
   "overrides": {
     "minimatch": "^10.2.1",
     "glob": "^10.4.5",
-    "rimraf": "^6.0.0"
+    "rimraf": "^6.0.0",
+    "uuid": "^14.0.0"
   },
   "private": true
 }
