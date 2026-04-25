@@ -63,10 +63,8 @@ react {
     autolinkLibrariesWithApp()
 }
 
-/**
- * Set this to true in release builds to optimize the app using [R8](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization).
- */
 def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBuilds') ?: false).toBoolean()
+def enableShrinkResourcesInReleaseBuilds = (findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: false).toBoolean()
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -80,26 +78,6 @@ def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBu
  * this variant is about 6MiB larger per architecture than default.
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
-
-// Release signing for Play Store: android/keystore.properties (gitignored) or env vars (CI).
-def keystoreProperties = new Properties()
-def keystorePropsFile = rootProject.file("keystore.properties")
-if (keystorePropsFile.exists()) {
-    def ksBytes = keystorePropsFile.bytes
-    def off = 0
-    if (ksBytes.length >= 3 && (ksBytes[0] & 0xFF) == 0xEF && (ksBytes[1] & 0xFF) == 0xBB && (ksBytes[2] & 0xFF) == 0xBF) {
-        off = 3
-    }
-    keystoreProperties.load(new ByteArrayInputStream(ksBytes, off, ksBytes.length - off))
-}
-def releaseStoreFile = System.getenv("ANDROID_UPLOAD_STORE_FILE") ?: keystoreProperties.getProperty("storeFile")
-def releaseStorePassword = System.getenv("ANDROID_UPLOAD_STORE_PASSWORD") ?: keystoreProperties.getProperty("storePassword")
-def releaseKeyAlias = System.getenv("ANDROID_UPLOAD_KEY_ALIAS") ?: keystoreProperties.getProperty("keyAlias")
-def releaseKeyPassword = System.getenv("ANDROID_UPLOAD_KEY_PASSWORD") ?: keystoreProperties.getProperty("keyPassword")
-def hasReleaseSigning = releaseStoreFile?.trim()
-    && releaseStorePassword?.trim()
-    && releaseKeyAlias?.trim()
-    && releaseKeyPassword?.trim()
 
 android {
     ndkVersion rootProject.ext.ndkVersion
@@ -116,10 +94,6 @@ android {
         versionName "1.0.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
-
-        // Same key as JS (Geocoding + MapView). Must be present at Gradle time for release APK/AAB — e.g. EAS env or `npm run build:apk` (loads .env into process.env).
-        def googleMapsKey = System.getenv('EXPO_PUBLIC_GOOGLE_MAPS_API_KEY') ?: System.getenv('VITE_GOOGLE_MAPS_API_KEY') ?: ''
-        manifestPlaceholders = [GOOGLE_MAPS_API_KEY: googleMapsKey]
     }
     signingConfigs {
         debug {
@@ -128,27 +102,27 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
-        release {
-            if (hasReleaseSigning) {
-                storeFile file(releaseStoreFile)
-                storePassword releaseStorePassword
-                keyAlias releaseKeyAlias
-                keyPassword releaseKeyPassword
-            }
-        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            signingConfig hasReleaseSigning ? signingConfigs.release : signingConfigs.debug
-            def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
-            shrinkResources enableShrinkResources.toBoolean()
+            signingConfig signingConfigs.debug
             minifyEnabled enableMinifyInReleaseBuilds
-            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            shrinkResources enableShrinkResourcesInReleaseBuilds
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
             def enablePngCrunchInRelease = findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true'
             crunchPngs enablePngCrunchInRelease.toBoolean()
+        }
+    }
+
+    splits {
+        abi {
+            reset()
+            enable gradle.startParameter.taskNames.any { it.toLowerCase().contains("release") }
+            universalApk false
+            include "armeabi-v7a", "arm64-v8a"
         }
     }
     packagingOptions {
@@ -159,19 +133,6 @@ android {
     }
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
-    }
-}
-
-tasks.matching { it.name == "bundleRelease" || it.name == "assembleRelease" }.configureEach {
-    doFirst {
-        if (!hasReleaseSigning) {
-            throw new GradleException(
-                "Release signing is not configured. Google Play rejects debug-signed AAB/APK. " +
-                "Copy android/keystore.properties.example to android/keystore.properties, add your upload keystore path and passwords " +
-                "(paths in storeFile are relative to android/app/), " +
-                "or set ANDROID_UPLOAD_STORE_FILE, ANDROID_UPLOAD_STORE_PASSWORD, ANDROID_UPLOAD_KEY_ALIAS, ANDROID_UPLOAD_KEY_PASSWORD."
-            )
-        }
     }
 }
 

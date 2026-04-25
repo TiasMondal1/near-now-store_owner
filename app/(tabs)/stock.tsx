@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, memo } from "react";
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
+  FlatList,
   TextInput,
   Alert,
   Image,
@@ -16,7 +17,6 @@ import { router } from "expo-router";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { config } from "../../lib/config";
 import { colors, radius, spacing } from "../../lib/theme";
 import {
   addCustomMasterProduct,
@@ -29,8 +29,9 @@ import {
   CATALOG_PAGE_SIZE,
   type LoosePricingBasis,
 } from "../../lib/storeProducts";
+import { fetchStoresCached, peekStores } from "../../lib/appCache";
 
-const API_BASE = config.API_BASE;
+const PLACEHOLDER_IMAGE = require("../../assets/icon.png");
 
 function formatCategoryLabel(raw: string): string {
   if (!raw || raw === "All") return raw;
@@ -49,35 +50,35 @@ export default function StockTab() {
   const [inventoryRefreshKey, setInventoryRefreshKey] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         const s: any = await getSession();
-        if (!s?.token) return router.replace("/landing");
-
+        if (!s?.token) {
+          if (!cancelled) router.replace("/landing");
+          return;
+        }
+        if (cancelled) return;
         setSession(s);
 
-        const userId = s.user?.id;
-        const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
-          headers: { Authorization: `Bearer ${s.token}` },
-        });
-        const raw = await res.text();
-        let json: any = null;
-        try {
-          json = raw ? JSON.parse(raw) : null;
-        } catch {
-          json = null;
+        // Use cached storeId first — avoids network call on tab switch
+        const cached = peekStores();
+        if (cached && cached.length > 0) {
+          setStoreId(cached[0].id);
+          setLoading(false);
+          return;
         }
-        const stores = json?.stores || [];
 
-        if (stores[0]) {
-          setStoreId(stores[0].id);
-        }
+        const stores = await fetchStoresCached(s.token, s.user?.id);
+        if (cancelled) return;
+        if (stores[0]) setStoreId(stores[0].id);
       } catch (e) {
-        console.warn("[stock] Bootstrap error:", e);
+        if (__DEV__) console.warn("[stock] Bootstrap error:", e);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => { cancelled = true; };
   }, []);
 
   if (loading) {
@@ -378,63 +379,108 @@ function InventoryCatalogSection({
           </Text>
         </View>
       ) : (
-        <View style={styles.catalogList}>
-          {displayProducts.map((p) => {
+        <FlatList
+          data={displayProducts}
+          keyExtractor={(p) => p.id}
+          scrollEnabled={false}
+          initialNumToRender={15}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          contentContainerStyle={styles.catalogList}
+          renderItem={({ item: p }) => {
             const name = p.name || p.product_name || "Product";
             const brand = p.brand;
             const cat = p.category ? formatCategoryLabel(p.category) : "";
             return (
-              <View key={p.id} style={styles.catalogItem}>
-                <Image source={{ uri: p.image_url }} style={styles.catalogItemImage} />
-                <View style={styles.catalogItemInfo}>
-                  <Text style={styles.catalogItemName} numberOfLines={2}>
-                    {name}
-                  </Text>
-                  <Text style={styles.catalogItemMeta} numberOfLines={1}>
-                    {brand ? `${brand} · ` : ""}{cat}
-                  </Text>
-                  {p.description ? (
-                    <Text style={styles.catalogItemDesc} numberOfLines={2}>
-                      {p.description}
-                    </Text>
-                  ) : null}
-                </View>
-                <TouchableOpacity
-                  style={styles.catalogAddBtn}
-                  onPress={() => addProduct(p)}
-                  disabled={togglingId === p.id}
-                  activeOpacity={0.8}
-                >
-                  {togglingId === p.id ? (
-                    <ActivityIndicator size="small" color={colors.surface} />
-                  ) : (
-                    <Text style={styles.catalogAddBtnText}>Add</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
+              <CatalogItem
+                key={p.id}
+                p={p}
+                name={name}
+                brand={brand}
+                cat={cat}
+                togglingId={togglingId}
+                onAdd={addProduct}
+              />
             );
-          })}
-
-          {/* Load More */}
-          {hasMore && (
-            <TouchableOpacity
-              style={styles.loadMoreBtn}
-              onPress={loadMore}
-              disabled={loadingProducts}
-              activeOpacity={0.8}
-            >
-              {loadingProducts ? (
-                <ActivityIndicator size="small" color={colors.primary} />
-              ) : (
-                <Text style={styles.loadMoreBtnText}>Load more</Text>
-              )}
-            </TouchableOpacity>
-          )}
-        </View>
+          }}
+          ListFooterComponent={
+            hasMore ? (
+              <TouchableOpacity
+                style={styles.loadMoreBtn}
+                onPress={loadMore}
+                disabled={loadingProducts}
+                activeOpacity={0.8}
+              >
+                {loadingProducts ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <Text style={styles.loadMoreBtnText}>Load more</Text>
+                )}
+              </TouchableOpacity>
+            ) : null
+          }
+        />
       )}
     </View>
   );
 }
+
+const CatalogItem = memo(function CatalogItem({
+  p,
+  name,
+  brand,
+  cat,
+  togglingId,
+  onAdd,
+}: {
+  p: any;
+  name: string;
+  brand?: string;
+  cat: string;
+  togglingId: string | null;
+  onAdd: (p: any) => void;
+}) {
+  const [imgError, setImgError] = useState(false);
+  const imageSource =
+    !imgError && p.image_url
+      ? { uri: p.image_url }
+      : PLACEHOLDER_IMAGE;
+
+  return (
+    <View style={styles.catalogItem}>
+      <Image
+        source={imageSource}
+        style={styles.catalogItemImage}
+        onError={() => setImgError(true)}
+      />
+      <View style={styles.catalogItemInfo}>
+        <Text style={styles.catalogItemName} numberOfLines={2}>
+          {name}
+        </Text>
+        <Text style={styles.catalogItemMeta} numberOfLines={1}>
+          {brand ? `${brand} · ` : ""}{cat}
+        </Text>
+        {p.description ? (
+          <Text style={styles.catalogItemDesc} numberOfLines={2}>
+            {p.description}
+          </Text>
+        ) : null}
+      </View>
+      <TouchableOpacity
+        style={styles.catalogAddBtn}
+        onPress={() => onAdd(p)}
+        disabled={togglingId === p.id}
+        activeOpacity={0.8}
+      >
+        {togglingId === p.id ? (
+          <ActivityIndicator size="small" color={colors.surface} />
+        ) : (
+          <Text style={styles.catalogAddBtnText}>Add</Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+});
 
 function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
   const [name, setName] = useState("");

@@ -2,82 +2,76 @@ import React, { useEffect, useRef } from "react";
 import { View, Text, StyleSheet, Animated, Easing, Image } from "react-native";
 import { useRouter } from "expo-router";
 import { getSession } from "../session";
+import { hydrateStoreCache } from "../lib/appCache";
 import { colors } from "../lib/theme";
 
-const SPLASH_DURATION_MS = 2200;
+const MIN_SPLASH_MS = 600;
 const BRAND_LOGO = require("../near_now_shopkeeper.png");
 
 export default function SplashScreen() {
   const router = useRouter();
   const scale = useRef(new Animated.Value(0.4)).current;
   const opacity = useRef(new Animated.Value(0)).current;
-  const pulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
+    // Start animation
     Animated.parallel([
       Animated.timing(opacity, {
         toValue: 1,
-        duration: 400,
+        duration: 350,
         useNativeDriver: true,
         easing: Easing.out(Easing.cubic),
       }),
       Animated.spring(scale, {
         toValue: 1,
-        friction: 6,
-        tension: 40,
+        friction: 7,
+        tension: 45,
         useNativeDriver: true,
       }),
     ]).start();
 
-    const pulseLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1.08,
-          duration: 800,
-          useNativeDriver: true,
-          easing: Easing.inOut(Easing.ease),
-        }),
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 800,
-          useNativeDriver: true,
-          easing: Easing.inOut(Easing.ease),
-        }),
-      ])
-    );
-    pulseLoop.start();
+    // Run session check + cache hydration in parallel with animation.
+    // Navigate as soon as both session check AND minimum animation complete.
+    const startMs = Date.now();
+    let cancelled = false;
 
-    const t = setTimeout(async () => {
-      pulseLoop.stop();
+    (async () => {
       try {
-        const session = await getSession();
+        // Parallel: check session AND warm the store cache from AsyncStorage
+        const [session] = await Promise.all([
+          getSession(),
+          hydrateStoreCache(),
+        ]);
+
+        if (cancelled) return;
+
+        const elapsed = Date.now() - startMs;
+        const remaining = Math.max(0, MIN_SPLASH_MS - elapsed);
+
+        await new Promise<void>((resolve) => setTimeout(resolve, remaining));
+
+        if (cancelled) return;
+
         const ok =
           session?.token &&
           session?.user?.id &&
           session.user.role !== "customer";
-        if (ok) {
-          router.replace("/(tabs)/home");
-        } else {
-          router.replace("/landing");
-        }
-      } catch {
-        router.replace("/landing");
-      }
-    }, SPLASH_DURATION_MS);
 
-    return () => clearTimeout(t);
+        router.replace(ok ? "/(tabs)/home" : "/landing");
+      } catch {
+        if (!cancelled) router.replace("/landing");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
     <View style={styles.container}>
       <Animated.View
-        style={[
-          styles.iconWrap,
-          {
-            opacity,
-            transform: [{ scale: Animated.multiply(scale, pulse) }],
-          },
-        ]}
+        style={{ opacity, transform: [{ scale }] }}
       >
         <Image source={BRAND_LOGO} style={styles.logo} resizeMode="contain" />
       </Animated.View>
@@ -94,17 +88,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  iconWrap: {
-    alignItems: "center",
-    justifyContent: "center",
-  },
   logo: {
     width: 180,
     height: 180,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 14,
     elevation: 8,
   },
   tagline: {

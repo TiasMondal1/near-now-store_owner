@@ -35,19 +35,41 @@ import { getOrdersFromDb, getOrderByIdFromDb } from "../../lib/orders-db";
 import { getStatusColor, formatStatus } from "../../lib/order-utils";
 import { useSmartPoll } from "../../lib/useSmartPoll";
 import { StoreStatusCard } from "../../components/StoreStatusCard";
+import {
+  fetchStoresCached,
+  peekStores,
+  patchStoreActive,
+  clearStoreCache,
+  type CachedStore,
+} from "../../lib/appCache";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
 const BRAND_LOGO = require("../../near_now_shopkeeper.png");
 
-type StoreRow = {
-  id: string;
-  name: string;
-  address: string | null;
-  delivery_radius_km: number;
-  is_active: boolean;
-};
+type StoreRow = CachedStore;
+
+function OrderItemRow({ item }: { item: any }) {
+  const [imgErr, setImgErr] = React.useState(false);
+  const src =
+    !imgErr && item?.image_url
+      ? { uri: item.image_url }
+      : BRAND_LOGO;
+  return (
+    <View style={styles.itemRow}>
+      <Image
+        source={src}
+        style={styles.itemImg}
+        onError={() => setImgErr(true)}
+      />
+      <View>
+        <Text style={styles.itemName}>{item.product_name}</Text>
+        <Text style={styles.itemQty}>{item.quantity} {item.unit}</Text>
+      </View>
+    </View>
+  );
+}
 
 export default function HomeTab() {
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
@@ -126,19 +148,30 @@ export default function HomeTab() {
           if (!cancelled) router.replace("/landing");
           return;
         }
-
         if (cancelled) return;
         setSession(s);
 
-        const currentStores = await fetchStores(s.token, s.user?.id);
+        // Use cached stores immediately — no loading spinner on warm starts
+        const cached = peekStores();
+        if (cached && cached.length > 0) {
+          setStores(cached);
+          setLoading(false);
+          // Refresh in background without blocking UI
+          fetchStoresCached(s.token, s.user?.id).then((fresh) => {
+            if (!cancelled && fresh.length > 0) setStores(fresh);
+          });
+          return;
+        }
 
+        // Cold start: fetch and wait
+        const currentStores = await fetchStoresCached(s.token, s.user?.id);
         if (cancelled) return;
-
-        if (currentStores.length > 0 && !currentStores[0].is_active) {
-          await invalidateAllCaches();
+        if (currentStores.length > 0) {
+          setStores(currentStores);
+          if (!currentStores[0].is_active) await invalidateAllCaches();
         }
       } catch (error) {
-        console.warn("[home] Initial bootstrap failed", error);
+        if (__DEV__) console.warn("[home] Bootstrap failed", error);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -273,26 +306,11 @@ export default function HomeTab() {
   }, [session?.token, selectedStore?.id]);
 
   const fetchStores = useCallback(async (token: string, userId?: string): Promise<StoreRow[]> => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
     try {
-      const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      const raw = await res.text();
-      let json: any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch { /* non-JSON response */ }
-      const fetched: StoreRow[] = json?.stores || [];
-      if (fetched.length > 0) {
-        setStores(fetched);
-      }
+      const fetched = await fetchStoresCached(token, userId);
+      if (fetched.length > 0) setStores(fetched);
       return fetched;
     } catch {
-      clearTimeout(timeoutId);
       return [];
     }
   }, []);
@@ -372,6 +390,8 @@ export default function HomeTab() {
           });
           if (!response.ok) throw new Error(`Failed: ${response.status}`);
           await restoreActiveProductsOnline(selectedStore.id);
+          patchStoreActive(selectedStore.id, true);
+          clearStoreCache();
           await fetchStores(session.token, session.user?.id);
           await fetchStoreProducts(true);
         },
@@ -396,6 +416,8 @@ export default function HomeTab() {
               body: JSON.stringify({ is_active: false }),
             });
             if (!response.ok) throw new Error(`Failed: ${response.status}`);
+            patchStoreActive(selectedStore.id, false);
+            clearStoreCache();
             await invalidateAllCaches();
             await fetchStores(session.token, session.user?.id);
             fetchStoreProducts(true).catch(() => {});
@@ -597,24 +619,7 @@ export default function HomeTab() {
                   <ScrollView style={{ maxHeight: 260 }}>
                     {Array.isArray(selectedOrder.order_items) &&
                       selectedOrder.order_items.map((item: any, idx: number) => (
-                        <View key={idx} style={styles.itemRow}>
-                          {item?.image_url ? (
-                            <Image
-                              source={{ uri: item.image_url }}
-                              style={styles.itemImg}
-                            />
-                          ) : (
-                            <View style={styles.itemImg} />
-                          )}
-                          <View>
-                            <Text style={styles.itemName}>
-                              {item.product_name}
-                            </Text>
-                            <Text style={styles.itemQty}>
-                              {item.quantity} {item.unit}
-                            </Text>
-                          </View>
-                        </View>
+                        <OrderItemRow key={idx} item={item} />
                       ))}
                   </ScrollView>
 

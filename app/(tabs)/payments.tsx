@@ -10,42 +10,18 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
-import { config } from "../../lib/config";
 import { colors, radius, spacing } from "../../lib/theme";
 
-const API_BASE = config.API_BASE;
-
 export default function PaymentsTab() {
-  const [session, setSession] = useState<any | null>(null);
-  const [storeId, setStoreId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
         const s: any = await getSession();
-        if (!s?.token) return router.replace("/landing");
-
-        setSession(s);
-
-        const userId = s.user?.id;
-        const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
-          headers: { Authorization: `Bearer ${s.token}` },
-        });
-        const raw = await res.text();
-        let json: any = null;
-        try {
-          json = raw ? JSON.parse(raw) : null;
-        } catch {
-          json = null;
-        }
-        const stores = json?.stores || [];
-
-        if (stores[0]) {
-          setStoreId(stores[0].id);
-        }
-      } catch (e) {
-        console.warn("[payments] Bootstrap error:", e);
+        if (!s?.token) router.replace("/landing");
+      } catch {
+        router.replace("/landing");
       } finally {
         setLoading(false);
       }
@@ -74,12 +50,12 @@ export default function PaymentsTab() {
         </View>
 
         <View style={styles.emptyCard}>
-            <Ionicons name="wallet-outline" size={40} color={colors.textTertiary} />
-            <Text style={styles.emptyTitle}>No payouts yet</Text>
-            <Text style={styles.emptyText}>
-              Payouts from Near&Now will appear here once they're processed.
-            </Text>
-          </View>
+          <Ionicons name="wallet-outline" size={40} color={colors.textTertiary} />
+          <Text style={styles.emptyTitle}>No payouts yet</Text>
+          <Text style={styles.emptyText}>
+            Payouts from Near&amp;Now will appear here once they're processed.
+          </Text>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -124,15 +100,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.sm,
   },
-  emptyTitle: { 
-    color: colors.textPrimary, 
-    fontSize: 16, 
+  emptyTitle: {
+    color: colors.textPrimary,
+    fontSize: 16,
     fontWeight: "700",
     marginTop: spacing.sm,
   },
-  emptyText: { 
-    color: colors.textTertiary, 
-    fontSize: 13, 
+  emptyText: {
+    color: colors.textTertiary,
+    fontSize: 13,
     marginTop: 6,
     textAlign: "center",
     paddingHorizontal: spacing.md,

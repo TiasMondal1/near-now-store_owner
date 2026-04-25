@@ -12,10 +12,12 @@ import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
-import { config } from "../../lib/config";
 import { colors, radius, spacing } from "../../lib/theme";
 import { getOrderByIdFromDb, getOrdersFromDb } from "../../lib/orders-db";
 import { getStatusColor, formatStatus, isDelivered } from "../../lib/order-utils";
+import { fetchStoresCached, peekStores } from "../../lib/appCache";
+import { useSmartPoll } from "../../lib/useSmartPoll";
+import { config } from "../../lib/config";
 
 const API_BASE = config.API_BASE;
 
@@ -34,13 +36,13 @@ export default function PreviousOrdersTab() {
   const toNumber = (v: any) => {
     if (typeof v === "number") return Number.isFinite(v) ? v : NaN;
     if (typeof v === "string") {
-      const cleaned = v.replace(/[^0-9.-]/g, "");
-      const n = Number(cleaned);
+      const n = Number(v.replace(/[^0-9.-]/g, ""));
       return Number.isFinite(n) ? n : NaN;
     }
     const n = Number(v);
     return Number.isFinite(n) ? n : NaN;
   };
+
   const getDisplayTotal = (o: any) => {
     const items = Array.isArray(o?.order_items) ? o.order_items : [];
     if (items.length > 0) {
@@ -51,75 +53,57 @@ export default function PreviousOrdersTab() {
         return sum + qty * price;
       }, 0);
     }
-    const fallbackCandidates = [
-      o?.total_amount,
-      o?.totalAmount,
-      o?.total,
-      o?.grand_total,
-      o?.subtotal_amount,
-      o?.subtotal,
-      o?.customer_order?.total_amount,
-      o?.customerOrder?.total_amount,
+    const candidates = [
+      o?.total_amount, o?.totalAmount, o?.total, o?.grand_total,
+      o?.subtotal_amount, o?.subtotal,
+      o?.customer_order?.total_amount, o?.customerOrder?.total_amount,
       o?.summary?.total_amount,
     ];
-    for (const c of fallbackCandidates) {
+    for (const c of candidates) {
       const n = toNumber(c);
       if (Number.isFinite(n)) return n;
     }
     return 0;
   };
+
   const previousOrders = useMemo(
     () => orders.filter((o: any) => isDelivered(o.status)),
     [orders]
   );
 
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
       try {
         const s: any = await getSession();
-        if (!s?.token) return router.replace("/landing");
-
+        if (!s?.token) {
+          if (!cancelled) router.replace("/landing");
+          return;
+        }
+        if (cancelled) return;
         setSession(s);
 
-        const userId = s.user?.id;
-        const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
-          headers: { Authorization: `Bearer ${s.token}` },
-        });
-        const raw = await res.text();
-        let json: any = null;
-        try {
-          json = raw ? JSON.parse(raw) : null;
-        } catch {
-          json = null;
+        // Use cached storeId — avoids redundant network call
+        const cached = peekStores();
+        if (cached && cached.length > 0) {
+          setStoreId(cached[0].id);
+          setLoading(false);
+          return;
         }
-        const stores = json?.stores || [];
 
-        if (stores[0]) {
-          setStoreId(stores[0].id);
-        }
+        const stores = await fetchStoresCached(s.token, s.user?.id);
+        if (cancelled) return;
+        if (stores[0]) setStoreId(stores[0].id);
       } catch (e) {
-        console.warn("[previous-orders] Bootstrap error:", e);
+        if (__DEV__) console.warn("[previous-orders] Bootstrap error:", e);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+
+    return () => { cancelled = true; };
   }, []);
-
-  useEffect(() => {
-    if (!session || !storeId) return;
-
-    fetchOrders();
-    const interval = setInterval(fetchOrders, 10000);
-    return () => clearInterval(interval);
-  }, [session, storeId]);
-
-  useFocusEffect(
-    React.useCallback(() => {
-      if (session?.token && storeId) {
-        fetchOrders();
-      }
-    }, [session?.token, storeId])
-  );
 
   const fetchOrders = useCallback(async () => {
     if (!session || !storeId) return;
@@ -127,10 +111,9 @@ export default function PreviousOrdersTab() {
     try {
       const fromDb = await getOrdersFromDb(storeId);
       if (Array.isArray(fromDb) && fromDb.length > 0) {
-        const withRecoveredTotals = await Promise.all(
+        const withTotals = await Promise.all(
           fromDb.map(async (o: any) => {
-            const current = getDisplayTotal(o);
-            if (current > 0 || !o?.id) return o;
+            if (getDisplayTotal(o) > 0 || !o?.id) return o;
             try {
               const detail = await getOrderByIdFromDb(String(o.id));
               if (!detail) return o;
@@ -140,7 +123,7 @@ export default function PreviousOrdersTab() {
             }
           })
         );
-        setOrders(withRecoveredTotals);
+        setOrders(withTotals);
         return;
       }
     } catch { /* fall through to HTTP */ }
@@ -159,6 +142,24 @@ export default function PreviousOrdersTab() {
       setOrders([]);
     }
   }, [session, storeId]);
+
+  // Fetch on mount when storeId becomes available
+  useEffect(() => {
+    if (session && storeId) fetchOrders();
+  }, [session, storeId]);
+
+  // AppState-aware polling — stops in background, resumes on foreground
+  useSmartPoll(fetchOrders, {
+    intervalMs: 15_000,
+    slowIntervalMs: 30_000,
+    enabled: !!(session && storeId),
+  });
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (session?.token && storeId) fetchOrders();
+    }, [session?.token, storeId])
+  );
 
   if (loading) {
     return (
@@ -347,9 +348,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 4,
     marginBottom: spacing.sm,
   },
-  orderCardLeft: {
-    gap: 3,
-  },
+  orderCardLeft: { gap: 3 },
   orderCardCode: {
     color: colors.textPrimary,
     fontSize: 15,

@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  ActivityIndicator,
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -13,10 +12,8 @@ import { router } from "expo-router";
 import { isGarbageEmail, normalizeSignupEmail } from "../lib/emailForApi";
 import { normalizeToShopkeeperRole } from "../lib/shopkeeperRole";
 import { getSession, clearSession } from "../session";
-import { config } from "../lib/config";
 import { colors, radius, spacing } from "../lib/theme";
-
-const API_BASE = config.API_BASE;
+import { fetchStoresCached, peekStores } from "../lib/appCache";
 
 function accountEmailLabel(session: { user?: { email?: string } } | null, store: { email?: string } | null): string {
   const u = normalizeSignupEmail(session?.user?.email ?? "");
@@ -27,40 +24,35 @@ function accountEmailLabel(session: { user?: { email?: string } } | null, store:
 }
 
 export default function ProfileScreen() {
-  const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<any>(null);
   const [storeInfo, setStoreInfo] = useState<any>(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const s = await getSession();
-        if (!s?.token) {
-          router.replace("/landing");
-          return;
-        }
-        setSession(s);
+    let cancelled = false;
 
-        const userId = s.user?.id;
-        const res = await fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, {
-          headers: { Authorization: `Bearer ${s.token}` },
+    (async () => {
+      const s = await getSession();
+      if (!s?.token) { router.replace("/landing"); return; }
+      if (cancelled) return;
+      setSession(s);
+
+      // Show cached store info instantly
+      const cached = peekStores();
+      if (cached?.length) {
+        setStoreInfo(cached[0]);
+        // Background refresh
+        fetchStoresCached(s.token, s.user?.id).then((fresh) => {
+          if (!cancelled && fresh.length) setStoreInfo(fresh[0]);
         });
-        const raw = await res.text();
-        let json: any = null;
-        try {
-          json = raw ? JSON.parse(raw) : null;
-        } catch {
-          json = null;
-        }
-        if (json?.stores?.length) {
-          setStoreInfo(json.stores[0]);
-        }
-      } catch (err) {
-        console.warn("Failed to load profile:", err);
-      } finally {
-        setLoading(false);
+      } else {
+        // Cold: fetch without blocking UI
+        fetchStoresCached(s.token, s.user?.id).then((stores) => {
+          if (!cancelled && stores.length) setStoreInfo(stores[0]);
+        });
       }
     })();
+
+    return () => { cancelled = true; };
   }, []);
 
   const handleLogout = async () => {
@@ -77,26 +69,11 @@ export default function ProfileScreen() {
     ]);
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.centered}>
-          <ActivityIndicator color={colors.primary} size="large" />
-          <Text style={styles.loadingText}>Loading profile...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.backBtn}
-            activeOpacity={0.7}
-          >
+          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
             <Text style={styles.backBtnText}>← Back</Text>
           </TouchableOpacity>
           <Text style={styles.title}>Profile</Text>
@@ -118,22 +95,12 @@ export default function ProfileScreen() {
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Store Information</Text>
             <InfoRow label="Store Name" value={storeInfo.name || "N/A"} />
-            <InfoRow
-              label="Address"
-              value={storeInfo.address || "Not provided"}
-            />
-            <InfoRow
-              label="Status"
-              value={storeInfo.is_active ? "Online" : "Offline"}
-            />
+            <InfoRow label="Address" value={storeInfo.address || "Not provided"} />
+            <InfoRow label="Status" value={storeInfo.is_active ? "Online" : "Offline"} />
           </View>
         )}
 
-        <TouchableOpacity
-          style={styles.logoutBtn}
-          onPress={handleLogout}
-          activeOpacity={0.85}
-        >
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.85}>
           <Text style={styles.logoutBtnText}>Logout</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -152,25 +119,11 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
-  centered: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  loadingText: {
-    color: colors.textSecondary,
-    fontSize: 14,
-    marginTop: spacing.md,
-  },
   container: { padding: spacing.lg },
   header: { marginBottom: spacing.lg },
   backBtn: { paddingVertical: 8, paddingRight: 12, marginBottom: spacing.sm },
   backBtnText: { color: colors.primary, fontSize: 16, fontWeight: "600" },
-  title: {
-    color: colors.textPrimary,
-    fontSize: 28,
-    fontWeight: "800",
-  },
+  title: { color: colors.textPrimary, fontSize: 28, fontWeight: "800" },
   card: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
@@ -192,11 +145,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  infoLabel: {
-    color: colors.textSecondary,
-    fontSize: 14,
-    flex: 1,
-  },
+  infoLabel: { color: colors.textSecondary, fontSize: 14, flex: 1 },
   infoValue: {
     color: colors.textPrimary,
     fontSize: 14,
@@ -211,9 +160,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: spacing.md,
   },
-  logoutBtnText: {
-    color: colors.surface,
-    fontSize: 16,
-    fontWeight: "700",
-  },
+  logoutBtnText: { color: colors.surface, fontSize: 16, fontWeight: "700" },
 });

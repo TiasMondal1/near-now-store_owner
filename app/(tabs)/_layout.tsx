@@ -21,9 +21,7 @@ export default function TabsLayout() {
     if (Platform.OS !== "android") return;
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
       const inTabs = segments[0] === "(tabs)";
-      if (inTabs && segments.length <= 2) {
-        return true;
-      }
+      if (inTabs && segments.length <= 2) return true;
       return false;
     });
     return () => sub.remove();
@@ -33,7 +31,10 @@ export default function TabsLayout() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
+        // lazy: first render only happens when tab is first visited
         lazy: true,
+        // unmountOnBlur defaults to false — screens stay mounted after first visit,
+        // preventing data refetch on every tab switch. No explicit override needed.
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textTertiary,
         tabBarStyle: {
@@ -47,7 +48,7 @@ export default function TabsLayout() {
         tabBarLabelStyle: {
           fontSize: 12,
           fontWeight: "600",
-          marginBottom: Platform.OS === 'ios' ? 0 : 4,
+          marginBottom: Platform.OS === "ios" ? 0 : 4,
         },
       }}
     >
