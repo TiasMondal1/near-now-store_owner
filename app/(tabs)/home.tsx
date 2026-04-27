@@ -31,9 +31,7 @@ import {
   setAllProductsOffline,
   restoreActiveProductsOnline,
 } from "../../lib/storeProducts";
-import { getOrdersFromDb, getOrderByIdFromDb } from "../../lib/orders-db";
 import { getStatusColor, formatStatus } from "../../lib/order-utils";
-import { useSmartPoll } from "../../lib/useSmartPoll";
 import { StoreStatusCard } from "../../components/StoreStatusCard";
 import {
   fetchStoresCached,
@@ -217,7 +215,7 @@ export default function HomeTab() {
   const [acceptingAllocId, setAcceptingAllocId] = useState<string | null>(null);
   const allocPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [stores, setStores] = useState<StoreRow[]>([]);
-  const [orders, setOrders] = useState<any[]>([]);
+
   const [loading, setLoading] = useState(true);
 
   const [storeProducts, setStoreProducts] = useState<
@@ -231,7 +229,7 @@ export default function HomeTab() {
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True when at least one Supabase channel reaches SUBSCRIBED — used to slow down polling
-  const [realtimeConnected, setRealtimeConnected] = useState(false);
+
   const [confirmModal, setConfirmModal] = useState<{
     title: string;
     message: string;
@@ -258,11 +256,16 @@ export default function HomeTab() {
   }, [storeProducts, debouncedSearchQuery]);
 
   const activeOrders = useMemo(() => {
-    const DELIVERED = ["delivered", "order_delivered"];
-    return orders.filter(
-      (o: any) => !DELIVERED.includes((o.status || "").toLowerCase().replace(/-/g, "_"))
-    );
-  }, [orders]);
+    return allocations
+      .filter((a) => a.alloc_status === 'accepted')
+      .map((a) => ({
+        id: a.order_id,
+        order_code: a.order_code,
+        status: 'accepted',
+        created_at: a.placed_at,
+        order_items: a.items,
+      }));
+  }, [allocations]);
 
   useEffect(() => {
     if (!isStoreOnline) return;
@@ -358,9 +361,7 @@ export default function HomeTab() {
           },
           () => { fetchStoreProducts(true); }
         )
-        .subscribe((status) => {
-          if (!cancelled) setRealtimeConnected(status === "SUBSCRIBED");
-        });
+        .subscribe();
     });
 
     return () => {
@@ -370,7 +371,6 @@ export default function HomeTab() {
         supabase?.removeChannel(channel);
         channel = null;
       }
-      setRealtimeConnected(false);
     };
   }, [selectedStore?.id]);
 
@@ -517,58 +517,18 @@ export default function HomeTab() {
     }
   }, []);
 
-  const fetchOrders = useCallback(async () => {
-    if (!session || !selectedStore) return;
+  // fetchOrders is now an alias for fetchAllocations — accepted allocations populate activeOrders
+  const fetchOrders = fetchAllocations;
 
-    try {
-      const fromDb = await getOrdersFromDb(selectedStore.id);
-      if (Array.isArray(fromDb) && fromDb.length > 0) {
-        setOrders(fromDb);
-        return;
-      }
-    } catch { /* fall through to HTTP */ }
-
-    try {
-      const res = await fetch(
-        `${API_BASE}/store-owner/stores/${selectedStore.id}/orders`,
-        { headers: { Authorization: `Bearer ${session.token}` } }
-      );
-      const raw = await res.text();
-      let json: any = null;
-      try { json = raw ? JSON.parse(raw) : null; } catch { return; }
-      if (!json?.success) return;
-      setOrders(json.orders || []);
-    } catch {
-      setOrders([]);
-    }
-  }, [session, selectedStore]);
-
-  // Smart polling: pauses in background, immediate refresh on foreground,
-  // slows to 30s when realtime WebSocket is healthy.
-  useSmartPoll(fetchOrders, {
-    intervalMs: 10_000,
-    slowIntervalMs: 30_000,
-    isRealtimeHealthy: realtimeConnected,
-    enabled: !!(session && selectedStore),
-  });
-
-  const openOrderDetails = useCallback(async (orderId: string) => {
-    if (!session) return;
-
-    try {
-      const fromDb = await getOrderByIdFromDb(orderId);
-      if (fromDb) { setSelectedOrder(fromDb); return; }
-
-      const res = await fetch(`${API_BASE}/store-owner/orders/${orderId}`, {
-        headers: { Authorization: `Bearer ${session.token}` },
+  const openOrderDetails = useCallback((orderId: string) => {
+    const alloc = allocations.find((a) => a.order_id === orderId);
+    if (alloc) {
+      setSelectedOrder({
+        order_code: alloc.order_code,
+        order_items: alloc.items,
       });
-      const raw = await res.text();
-      let json: any = null;
-      try { json = raw ? JSON.parse(raw) : null; } catch { return; }
-      if (!json?.success) return;
-      setSelectedOrder(json.order);
-    } catch { /* ignore */ }
-  }, [session]);
+    }
+  }, [allocations]);
 
   const toggleOnline = (value: boolean) => {
     if (!session || !selectedStore) return;
@@ -918,8 +878,8 @@ export default function HomeTab() {
                             {formatStatus(o.status)}
                           </Text>
                         </View>
-                        {o.total_amount != null && (
-                          <Text style={styles.orderCardAmount}>₹{o.total_amount}</Text>
+                        {(o as any).total_amount != null && (
+                          <Text style={styles.orderCardAmount}>₹{(o as any).total_amount}</Text>
                         )}
                       </View>
                     </TouchableOpacity>

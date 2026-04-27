@@ -7,27 +7,43 @@ import { useSmartPoll } from '../lib/useSmartPoll';
 const API_BASE = config.API_BASE;
 const ORDER_TIMEOUT_SECONDS = 60;
 
-export interface Order {
+export interface AllocationItem {
   id: string;
-  order_code: string;
-  status: string;
-  customer_name?: string;
-  total_amount: number;
-  items?: any[];
-  [key: string]: any;
+  product_name: string;
+  quantity: number;
+  unit: string;
+  image_url?: string;
+  item_status: string;
 }
 
-export function useOrders(token: string | null, storeId: string | null) {
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [incomingOrder, setIncomingOrder] = useState<Order | null>(null);
+export interface Allocation {
+  allocation_id: string;
+  order_id: string;
+  order_code: string;
+  alloc_status: 'pending_acceptance' | 'accepted';
+  sequence_number: number;
+  pickup_code: string | null;
+  accepted_item_ids: string[];
+  customer_area: string | null;
+  customer_distance: string | null;
+  placed_at: string;
+  items: AllocationItem[];
+  accepted_at: string | null;
+}
+
+// Backwards-compat alias so callers that imported Order still compile
+export type Order = Allocation;
+
+export function useOrders(token: string | null, _storeId?: string | null) {
+  const [allocations, setAllocations] = useState<Allocation[]>([]);
+  const [incomingAlloc, setIncomingAlloc] = useState<Allocation | null>(null);
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState(ORDER_TIMEOUT_SECONDS);
+  const [pickupCode, setPickupCode] = useState<string | null>(null);
 
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const deadlineRef = useRef<number | null>(null);
-  // Ref mirror of incomingOrder so fetchOrders doesn't need it as a dep
-  const incomingOrderRef = useRef<Order | null>(null);
+  const incomingRef = useRef<Allocation | null>(null);
 
   const closeIncomingOrder = useCallback(() => {
     if (countdownRef.current) {
@@ -35,13 +51,14 @@ export function useOrders(token: string | null, storeId: string | null) {
       countdownRef.current = null;
     }
     deadlineRef.current = null;
-    incomingOrderRef.current = null;
-    setIncomingOrder(null);
+    incomingRef.current = null;
+    setIncomingAlloc(null);
+    setPickupCode(null);
   }, []);
 
   const rejectOrder = useCallback(async () => {
-    const order = incomingOrderRef.current;
-    if (!order || !token) return;
+    const alloc = incomingRef.current;
+    if (!alloc || !token) return;
 
     if (countdownRef.current) {
       clearInterval(countdownRef.current);
@@ -51,27 +68,27 @@ export function useOrders(token: string | null, storeId: string | null) {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
-      await fetch(`${API_BASE}/store-owner/orders/${order.id}/reject`, {
+      await fetch(`${API_BASE}/shopkeeper/allocations/${alloc.allocation_id}/reject`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
     } catch {
-      // non-fatal — order will auto-expire server-side
+      // non-fatal — server will auto-expire
     }
 
     closeIncomingOrder();
   }, [token, closeIncomingOrder]);
 
-  const openIncomingOrder = useCallback(async (order: Order) => {
-    if (incomingOrderRef.current?.id === order.id) return;
+  const openIncomingOrder = useCallback(async (alloc: Allocation) => {
+    if (incomingRef.current?.allocation_id === alloc.allocation_id) return;
 
     if (countdownRef.current) {
       clearInterval(countdownRef.current);
       countdownRef.current = null;
     }
 
-    incomingOrderRef.current = order;
-    setIncomingOrder(order);
+    incomingRef.current = alloc;
+    setIncomingAlloc(alloc);
 
     const deadline = Date.now() + ORDER_TIMEOUT_SECONDS * 1000;
     deadlineRef.current = deadline;
@@ -92,42 +109,41 @@ export function useOrders(token: string | null, storeId: string | null) {
     }, 1000);
   }, [rejectOrder]);
 
-  // fetchOrders no longer depends on incomingOrder state — uses ref instead
   const fetchOrders = useCallback(async () => {
-    if (!token || !storeId) return;
+    if (!token) return;
 
     try {
       setLoading(true);
-      const res = await fetch(
-        `${API_BASE}/store-owner/stores/${storeId}/orders`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const res = await fetch(`${API_BASE}/shopkeeper/orders`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
       const raw = await res.text();
       const json = raw ? JSON.parse(raw) : null;
 
       if (!json?.success) {
-        setOrders([]);
+        setAllocations([]);
         return;
       }
 
-      const orderList: Order[] = json.orders || [];
-      setOrders(orderList);
+      const list: Allocation[] = json.orders || [];
+      setAllocations(list);
 
-      const pending = orderList.find((o) => o.status === 'pending_store');
-      if (pending && !incomingOrderRef.current) {
+      const pending = list.find((a) => a.alloc_status === 'pending_acceptance');
+      if (pending && !incomingRef.current) {
         openIncomingOrder(pending);
       }
     } catch {
-      setOrders([]);
+      setAllocations([]);
     } finally {
       setLoading(false);
     }
-  }, [token, storeId, openIncomingOrder]);
+  }, [token, openIncomingOrder]);
 
-  const acceptOrder = useCallback(async () => {
-    const order = incomingOrderRef.current;
-    if (!order || !token) return;
+  // Accept: shopkeeper selects which items are available, backend generates pickup code
+  const acceptOrder = useCallback(async (acceptedItemIds?: string[]) => {
+    const alloc = incomingRef.current;
+    if (!alloc || !token) return;
 
     if (countdownRef.current) {
       clearInterval(countdownRef.current);
@@ -136,11 +152,22 @@ export function useOrders(token: string | null, storeId: string | null) {
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
+    // Default to accepting all items if none specified
+    const itemIds = acceptedItemIds ?? alloc.items.map((i) => i.id);
+
     try {
-      await fetch(`${API_BASE}/store-owner/orders/${order.id}/accept`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetch(
+        `${API_BASE}/shopkeeper/allocations/${alloc.allocation_id}/accept`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accepted_item_ids: itemIds }),
+        }
+      );
+      const json = await res.json();
+      if (json?.success && json?.pickup_code) {
+        setPickupCode(json.pickup_code);
+      }
       closeIncomingOrder();
       fetchOrders();
     } catch {
@@ -148,80 +175,35 @@ export function useOrders(token: string | null, storeId: string | null) {
     }
   }, [token, closeIncomingOrder, fetchOrders]);
 
-  const verifyQR = useCallback(async (qrData: string, order: Order) => {
-    if (!token) return { success: false, error: 'No authentication token' };
-
-    try {
-      const res = await fetch(
-        `${API_BASE}/store-owner/orders/${order.id}/verify-qr`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ token: qrData }),
-        }
-      );
-
-      const raw = await res.text();
-      const json = raw ? JSON.parse(raw) : null;
-
-      if (!res.ok || !json?.success) {
-        return { success: false, error: json?.error_code || 'VERIFICATION_FAILED' };
-      }
-
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      return { success: true };
-    } catch (err: any) {
-      return { success: false, error: err.message };
-    }
-  }, [token]);
-
-  const fetchOrderDetails = useCallback(async (orderId: string) => {
-    if (!token) return null;
-
-    try {
-      const res = await fetch(`${API_BASE}/store-owner/orders/${orderId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      const raw = await res.text();
-      const json = raw ? JSON.parse(raw) : null;
-      return json?.success ? json.order : null;
-    } catch {
-      return null;
-    }
-  }, [token]);
-
-  // Initial fetch on mount / when credentials arrive
   useEffect(() => {
-    if (!token || !storeId) return;
+    if (!token) return;
     fetchOrders();
     return () => {
       if (countdownRef.current) clearInterval(countdownRef.current);
     };
-  }, [token, storeId, fetchOrders]);
+  }, [token, fetchOrders]);
 
-  // Smart poll: pauses in background, immediate refresh on foreground
   useSmartPoll(fetchOrders, {
     intervalMs: 10_000,
     slowIntervalMs: 30_000,
-    enabled: !!(token && storeId),
+    enabled: !!token,
   });
 
   return {
-    orders,
-    selectedOrder,
-    incomingOrder,
+    allocations,
+    orders: allocations,         // backwards compat
+    selectedOrder: null,
+    incomingOrder: incomingAlloc,
+    incomingAlloc,
     loading,
     countdown,
+    pickupCode,
     fetchOrders,
     acceptOrder,
     rejectOrder,
-    verifyQR,
-    fetchOrderDetails,
-    setSelectedOrder,
+    setSelectedOrder: () => {},
     closeIncomingOrder,
+    fetchOrderDetails: async (_id: string) => null,
+    verifyQR: async (_qr: string, _order: any) => ({ success: false, error: 'Not supported' }),
   };
 }
