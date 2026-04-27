@@ -71,6 +71,326 @@ function OrderItemRow({ item }: { item: any }) {
   );
 }
 
+type AllocationItem = {
+  id: string;
+  product_name: string;
+  quantity: number;
+  unit: string;
+  unit_price: number;
+};
+
+type Allocation = {
+  allocation_id: string;
+  order_id: string;
+  order_code: string;
+  alloc_status: string;
+  sequence_number: number;
+  pickup_code: string | null;
+  accepted_item_ids: string[];
+  customer_area: string;
+  customer_distance: string | null;
+  placed_at: string;
+  items: AllocationItem[];
+};
+
+function AllocationCard({
+  alloc,
+  onAccept,
+  onReject,
+  accepting,
+}: {
+  alloc: Allocation;
+  onAccept: (allocId: string, itemIds: string[]) => void;
+  onReject: (allocId: string) => void;
+  accepting: boolean;
+}) {
+  const [open, setOpen] = React.useState(alloc.alloc_status === "pending_acceptance");
+  const [selected, setSelected] = React.useState<Set<string>>(
+    new Set(alloc.items.map((i) => i.id))
+  );
+
+  const isPending = alloc.alloc_status === "pending_acceptance";
+  const isAccepted = alloc.alloc_status === "accepted";
+
+  const toggleItem = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <View
+      style={[
+        allocStyles.card,
+        isPending ? allocStyles.cardPending : allocStyles.cardAccepted,
+      ]}
+    >
+      <TouchableOpacity
+        style={allocStyles.header}
+        onPress={() => setOpen(!open)}
+        activeOpacity={0.7}
+      >
+        <View style={allocStyles.headerLeft}>
+          <View
+            style={[
+              allocStyles.iconWrap,
+              isPending ? allocStyles.iconPending : allocStyles.iconAccepted,
+            ]}
+          >
+            <Ionicons
+              name="bag-handle-outline"
+              size={18}
+              color={isPending ? "#d97706" : "#16a34a"}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={allocStyles.codeRow}>
+              <Text style={allocStyles.orderCode}>#{alloc.order_code}</Text>
+              <View
+                style={[
+                  allocStyles.badge,
+                  isPending ? allocStyles.badgePending : allocStyles.badgeAccepted,
+                ]}
+              >
+                <Text
+                  style={[
+                    allocStyles.badgeText,
+                    isPending ? allocStyles.badgeTextPending : allocStyles.badgeTextAccepted,
+                  ]}
+                >
+                  {isPending ? "Action Required" : "Accepted"}
+                </Text>
+              </View>
+            </View>
+            <Text style={allocStyles.meta}>
+              {alloc.items.length} item{alloc.items.length !== 1 ? "s" : ""} ·{" "}
+              {new Date(alloc.placed_at).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </Text>
+            {alloc.customer_area ? (
+              <Text style={allocStyles.area} numberOfLines={1}>
+                {alloc.customer_area.split(",")[0]}
+                {alloc.customer_distance ? ` · ${alloc.customer_distance}` : ""}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+        <Ionicons
+          name={open ? "chevron-up" : "chevron-down"}
+          size={20}
+          color="#94a3b8"
+        />
+      </TouchableOpacity>
+
+      {open && (
+        <View style={allocStyles.body}>
+          <Text style={allocStyles.sectionLabel}>
+            {isPending ? "Check items you have in stock:" : "Accepted items:"}
+          </Text>
+
+          {alloc.items.map((item) => (
+            <TouchableOpacity
+              key={item.id}
+              style={[
+                allocStyles.itemRow,
+                isPending && selected.has(item.id)
+                  ? allocStyles.itemRowSelected
+                  : allocStyles.itemRowUnselected,
+              ]}
+              onPress={() => isPending && toggleItem(item.id)}
+              activeOpacity={isPending ? 0.7 : 1}
+            >
+              {isPending ? (
+                <View
+                  style={[
+                    allocStyles.checkbox,
+                    selected.has(item.id) && allocStyles.checkboxChecked,
+                  ]}
+                >
+                  {selected.has(item.id) && (
+                    <Ionicons name="checkmark" size={12} color="#fff" />
+                  )}
+                </View>
+              ) : (
+                <Ionicons name="checkmark-circle" size={20} color="#16a34a" />
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={allocStyles.itemName} numberOfLines={1}>
+                  {item.product_name}
+                </Text>
+                <Text style={allocStyles.itemMeta}>
+                  Qty: {item.quantity}
+                  {item.unit ? ` ${item.unit}` : ""} · ₹{item.unit_price}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+
+          {isAccepted && alloc.pickup_code && (
+            <View style={allocStyles.pickupWrap}>
+              <Text style={allocStyles.pickupLabel}>Give this code to the driver</Text>
+              <Text style={allocStyles.pickupCode}>{alloc.pickup_code}</Text>
+              <Text style={allocStyles.pickupSub}>
+                Driver will enter this code to verify pickup
+              </Text>
+            </View>
+          )}
+
+          {isPending && (
+            <View style={allocStyles.actionRow}>
+              <TouchableOpacity
+                style={[
+                  allocStyles.acceptBtn,
+                  (!selected.size || accepting) && allocStyles.btnDisabled,
+                ]}
+                onPress={() => onAccept(alloc.allocation_id, [...selected])}
+                disabled={!selected.size || accepting}
+                activeOpacity={0.8}
+              >
+                {accepting ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={allocStyles.acceptBtnText}>
+                    Accept ({selected.size} item{selected.size !== 1 ? "s" : ""})
+                  </Text>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[allocStyles.rejectBtn, accepting && allocStyles.btnDisabled]}
+                onPress={() => onReject(alloc.allocation_id)}
+                disabled={accepting}
+                activeOpacity={0.8}
+              >
+                <Text style={allocStyles.rejectBtnText}>Reject</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
+const allocStyles = StyleSheet.create({
+  card: {
+    borderRadius: 16,
+    borderWidth: 2,
+    marginBottom: 12,
+    overflow: "hidden",
+  },
+  cardPending: { borderColor: "#fbbf24", backgroundColor: "#fffbeb" },
+  cardAccepted: { borderColor: "#86efac", backgroundColor: "#f0fdf4" },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 14,
+  },
+  headerLeft: { flexDirection: "row", alignItems: "flex-start", gap: 10, flex: 1 },
+  iconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  iconPending: { backgroundColor: "#fef3c7" },
+  iconAccepted: { backgroundColor: "#dcfce7" },
+  codeRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  orderCode: { fontSize: 15, fontWeight: "700", color: "#111" },
+  badge: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderWidth: 1,
+  },
+  badgePending: { backgroundColor: "#fef3c7", borderColor: "#fcd34d" },
+  badgeAccepted: { backgroundColor: "#dcfce7", borderColor: "#86efac" },
+  badgeText: { fontSize: 11, fontWeight: "700" },
+  badgeTextPending: { color: "#92400e" },
+  badgeTextAccepted: { color: "#166534" },
+  meta: { fontSize: 12, color: "#64748b", marginTop: 2 },
+  area: { fontSize: 12, color: "#3b82f6", marginTop: 1 },
+  body: { borderTopWidth: 1, borderTopColor: "#e2e8f0", padding: 14 },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#64748b",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 10,
+  },
+  itemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 6,
+  },
+  itemRowSelected: { borderColor: "#86efac", backgroundColor: "#f0fdf4" },
+  itemRowUnselected: { borderColor: "#e2e8f0", backgroundColor: "#f8fafc" },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: "#cbd5e1",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  checkboxChecked: { backgroundColor: "#16a34a", borderColor: "#16a34a" },
+  itemName: { fontSize: 14, fontWeight: "600", color: "#111" },
+  itemMeta: { fontSize: 12, color: "#64748b", marginTop: 1 },
+  pickupWrap: {
+    marginTop: 14,
+    padding: 16,
+    backgroundColor: "#f0fdf4",
+    borderWidth: 2,
+    borderColor: "#4ade80",
+    borderRadius: 14,
+    alignItems: "center",
+  },
+  pickupLabel: { fontSize: 13, fontWeight: "600", color: "#166534", marginBottom: 4 },
+  pickupCode: {
+    fontSize: 48,
+    fontWeight: "900",
+    letterSpacing: 12,
+    color: "#14532d",
+    fontVariant: ["tabular-nums"],
+    marginVertical: 4,
+  },
+  pickupSub: { fontSize: 12, color: "#16a34a", marginTop: 4 },
+  actionRow: { flexDirection: "row", gap: 10, marginTop: 14 },
+  acceptBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    backgroundColor: "#16a34a",
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  acceptBtnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  rejectBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: "#fca5a5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rejectBtnText: { color: "#dc2626", fontWeight: "700", fontSize: 14 },
+  btnDisabled: { opacity: 0.5 },
+});
+
 export default function HomeTab() {
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const slideAnim = useRef(new Animated.Value(24)).current;
@@ -94,6 +414,10 @@ export default function HomeTab() {
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True when at least one Supabase channel reaches SUBSCRIBED — used to slow down polling
   const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [allocations, setAllocations] = useState<Allocation[]>([]);
+  const [acceptingAllocId, setAcceptingAllocId] = useState<string | null>(null);
+  const allocPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const [confirmModal, setConfirmModal] = useState<{
     title: string;
     message: string;
@@ -341,6 +665,54 @@ export default function HomeTab() {
     }
   }, [session, selectedStore]);
 
+  const fetchAllocations = useCallback(async () => {
+    if (!session?.token) return;
+    try {
+      const res = await fetch(`${API_BASE}/shopkeeper/orders`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      const json = await res.json();
+      if (Array.isArray(json.orders)) setAllocations(json.orders);
+    } catch { /* silent */ }
+  }, [session?.token]);
+
+  const acceptAllocation = useCallback(async (allocId: string, itemIds: string[]) => {
+    if (!session?.token || !itemIds.length) return;
+    setAcceptingAllocId(allocId);
+    try {
+      await fetch(`${API_BASE}/shopkeeper/allocations/${allocId}/accept`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ accepted_item_ids: itemIds }),
+      });
+      await fetchAllocations();
+    } catch { /* ignore */ }
+    finally { setAcceptingAllocId(null); }
+  }, [session?.token, fetchAllocations]);
+
+  const rejectAllocation = useCallback((allocId: string) => {
+    Alert.alert(
+      "Reject Order?",
+      "Items will be reallocated to another store.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reject",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await fetch(`${API_BASE}/shopkeeper/allocations/${allocId}/reject`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${session?.token}` },
+              });
+              await fetchAllocations();
+            } catch { /* ignore */ }
+          },
+        },
+      ]
+    );
+  }, [session?.token, fetchAllocations]);
+
   // Smart polling: pauses in background, immediate refresh on foreground,
   // slows to 30s when realtime WebSocket is healthy.
   useSmartPoll(fetchOrders, {
@@ -349,6 +721,13 @@ export default function HomeTab() {
     isRealtimeHealthy: realtimeConnected,
     enabled: !!(session && selectedStore),
   });
+
+  useEffect(() => {
+    if (!session?.token) return;
+    fetchAllocations();
+    allocPollRef.current = setInterval(fetchAllocations, 8000);
+    return () => { if (allocPollRef.current) clearInterval(allocPollRef.current); };
+  }, [session?.token, fetchAllocations]);
 
   const openOrderDetails = useCallback(async (orderId: string) => {
     if (!session) return;
@@ -641,6 +1020,35 @@ export default function HomeTab() {
 
 
         <View>
+          {allocations.length > 0 && (
+            <View style={styles.ordersSection}>
+              <View style={styles.ordersSectionHeader}>
+                <View>
+                  <Text style={styles.ordersSectionTitle}>Incoming Allocations</Text>
+                  <Text style={styles.ordersSectionSubtitle}>
+                    {allocations.filter((a) => a.alloc_status === "pending_acceptance").length > 0
+                      ? `${allocations.filter((a) => a.alloc_status === "pending_acceptance").length} need${allocations.filter((a) => a.alloc_status === "pending_acceptance").length === 1 ? "s" : ""} action`
+                      : `${allocations.length} allocation${allocations.length !== 1 ? "s" : ""}`}
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={fetchAllocations} style={styles.refreshBtn}>
+                  <Ionicons name="refresh-outline" size={18} color={colors.primary} />
+                </TouchableOpacity>
+              </View>
+              {allocations
+                .sort((a, _b) => (a.alloc_status === "pending_acceptance" ? -1 : 1))
+                .map((alloc) => (
+                  <AllocationCard
+                    key={alloc.allocation_id}
+                    alloc={alloc}
+                    onAccept={acceptAllocation}
+                    onReject={rejectAllocation}
+                    accepting={acceptingAllocId === alloc.allocation_id}
+                  />
+                ))}
+            </View>
+          )}
+
           <View style={styles.ordersSection}>
             <View style={styles.ordersSectionHeader}>
               <View>
