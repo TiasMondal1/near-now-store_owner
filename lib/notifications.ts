@@ -56,7 +56,6 @@ const DEFAULT_PREFERENCES: NotificationPreferences = {
 
 class NotificationService {
   private static instance: NotificationService;
-  private pushToken: string | null = null;
   private preferences: NotificationPreferences = DEFAULT_PREFERENCES;
 
   private constructor() {
@@ -136,7 +135,6 @@ class NotificationService {
         return null;
       }
 
-      this.pushToken = token.data;
       await AsyncStorage.setItem(PUSH_TOKEN_KEY, token.data);
 
       this.registerTokenWithBackend(token.data).catch((err) => {

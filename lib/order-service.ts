@@ -4,7 +4,6 @@
  */
 
 import { apiClient } from './api-client';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export enum OrderStatus {
   PENDING = 'pending_store',

@@ -27,7 +27,7 @@ export interface Product {
 export function useProducts(token: string | null, storeId: string | null) {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
-  const [updatingProductId, setUpdatingProductId] = useState<string | null>(null);
+  const [updatingProductId, _setUpdatingProductId] = useState<string | null>(null);
 
   // Fetch store products
   const fetchProducts = useCallback(async (forceRefresh = false) => {

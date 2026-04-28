@@ -41,7 +41,7 @@ export default function StoreOwnerSignupScreen() {
   // ── Form fields ──────────────────────────────────────────────────────────────
   const [ownerName, setOwnerName] = useState("");
   const [storeName, setStoreName] = useState("");
-  const [radiusKm, setRadiusKm] = useState("3");
+  const radiusKm = "3";
   const [email, setEmail] = useState("");
   const [house, setHouse] = useState("");
   const [street, setStreet] = useState("");

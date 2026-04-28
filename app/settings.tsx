@@ -18,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing } from '../lib/theme';
 import { getSession } from '../session';
 import { config } from '../lib/config';
-import { storeService, Store } from '../lib/store-service';
+import { Store } from '../lib/store-service';
 import StoreSettingsModal from '../components/StoreSettingsModal';
 import NotificationSettings from '../components/NotificationSettings';
 

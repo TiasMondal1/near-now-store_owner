@@ -38,7 +38,7 @@ class ErrorHandler {
   /**
    * Initialize error monitoring service (Sentry, Bugsnag, etc.)
    */
-  initializeErrorMonitoring(config?: any): void {
+  initializeErrorMonitoring(_config?: any): void {
     // TODO: Initialize Sentry or other error monitoring service
     // Example:
     // Sentry.init({
@@ -101,7 +101,7 @@ class ErrorHandler {
   /**
    * Send error to monitoring service
    */
-  private sendToMonitoring(error: AppError): void {
+  private sendToMonitoring(_error: AppError): void {
     // TODO: Send to Sentry or other service
     // Example:
     // Sentry.captureException(error.originalError || new Error(error.message), {

@@ -6,6 +6,9 @@
 import { supabase } from './supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+const LOW_STOCK_THRESHOLD_KEY = 'low_stock_threshold';
+const DEFAULT_LOW_STOCK_THRESHOLD = 5;
+
 export interface Product {
   id: string;
   name: string;
@@ -34,8 +37,11 @@ export interface InventoryStats {
 
 class InventoryService {
   private static instance: InventoryService;
+  private lowStockThreshold: number = DEFAULT_LOW_STOCK_THRESHOLD;
 
-  private constructor() {}
+  private constructor() {
+    this.loadLowStockThreshold();
+  }
 
   static getInstance(): InventoryService {
     if (!InventoryService.instance) {
