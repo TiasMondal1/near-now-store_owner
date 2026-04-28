@@ -66,9 +66,9 @@ export default function TabsLayout() {
         name="previous-orders"
         component={PreviousOrdersTab}
         options={{
-          title: "Previous",
+          title: "Orders",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="time-outline" size={size} color={color} />
+            <Ionicons name="receipt-outline" size={size} color={color} />
           ),
         }}
       />

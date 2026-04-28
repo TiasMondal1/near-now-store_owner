@@ -31,7 +31,6 @@ import {
   setAllProductsOffline,
   restoreActiveProductsOnline,
 } from "../../lib/storeProducts";
-import { getStatusColor, formatStatus } from "../../lib/order-utils";
 import { StoreStatusCard } from "../../components/StoreStatusCard";
 import {
   fetchStoresCached,
@@ -131,28 +130,35 @@ function AllocationCard({
       {expanded && (
         <View style={allocStyles.cardBody}>
           {alloc.items.map((item) => (
-            <TouchableOpacity
-              key={item.id}
-              style={allocStyles.itemRow}
-              onPress={() => isPending && toggleItem(item.id)}
-              activeOpacity={isPending ? 0.7 : 1}
-            >
-              {isPending && (
-                <View style={[allocStyles.checkbox, checkedIds.has(item.id) && allocStyles.checkboxChecked]}>
-                  {checkedIds.has(item.id) && <Ionicons name="checkmark" size={13} color="#fff" />}
-                </View>
-              )}
+            <View key={item.id} style={allocStyles.itemRow}>
               <Text
                 style={[
                   allocStyles.itemName,
-                  !isPending && { marginLeft: 0 },
                   isPending && !checkedIds.has(item.id) && allocStyles.itemNameUnchecked,
                 ]}
                 numberOfLines={1}
               >
                 {item.quantity} {item.unit} — {item.product_name}
               </Text>
-            </TouchableOpacity>
+              {isPending && (
+                <View style={allocStyles.itemBtns}>
+                  <TouchableOpacity
+                    style={[allocStyles.itemBtn, allocStyles.itemBtnAccept, checkedIds.has(item.id) && allocStyles.itemBtnAcceptActive]}
+                    onPress={() => !checkedIds.has(item.id) && toggleItem(item.id)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="checkmark" size={14} color={checkedIds.has(item.id) ? "#fff" : colors.success} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[allocStyles.itemBtn, allocStyles.itemBtnReject, !checkedIds.has(item.id) && allocStyles.itemBtnRejectActive]}
+                    onPress={() => checkedIds.has(item.id) && toggleItem(item.id)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="close" size={14} color={!checkedIds.has(item.id) ? "#fff" : colors.error} />
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
           ))}
 
           {isPending && (
@@ -214,6 +220,8 @@ export default function HomeTab() {
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [acceptingAllocId, setAcceptingAllocId] = useState<string | null>(null);
   const allocPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [incomingModal, setIncomingModal] = useState<Allocation | null>(null);
+  const seenPendingIds = useRef<Set<string>>(new Set());
   const [stores, setStores] = useState<StoreRow[]>([]);
 
   const [loading, setLoading] = useState(true);
@@ -425,7 +433,17 @@ export default function HomeTab() {
         headers: { Authorization: `Bearer ${session.token}` },
       });
       const json = await res.json();
-      if (json?.success) setAllocations(json.orders || []);
+      if (json?.success) {
+        const orders: Allocation[] = json.orders || [];
+        setAllocations(orders);
+        const newPending = orders
+          .filter((a) => a.alloc_status === 'pending_acceptance')
+          .find((a) => !seenPendingIds.current.has(a.allocation_id));
+        if (newPending) {
+          seenPendingIds.current.add(newPending.allocation_id);
+          setIncomingModal(newPending);
+        }
+      }
     } catch { /* silent */ }
   }, [session?.token]);
 
@@ -474,7 +492,7 @@ export default function HomeTab() {
   useEffect(() => {
     if (!session?.token) return;
     fetchAllocations();
-    const id = setInterval(fetchAllocations, 8_000);
+    const id = setInterval(fetchAllocations, 5_000);
     allocPollRef.current = id;
     return () => {
       clearInterval(id);
@@ -519,16 +537,6 @@ export default function HomeTab() {
 
   // fetchOrders is now an alias for fetchAllocations — accepted allocations populate activeOrders
   const fetchOrders = fetchAllocations;
-
-  const openOrderDetails = useCallback((orderId: string) => {
-    const alloc = allocations.find((a) => a.order_id === orderId);
-    if (alloc) {
-      setSelectedOrder({
-        order_code: alloc.order_code,
-        order_items: alloc.items,
-      });
-    }
-  }, [allocations]);
 
   const toggleOnline = (value: boolean) => {
     if (!session || !selectedStore) return;
@@ -802,6 +810,40 @@ export default function HomeTab() {
         </Modal>
 
 
+        {/* Incoming order alert modal */}
+        <Modal visible={!!incomingModal} transparent animationType="slide">
+          <View style={styles.confirmOverlay}>
+            <View style={[styles.confirmSheet, { paddingTop: 28, paddingBottom: 40 }]}>
+              {incomingModal && (
+                <>
+                  <View style={[styles.confirmIconWrap, { backgroundColor: "#FF9800" + "18" }]}>
+                    <Ionicons name="notifications" size={32} color="#FF9800" />
+                  </View>
+                  <Text style={styles.confirmTitle}>New Order!</Text>
+                  <Text style={[allocStyles.orderCode, { fontSize: 22, marginBottom: 8 }]}>#{incomingModal.order_code}</Text>
+                  <ScrollView style={{ width: "100%", maxHeight: 220 }} showsVerticalScrollIndicator={false}>
+                    {incomingModal.items.map((item) => (
+                      <View key={item.id} style={{ flexDirection: "row", alignItems: "center", paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.borderLight }}>
+                        <Ionicons name="cube-outline" size={16} color={colors.textTertiary} style={{ marginRight: 8 }} />
+                        <Text style={{ color: colors.textPrimary, fontSize: 14, fontWeight: "600", flex: 1 }}>
+                          {item.quantity} {item.unit} — {item.product_name}
+                        </Text>
+                      </View>
+                    ))}
+                  </ScrollView>
+                  <TouchableOpacity
+                    style={[styles.confirmActionBtn, { backgroundColor: "#FF9800", marginTop: 20 }]}
+                    activeOpacity={0.85}
+                    onPress={() => setIncomingModal(null)}
+                  >
+                    <Text style={styles.confirmActionBtnText}>View & Respond</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
+
         {allocations.length > 0 && (
           <View style={allocStyles.section}>
             <View style={allocStyles.sectionHeader}>
@@ -828,78 +870,6 @@ export default function HomeTab() {
         )}
 
         <View>
-          <View style={styles.ordersSection}>
-            <View style={styles.ordersSectionHeader}>
-              <View>
-                <Text style={styles.ordersSectionTitle}>Active Orders</Text>
-                <Text style={styles.ordersSectionSubtitle}>
-                  {activeOrders.length === 0
-                    ? "Waiting for new orders..."
-                    : `${activeOrders.length} order${activeOrders.length > 1 ? "s" : ""}`}
-                </Text>
-              </View>
-              <TouchableOpacity onPress={fetchOrders} style={styles.refreshBtn}>
-                <Ionicons name="refresh-outline" size={18} color={colors.primary} />
-              </TouchableOpacity>
-            </View>
-
-            {activeOrders.length === 0 ? (
-              <View style={styles.waitingCard}>
-                <Ionicons name="time-outline" size={36} color={colors.textTertiary} />
-                <Text style={styles.waitingTitle}>Waiting for orders</Text>
-                <Text style={styles.waitingText}>New orders appear here automatically every 10s</Text>
-              </View>
-            ) : (
-              <FlatList
-                data={activeOrders}
-                keyExtractor={(o) => o.id}
-                scrollEnabled={false}
-                initialNumToRender={5}
-                maxToRenderPerBatch={5}
-                windowSize={3}
-                renderItem={({ item: o }) => (
-                  <View style={styles.orderCardContainer}>
-                    <TouchableOpacity
-                      style={[styles.orderCard, { borderLeftColor: getStatusColor(o.status) }]}
-                      onPress={() => openOrderDetails(o.id)}
-                      activeOpacity={0.75}
-                    >
-                      <View style={styles.orderCardLeft}>
-                        <Text style={styles.orderCardCode}>#{o.order_code}</Text>
-                        {o.created_at && (
-                          <Text style={styles.orderCardTime}>
-                            {new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                          </Text>
-                        )}
-                      </View>
-                      <View style={styles.orderCardRight}>
-                        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(o.status) + "22" }]}>
-                          <Text style={[styles.statusBadgeText, { color: getStatusColor(o.status) }]}>
-                            {formatStatus(o.status)}
-                          </Text>
-                        </View>
-                        {(o as any).total_amount != null && (
-                          <Text style={styles.orderCardAmount}>₹{(o as any).total_amount}</Text>
-                        )}
-                      </View>
-                    </TouchableOpacity>
-                    {Array.isArray(o.order_items) && o.order_items.length > 0 && (
-                      <View style={styles.orderItemsList}>
-                        {o.order_items.map((item: any, idx: number) => (
-                          <View key={idx} style={styles.orderItemChip}>
-                            <Text style={styles.orderItemText} numberOfLines={1}>
-                              {item.quantity} {item.unit} {item.product_name}
-                            </Text>
-                          </View>
-                        ))}
-                      </View>
-                    )}
-                  </View>
-                )}
-              />
-            )}
-          </View>
-
           <View style={styles.stockSection}>
             <View
               style={[
@@ -1818,19 +1788,32 @@ const allocStyles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.borderLight,
   },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: colors.border,
+  itemBtns: {
+    flexDirection: "row",
+    gap: 6,
+    flexShrink: 0,
+  },
+  itemBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 1.5,
+  },
+  itemBtnAccept: {
+    borderColor: colors.success,
     backgroundColor: colors.surface,
   },
-  checkboxChecked: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+  itemBtnAcceptActive: {
+    backgroundColor: colors.success,
+  },
+  itemBtnReject: {
+    borderColor: colors.error,
+    backgroundColor: colors.surface,
+  },
+  itemBtnRejectActive: {
+    backgroundColor: colors.error,
   },
   itemName: {
     color: colors.textPrimary,

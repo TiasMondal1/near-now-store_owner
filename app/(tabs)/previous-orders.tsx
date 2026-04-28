@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   FlatList,
+  Animated,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
@@ -21,17 +22,101 @@ import { config } from "../../lib/config";
 
 const API_BASE = config.API_BASE;
 
+type AllocationItem = {
+  id: string;
+  product_name: string;
+  quantity: number;
+  unit: string;
+};
+
+type Allocation = {
+  allocation_id: string;
+  order_id: string;
+  order_code: string;
+  alloc_status: "pending_acceptance" | "accepted";
+  pickup_code: string | null;
+  placed_at: string;
+  items: AllocationItem[];
+  customer_area: string | null;
+  customer_distance: string | null;
+};
+
 function formatMoneyINR(value: number | null | undefined): string {
   const n = Number(value ?? 0);
   if (!Number.isFinite(n)) return "₹0";
   return `₹${n.toFixed(2).replace(/\.00$/, "")}`;
 }
 
-export default function PreviousOrdersTab() {
+export default function OrdersTab() {
+  const [tab, setTab] = useState<"active" | "previous">("active");
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(20)).current;
+
   const [session, setSession] = useState<any | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
-  const [orders, setOrders] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+
+  // Active orders (accepted allocations)
+  const [allocations, setAllocations] = useState<Allocation[]>([]);
+  const [allocLoading, setAllocLoading] = useState(true);
+
+  // Previous orders (delivered)
+  const [allOrders, setAllOrders] = useState<any[]>([]);
+  const [prevLoading, setPrevLoading] = useState(true);
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s: any = await getSession();
+        if (!s?.token) {
+          if (!cancelled) router.replace("/landing");
+          return;
+        }
+        if (cancelled) return;
+        setSession(s);
+
+        const cached = peekStores();
+        if (cached && cached.length > 0) {
+          setStoreId(cached[0].id);
+          setAllocLoading(false);
+          setPrevLoading(false);
+          return;
+        }
+
+        const stores = await fetchStoresCached(s.token, s.user?.id);
+        if (cancelled) return;
+        if (stores[0]) setStoreId(stores[0].id);
+      } catch (e) {
+        if (__DEV__) console.warn("[orders-tab] Bootstrap error:", e);
+      } finally {
+        if (!cancelled) {
+          setAllocLoading(false);
+          setPrevLoading(false);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const fetchActiveOrders = useCallback(async () => {
+    if (!session?.token) return;
+    try {
+      const res = await fetch(`${API_BASE}/shopkeeper/orders`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      const json = await res.json();
+      if (json?.success) {
+        setAllocations((json.orders || []).filter((a: Allocation) => a.alloc_status === "accepted"));
+      }
+    } catch { /* silent */ }
+  }, [session?.token]);
 
   const toNumber = (v: any) => {
     if (typeof v === "number") return Number.isFinite(v) ? v : NaN;
@@ -66,48 +151,8 @@ export default function PreviousOrdersTab() {
     return 0;
   };
 
-  const previousOrders = useMemo(
-    () => orders.filter((o: any) => isDelivered(o.status)),
-    [orders]
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const s: any = await getSession();
-        if (!s?.token) {
-          if (!cancelled) router.replace("/landing");
-          return;
-        }
-        if (cancelled) return;
-        setSession(s);
-
-        // Use cached storeId — avoids redundant network call
-        const cached = peekStores();
-        if (cached && cached.length > 0) {
-          setStoreId(cached[0].id);
-          setLoading(false);
-          return;
-        }
-
-        const stores = await fetchStoresCached(s.token, s.user?.id);
-        if (cancelled) return;
-        if (stores[0]) setStoreId(stores[0].id);
-      } catch (e) {
-        if (__DEV__) console.warn("[previous-orders] Bootstrap error:", e);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, []);
-
-  const fetchOrders = useCallback(async () => {
+  const fetchPreviousOrders = useCallback(async () => {
     if (!session || !storeId) return;
-
     try {
       const fromDb = await getOrdersFromDb(storeId);
       if (Array.isArray(fromDb) && fromDb.length > 0) {
@@ -123,7 +168,7 @@ export default function PreviousOrdersTab() {
             }
           })
         );
-        setOrders(withTotals);
+        setAllOrders(withTotals);
         return;
       }
     } catch { /* fall through to HTTP */ }
@@ -137,19 +182,26 @@ export default function PreviousOrdersTab() {
       let json: any = null;
       try { json = raw ? JSON.parse(raw) : null; } catch { return; }
       if (!json?.success) return;
-      setOrders(json.orders || []);
+      setAllOrders(json.orders || []);
     } catch {
-      setOrders([]);
+      setAllOrders([]);
     }
   }, [session, storeId]);
 
-  // Fetch on mount when storeId becomes available
   useEffect(() => {
-    if (session && storeId) fetchOrders();
+    if (session && storeId) {
+      fetchActiveOrders();
+      fetchPreviousOrders();
+    }
   }, [session, storeId]);
 
-  // AppState-aware polling — stops in background, resumes on foreground
-  useSmartPoll(fetchOrders, {
+  useSmartPoll(fetchActiveOrders, {
+    intervalMs: 10_000,
+    slowIntervalMs: 20_000,
+    enabled: !!(session?.token),
+  });
+
+  useSmartPoll(fetchPreviousOrders, {
     intervalMs: 15_000,
     slowIntervalMs: 30_000,
     enabled: !!(session && storeId),
@@ -157,11 +209,17 @@ export default function PreviousOrdersTab() {
 
   useFocusEffect(
     React.useCallback(() => {
-      if (session?.token && storeId) fetchOrders();
+      if (session?.token) fetchActiveOrders();
+      if (session?.token && storeId) fetchPreviousOrders();
     }, [session?.token, storeId])
   );
 
-  if (loading) {
+  const previousOrders = useMemo(
+    () => allOrders.filter((o: any) => isDelivered(o.status)),
+    [allOrders]
+  );
+
+  if (allocLoading && prevLoading) {
     return (
       <SafeAreaView style={styles.safe}>
         <ActivityIndicator color={colors.primary} />
@@ -171,171 +229,300 @@ export default function PreviousOrdersTab() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <FlatList
-        data={previousOrders}
-        keyExtractor={(o) => o.id}
-        initialNumToRender={10}
-        maxToRenderPerBatch={10}
-        windowSize={5}
-        contentContainerStyle={styles.container}
-        ListHeaderComponent={
-          <>
-            <View style={styles.header}>
-              <View style={styles.headerLeft}>
-                <Ionicons name="time-outline" size={24} color={colors.primary} />
-                <View>
-                  <Text style={styles.brand}>Previous Orders</Text>
-                  <Text style={styles.subtitle}>Order History</Text>
-                </View>
-              </View>
-              <TouchableOpacity onPress={fetchOrders} style={styles.refreshBtn}>
-                <Ionicons name="refresh-outline" size={18} color={colors.primary} />
-              </TouchableOpacity>
+      <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
+        <View style={styles.headerRow}>
+          <Text style={styles.header}>Orders</Text>
+          {tab === "active" && allocations.length > 0 && (
+            <View style={styles.countBadge}>
+              <Text style={styles.countBadgeText}>{allocations.length}</Text>
             </View>
-            <View style={styles.ordersSection}>
-              <View style={styles.ordersSectionHeader}>
-                <View>
-                  <Text style={styles.ordersSectionTitle}>Previous Orders</Text>
-                  <Text style={styles.ordersSectionSubtitle}>
-                    {previousOrders.length === 0
-                      ? "No past orders yet"
-                      : `${previousOrders.length} order${previousOrders.length > 1 ? "s" : ""}`}
-                  </Text>
+          )}
+        </View>
+
+        <View style={styles.tabs}>
+          {(["active", "previous"] as const).map((t) => (
+            <TouchableOpacity
+              key={t}
+              style={[styles.tab, tab === t && styles.tabActive]}
+              onPress={() => setTab(t)}
+            >
+              <Ionicons
+                name={t === "active" ? "flash-outline" : "time-outline"}
+                size={16}
+                color={tab === t ? "#fff" : colors.textTertiary}
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
+                {t === "active" ? "Active" : "Previous"}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </Animated.View>
+
+      {tab === "active" ? (
+        <FlatList
+          data={allocations}
+          keyExtractor={(a) => a.allocation_id}
+          contentContainerStyle={styles.list}
+          refreshing={false}
+          onRefresh={fetchActiveOrders}
+          ListEmptyComponent={
+            <View style={styles.emptyWrap}>
+              <View style={styles.emptyIconWrap}>
+                <Ionicons name="flash-outline" size={40} color={colors.primary} />
+              </View>
+              <Text style={styles.emptyTitle}>No active orders</Text>
+              <Text style={styles.emptySub}>Accepted orders will appear here</Text>
+            </View>
+          }
+          renderItem={({ item: a }) => (
+            <View style={styles.activeCard}>
+              <View style={styles.activeCardTop}>
+                <View style={styles.activeCardLeft}>
+                  <Text style={styles.orderCode}>#{a.order_code}</Text>
+                  {a.customer_distance && (
+                    <Text style={styles.orderMeta}>{a.customer_distance} away</Text>
+                  )}
+                </View>
+                <View style={[styles.statusBadge, { backgroundColor: colors.success + "22" }]}>
+                  <Text style={[styles.statusBadgeText, { color: colors.success }]}>Accepted</Text>
                 </View>
               </View>
-              {previousOrders.length === 0 && (
-                <View style={styles.waitingCard}>
-                  <Ionicons name="receipt-outline" size={36} color={colors.textTertiary} />
-                  <Text style={styles.waitingTitle}>No previous orders</Text>
-                  <Text style={styles.waitingText}>Orders that have been delivered will appear here</Text>
+
+              {a.pickup_code && (
+                <View style={styles.pickupCodeBox}>
+                  <Text style={styles.pickupCodeLabel}>Pickup Code</Text>
+                  <Text style={styles.pickupCodeValue}>{a.pickup_code}</Text>
+                  <Text style={styles.pickupCodeHint}>Give this to the driver</Text>
                 </View>
               )}
+
+              <View style={styles.itemsList}>
+                {a.items.map((item) => (
+                  <View key={item.id} style={styles.itemRow}>
+                    <Ionicons name="cube-outline" size={14} color={colors.textTertiary} />
+                    <Text style={styles.itemText} numberOfLines={1}>
+                      {item.quantity} {item.unit} — {item.product_name}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+
+              {a.placed_at && (
+                <Text style={styles.orderTime}>
+                  {new Date(a.placed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  {" · "}
+                  {new Date(a.placed_at).toLocaleDateString()}
+                </Text>
+              )}
             </View>
-          </>
-        }
-        renderItem={({ item: o }) => {
-          const rawDate = o.created_at ?? o.createdAt ?? o.updated_at ?? o.updatedAt;
-          const parsed = rawDate ? new Date(rawDate) : null;
-          const validDate = parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
-          const statusColor = getStatusColor(o.status);
-          return (
-            <TouchableOpacity
-              style={[styles.orderCard, { borderLeftColor: statusColor }]}
-              onPress={() => router.push(`/invoice/${o.id}`)}
-              activeOpacity={0.75}
-            >
-              <View style={styles.orderCardLeft}>
-                <Text style={styles.orderCardCode}>#{o.order_code}</Text>
-                {validDate && (
-                  <Text style={styles.orderCardTime}>
-                    {validDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                    {" · "}
-                    {validDate.toLocaleDateString()}
-                  </Text>
-                )}
+          )}
+        />
+      ) : (
+        <FlatList
+          data={previousOrders}
+          keyExtractor={(o) => o.id}
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          contentContainerStyle={styles.list}
+          refreshing={false}
+          onRefresh={fetchPreviousOrders}
+          ListEmptyComponent={
+            <View style={styles.emptyWrap}>
+              <View style={styles.emptyIconWrap}>
+                <Ionicons name="time-outline" size={40} color={colors.primary} />
               </View>
-              <View style={styles.orderCardRight}>
-                <View style={[styles.statusBadge, { backgroundColor: statusColor + "22" }]}>
-                  <Text style={[styles.statusBadgeText, { color: statusColor }]}>
-                    {formatStatus(o.status)}
-                  </Text>
+              <Text style={styles.emptyTitle}>No previous orders</Text>
+              <Text style={styles.emptySub}>Delivered orders will appear here</Text>
+            </View>
+          }
+          renderItem={({ item: o }) => {
+            const rawDate = o.created_at ?? o.createdAt ?? o.updated_at ?? o.updatedAt;
+            const parsed = rawDate ? new Date(rawDate) : null;
+            const validDate = parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
+            const statusColor = getStatusColor(o.status);
+            return (
+              <TouchableOpacity
+                style={[styles.orderCard, { borderLeftColor: statusColor }]}
+                onPress={() => router.push(`/invoice/${o.id}`)}
+                activeOpacity={0.75}
+              >
+                <View style={styles.orderCardLeft}>
+                  <Text style={styles.orderCardCode}>#{o.order_code}</Text>
+                  {validDate && (
+                    <Text style={styles.orderCardTime}>
+                      {validDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {" · "}
+                      {validDate.toLocaleDateString()}
+                    </Text>
+                  )}
                 </View>
-                <Text style={styles.orderCardAmount}>{formatMoneyINR(getDisplayTotal(o))}</Text>
-              </View>
-            </TouchableOpacity>
-          );
-        }}
-      />
+                <View style={styles.orderCardRight}>
+                  <View style={[styles.statusBadge, { backgroundColor: statusColor + "22" }]}>
+                    <Text style={[styles.statusBadgeText, { color: statusColor }]}>
+                      {formatStatus(o.status)}
+                    </Text>
+                  </View>
+                  <Text style={styles.orderCardAmount}>{formatMoneyINR(getDisplayTotal(o))}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
-  container: { padding: spacing.lg },
 
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: spacing.xl,
-    alignItems: "center",
-    paddingBottom: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-  },
-  headerLeft: {
+  headerRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
   },
-  brand: {
+  header: {
     color: colors.textPrimary,
-    fontSize: 18,
+    fontSize: 28,
     fontWeight: "800",
-    letterSpacing: -0.5,
   },
-  subtitle: {
-    color: colors.textTertiary,
-    fontSize: 11,
-    marginTop: -2,
-  },
-  refreshBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: radius.md,
-    backgroundColor: colors.surfaceVariant,
-    borderWidth: 1,
-    borderColor: colors.border,
+  countBadge: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.full,
+    minWidth: 28,
+    height: 28,
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  countBadgeText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "700",
   },
 
-  ordersSection: {
+  tabs: {
+    flexDirection: "row",
+    paddingHorizontal: spacing.lg,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  tab: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 10,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  tabActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  tabText: {
+    color: colors.textTertiary,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  tabTextActive: {
+    color: "#fff",
+  },
+
+  list: {
+    padding: spacing.lg,
+    paddingTop: 0,
+    gap: spacing.sm,
+  },
+
+  // Active order cards
+  activeCard: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.border,
-    marginBottom: spacing.lg,
-    elevation: 2,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
-    shadowRadius: 3,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  ordersSectionHeader: {
+  activeCardTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
-  ordersSectionTitle: {
+  activeCardLeft: { gap: 2 },
+  orderCode: {
     color: colors.textPrimary,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "700",
-    letterSpacing: -0.3,
   },
-  ordersSectionSubtitle: {
+  orderMeta: {
     color: colors.textTertiary,
     fontSize: 12,
+  },
+  pickupCodeBox: {
+    backgroundColor: colors.primary + "12",
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.primary + "30",
+    alignItems: "center",
+  },
+  pickupCodeLabel: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  pickupCodeValue: {
+    color: colors.primary,
+    fontSize: 24,
+    fontWeight: "800",
+    letterSpacing: 2,
+  },
+  pickupCodeHint: {
+    color: colors.textTertiary,
+    fontSize: 11,
     marginTop: 2,
   },
-  waitingCard: {
+  itemsList: {
+    gap: 6,
+    marginBottom: spacing.sm,
+  },
+  itemRow: {
+    flexDirection: "row",
     alignItems: "center",
-    paddingVertical: spacing.xl,
-    gap: spacing.sm,
+    gap: 6,
   },
-  waitingTitle: {
-    color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: "700",
-    marginTop: spacing.xs,
+  itemText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    flex: 1,
   },
-  waitingText: {
+  orderTime: {
     color: colors.textTertiary,
-    fontSize: 12,
-    textAlign: "center",
+    fontSize: 11,
+    marginTop: 2,
   },
+
+  // Previous order cards
   orderCard: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -346,7 +533,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.borderLight,
     borderLeftWidth: 4,
-    marginBottom: spacing.sm,
   },
   orderCardLeft: { gap: 3 },
   orderCardCode: {
@@ -376,5 +562,35 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 14,
     fontWeight: "700",
+  },
+
+  // Empty states
+  emptyWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingTop: 100,
+  },
+  emptyIconWrap: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: colors.primary + "18",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.md,
+  },
+  emptyTitle: {
+    color: colors.textPrimary,
+    fontSize: 17,
+    fontWeight: "700",
+    marginTop: spacing.sm,
+  },
+  emptySub: {
+    color: colors.textTertiary,
+    fontSize: 14,
+    marginTop: 6,
+    textAlign: "center",
+    paddingHorizontal: spacing.xl,
   },
 });
