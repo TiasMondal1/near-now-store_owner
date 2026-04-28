@@ -39,6 +39,8 @@ import {
   clearStoreCache,
   type CachedStore,
 } from "../../lib/appCache";
+import { useOrders } from "../../hooks/useOrders";
+import IncomingOrderPopup from "../../components/IncomingOrderPopup";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
@@ -47,27 +49,7 @@ const BRAND_LOGO = require("../../near_now_shopkeeper.png");
 
 type StoreRow = CachedStore;
 
-type AllocationItem = {
-  id: string;
-  product_name: string;
-  quantity: number;
-  unit: string;
-  image_url?: string;
-};
-
-type Allocation = {
-  allocation_id: string;
-  order_id: string;
-  order_code: string;
-  alloc_status: 'pending_acceptance' | 'accepted';
-  sequence_number: number;
-  pickup_code: string | null;
-  accepted_item_ids: string[];
-  customer_area: string | null;
-  customer_distance: string | null;
-  placed_at: string;
-  items: AllocationItem[];
-};
+import type { Allocation } from "../../hooks/useOrders";
 
 function AllocationCard({
   alloc,
@@ -217,12 +199,17 @@ export default function HomeTab() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   const [session, setSession] = useState<any | null>(null);
-  const [allocations, setAllocations] = useState<Allocation[]>([]);
-  const [acceptingAllocId, setAcceptingAllocId] = useState<string | null>(null);
-  const allocPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [incomingModal, setIncomingModal] = useState<Allocation | null>(null);
-  const seenPendingIds = useRef<Set<string>>(new Set());
   const [stores, setStores] = useState<StoreRow[]>([]);
+  const [acceptingAllocId, setAcceptingAllocId] = useState<string | null>(null);
+
+  const {
+    allocations,
+    incomingAlloc,
+    countdown,
+    acceptOrder,
+    rejectOrder,
+    fetchOrders,
+  } = useOrders(session?.token ?? null);
 
   const [loading, setLoading] = useState(true);
 
@@ -263,17 +250,10 @@ export default function HomeTab() {
     return storeProducts.filter((p) => (p.name || "").toLowerCase().includes(q));
   }, [storeProducts, debouncedSearchQuery]);
 
-  const activeOrders = useMemo(() => {
-    return allocations
-      .filter((a) => a.alloc_status === 'accepted')
-      .map((a) => ({
-        id: a.order_id,
-        order_code: a.order_code,
-        status: 'accepted',
-        created_at: a.placed_at,
-        order_items: a.items,
-      }));
-  }, [allocations]);
+  const activeOrderCount = useMemo(
+    () => allocations.filter((a) => a.alloc_status === 'accepted').length,
+    [allocations]
+  );
 
   useEffect(() => {
     if (!isStoreOnline) return;
@@ -426,27 +406,7 @@ export default function HomeTab() {
     }, [session?.token, selectedStore?.id])
   );
 
-  const fetchAllocations = useCallback(async () => {
-    if (!session?.token) return;
-    try {
-      const res = await fetch(`${API_BASE}/shopkeeper/orders`, {
-        headers: { Authorization: `Bearer ${session.token}` },
-      });
-      const json = await res.json();
-      if (json?.success) {
-        const orders: Allocation[] = json.orders || [];
-        setAllocations(orders);
-        const newPending = orders
-          .filter((a) => a.alloc_status === 'pending_acceptance')
-          .find((a) => !seenPendingIds.current.has(a.allocation_id));
-        if (newPending) {
-          seenPendingIds.current.add(newPending.allocation_id);
-          setIncomingModal(newPending);
-        }
-      }
-    } catch { /* silent */ }
-  }, [session?.token]);
-
+  // Accept a specific allocation from the list card (not the popup)
   const acceptAllocation = useCallback(async (allocId: string, itemIds: string[]) => {
     if (!session?.token) return;
     setAcceptingAllocId(allocId);
@@ -456,13 +416,13 @@ export default function HomeTab() {
         headers: { Authorization: `Bearer ${session.token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ accepted_item_ids: itemIds }),
       });
-      await fetchAllocations();
+      fetchOrders();
     } catch {
       Alert.alert('Error', 'Failed to accept. Please try again.');
     } finally {
       setAcceptingAllocId(null);
     }
-  }, [session?.token, fetchAllocations]);
+  }, [session?.token, fetchOrders]);
 
   const rejectAllocation = useCallback((allocId: string, orderCode: string) => {
     Alert.alert(
@@ -479,7 +439,7 @@ export default function HomeTab() {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${session!.token}` },
               });
-              await fetchAllocations();
+              fetchOrders();
             } catch {
               Alert.alert('Error', 'Failed to reject. Please try again.');
             }
@@ -487,18 +447,7 @@ export default function HomeTab() {
         },
       ]
     );
-  }, [session?.token, fetchAllocations]);
-
-  useEffect(() => {
-    if (!session?.token) return;
-    fetchAllocations();
-    const id = setInterval(fetchAllocations, 5_000);
-    allocPollRef.current = id;
-    return () => {
-      clearInterval(id);
-      allocPollRef.current = null;
-    };
-  }, [session?.token, fetchAllocations]);
+  }, [session?.token, fetchOrders]);
 
   const fetchStoreProducts = useCallback(async (silent = false) => {
     if (!session?.token || !selectedStore?.id) return;
@@ -534,9 +483,6 @@ export default function HomeTab() {
       return [];
     }
   }, []);
-
-  // fetchOrders is now an alias for fetchAllocations — accepted allocations populate activeOrders
-  const fetchOrders = fetchAllocations;
 
   const toggleOnline = (value: boolean) => {
     if (!session || !selectedStore) return;
@@ -716,7 +662,7 @@ export default function HomeTab() {
           <StoreStatusCard
             store={selectedStore}
             isOnline={isStoreOnline}
-            activeOrderCount={activeOrders.length}
+            activeOrderCount={activeOrderCount}
             onToggle={handleStatusToggle}
           />
         )}
@@ -810,39 +756,13 @@ export default function HomeTab() {
         </Modal>
 
 
-        {/* Incoming order alert modal */}
-        <Modal visible={!!incomingModal} transparent animationType="slide">
-          <View style={styles.confirmOverlay}>
-            <View style={[styles.confirmSheet, { paddingTop: 28, paddingBottom: 40 }]}>
-              {incomingModal && (
-                <>
-                  <View style={[styles.confirmIconWrap, { backgroundColor: "#FF9800" + "18" }]}>
-                    <Ionicons name="notifications" size={32} color="#FF9800" />
-                  </View>
-                  <Text style={styles.confirmTitle}>New Order!</Text>
-                  <Text style={[allocStyles.orderCode, { fontSize: 22, marginBottom: 8 }]}>#{incomingModal.order_code}</Text>
-                  <ScrollView style={{ width: "100%", maxHeight: 220 }} showsVerticalScrollIndicator={false}>
-                    {incomingModal.items.map((item) => (
-                      <View key={item.id} style={{ flexDirection: "row", alignItems: "center", paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.borderLight }}>
-                        <Ionicons name="cube-outline" size={16} color={colors.textTertiary} style={{ marginRight: 8 }} />
-                        <Text style={{ color: colors.textPrimary, fontSize: 14, fontWeight: "600", flex: 1 }}>
-                          {item.quantity} {item.unit} — {item.product_name}
-                        </Text>
-                      </View>
-                    ))}
-                  </ScrollView>
-                  <TouchableOpacity
-                    style={[styles.confirmActionBtn, { backgroundColor: "#FF9800", marginTop: 20 }]}
-                    activeOpacity={0.85}
-                    onPress={() => setIncomingModal(null)}
-                  >
-                    <Text style={styles.confirmActionBtnText}>View & Respond</Text>
-                  </TouchableOpacity>
-                </>
-              )}
-            </View>
-          </View>
-        </Modal>
+        <IncomingOrderPopup
+          visible={!!incomingAlloc}
+          alloc={incomingAlloc}
+          countdown={countdown}
+          onAccept={acceptOrder}
+          onReject={rejectOrder}
+        />
 
         {allocations.length > 0 && (
           <View style={allocStyles.section}>

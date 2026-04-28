@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   FlatList,
   Animated,
+  SectionList,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
@@ -16,6 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { colors, radius, spacing } from "../../lib/theme";
 import { getOrderByIdFromDb, getOrdersFromDb } from "../../lib/orders-db";
 import { getStatusColor, formatStatus, isDelivered } from "../../lib/order-utils";
+// price is intentionally omitted from this screen — handled in Payouts
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
 import { useSmartPoll } from "../../lib/useSmartPoll";
 import { config } from "../../lib/config";
@@ -27,6 +29,7 @@ type AllocationItem = {
   product_name: string;
   quantity: number;
   unit: string;
+  price?: number;
 };
 
 type Allocation = {
@@ -41,10 +44,18 @@ type Allocation = {
   customer_distance: string | null;
 };
 
-function formatMoneyINR(value: number | null | undefined): string {
-  const n = Number(value ?? 0);
-  if (!Number.isFinite(n)) return "₹0";
-  return `₹${n.toFixed(2).replace(/\.00$/, "")}`;
+function formatDateLabel(dateStr: string): string {
+  const d = new Date(dateStr);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function formatTime(dateStr: string): string {
+  return new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 export default function OrdersTab() {
@@ -55,11 +66,9 @@ export default function OrdersTab() {
   const [session, setSession] = useState<any | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
 
-  // Active orders (accepted allocations)
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [allocLoading, setAllocLoading] = useState(true);
 
-  // Previous orders (delivered)
   const [allOrders, setAllOrders] = useState<any[]>([]);
   const [prevLoading, setPrevLoading] = useState(true);
 
@@ -113,62 +122,39 @@ export default function OrdersTab() {
       });
       const json = await res.json();
       if (json?.success) {
-        setAllocations((json.orders || []).filter((a: Allocation) => a.alloc_status === "accepted"));
+        const accepted = (json.orders || []).filter(
+          (a: Allocation) => a.alloc_status === "accepted"
+        );
+        setAllocations((prev) => {
+          const prevMap = new Map(prev.map((a) => [a.allocation_id, a]));
+          return accepted.map((o: Allocation) => ({
+            ...o,
+            pickup_code: o.pickup_code ?? prevMap.get(o.allocation_id)?.pickup_code ?? null,
+          }));
+        });
       }
     } catch { /* silent */ }
   }, [session?.token]);
-
-  const toNumber = (v: any) => {
-    if (typeof v === "number") return Number.isFinite(v) ? v : NaN;
-    if (typeof v === "string") {
-      const n = Number(v.replace(/[^0-9.-]/g, ""));
-      return Number.isFinite(n) ? n : NaN;
-    }
-    const n = Number(v);
-    return Number.isFinite(n) ? n : NaN;
-  };
-
-  const getDisplayTotal = (o: any) => {
-    const items = Array.isArray(o?.order_items) ? o.order_items : [];
-    if (items.length > 0) {
-      return items.reduce((sum: number, it: any) => {
-        const qty = toNumber(it?.quantity ?? 0);
-        const price = toNumber(it?.price ?? it?.unit_price ?? 0);
-        if (!Number.isFinite(qty) || !Number.isFinite(price)) return sum;
-        return sum + qty * price;
-      }, 0);
-    }
-    const candidates = [
-      o?.total_amount, o?.totalAmount, o?.total, o?.grand_total,
-      o?.subtotal_amount, o?.subtotal,
-      o?.customer_order?.total_amount, o?.customerOrder?.total_amount,
-      o?.summary?.total_amount,
-    ];
-    for (const c of candidates) {
-      const n = toNumber(c);
-      if (Number.isFinite(n)) return n;
-    }
-    return 0;
-  };
 
   const fetchPreviousOrders = useCallback(async () => {
     if (!session || !storeId) return;
     try {
       const fromDb = await getOrdersFromDb(storeId);
       if (Array.isArray(fromDb) && fromDb.length > 0) {
-        const withTotals = await Promise.all(
+        const withItems = await Promise.all(
           fromDb.map(async (o: any) => {
-            if (getDisplayTotal(o) > 0 || !o?.id) return o;
+            if (Array.isArray(o.order_items) && o.order_items.length > 0) return o;
+            if (!o?.id) return o;
             try {
               const detail = await getOrderByIdFromDb(String(o.id));
               if (!detail) return o;
-              return { ...o, order_items: detail.order_items, total_amount: detail.total_amount };
+              return { ...o, order_items: detail.order_items };
             } catch {
               return o;
             }
           })
         );
-        setAllOrders(withTotals);
+        setAllOrders(withItems);
         return;
       }
     } catch { /* fall through to HTTP */ }
@@ -219,22 +205,40 @@ export default function OrdersTab() {
     [allOrders]
   );
 
+  // Group previous orders by date
+  const groupedPreviousOrders = useMemo(() => {
+    const groups: Record<string, any[]> = {};
+    for (const o of previousOrders) {
+      const rawDate = o.created_at ?? o.createdAt ?? o.placed_at ?? "";
+      const label = rawDate ? formatDateLabel(rawDate) : "Unknown Date";
+      if (!groups[label]) groups[label] = [];
+      groups[label].push(o);
+    }
+    return Object.entries(groups).map(([title, data]) => ({ title, data }));
+  }, [previousOrders]);
+
   if (allocLoading && prevLoading) {
     return (
       <SafeAreaView style={styles.safe}>
-        <ActivityIndicator color={colors.primary} />
+        <ActivityIndicator color={colors.primary} style={{ marginTop: 60 }} />
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.safe}>
+      {/* Header + tabs */}
       <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
         <View style={styles.headerRow}>
           <Text style={styles.header}>Orders</Text>
           {tab === "active" && allocations.length > 0 && (
             <View style={styles.countBadge}>
               <Text style={styles.countBadgeText}>{allocations.length}</Text>
+            </View>
+          )}
+          {tab === "previous" && previousOrders.length > 0 && (
+            <View style={[styles.countBadge, { backgroundColor: colors.textTertiary }]}>
+              <Text style={styles.countBadgeText}>{previousOrders.length}</Text>
             </View>
           )}
         </View>
@@ -260,6 +264,7 @@ export default function OrdersTab() {
         </View>
       </Animated.View>
 
+      {/* Active orders tab */}
       {tab === "active" ? (
         <FlatList
           data={allocations}
@@ -277,100 +282,138 @@ export default function OrdersTab() {
             </View>
           }
           renderItem={({ item: a }) => (
-            <View style={styles.activeCard}>
-              <View style={styles.activeCardTop}>
-                <View style={styles.activeCardLeft}>
-                  <Text style={styles.orderCode}>#{a.order_code}</Text>
-                  {a.customer_distance && (
-                    <Text style={styles.orderMeta}>{a.customer_distance} away</Text>
-                  )}
-                </View>
-                <View style={[styles.statusBadge, { backgroundColor: colors.success + "22" }]}>
-                  <Text style={[styles.statusBadgeText, { color: colors.success }]}>Accepted</Text>
-                </View>
-              </View>
-
-              {a.pickup_code && (
-                <View style={styles.pickupCodeBox}>
-                  <Text style={styles.pickupCodeLabel}>Pickup Code</Text>
-                  <Text style={styles.pickupCodeValue}>{a.pickup_code}</Text>
-                  <Text style={styles.pickupCodeHint}>Give this to the driver</Text>
-                </View>
-              )}
-
-              <View style={styles.itemsList}>
-                {a.items.map((item) => (
-                  <View key={item.id} style={styles.itemRow}>
-                    <Ionicons name="cube-outline" size={14} color={colors.textTertiary} />
-                    <Text style={styles.itemText} numberOfLines={1}>
-                      {item.quantity} {item.unit} — {item.product_name}
-                    </Text>
+              <View style={styles.activeCard}>
+                {/* Card top row */}
+                <View style={styles.activeCardTop}>
+                  <View style={styles.activeCardLeft}>
+                    <Text style={styles.orderCode}>#{a.order_code}</Text>
+                    {a.customer_distance && (
+                      <View style={styles.metaRow}>
+                        <Ionicons name="location-outline" size={12} color={colors.textTertiary} />
+                        <Text style={styles.orderMeta}>{a.customer_distance} away</Text>
+                      </View>
+                    )}
                   </View>
-                ))}
-              </View>
+                  <View style={[styles.statusBadge, { backgroundColor: colors.success + "20", borderColor: colors.success + "50" }]}>
+                    <View style={[styles.statusDot, { backgroundColor: colors.success }]} />
+                    <Text style={[styles.statusBadgeText, { color: colors.success }]}>Active</Text>
+                  </View>
+                </View>
 
-              {a.placed_at && (
-                <Text style={styles.orderTime}>
-                  {new Date(a.placed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  {" · "}
-                  {new Date(a.placed_at).toLocaleDateString()}
-                </Text>
-              )}
-            </View>
-          )}
-        />
+                {/* Pickup code */}
+                {a.pickup_code && (
+                  <View style={styles.pickupCodeBox}>
+                    <Ionicons name="key-outline" size={14} color={colors.primary} style={{ marginRight: 6 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.pickupCodeLabel}>Pickup Code</Text>
+                      <Text style={styles.pickupCodeValue}>{a.pickup_code}</Text>
+                    </View>
+                    <Text style={styles.pickupCodeHint}>Give to driver</Text>
+                  </View>
+                )}
+
+                {/* Items */}
+                <View style={styles.itemsDivider} />
+                <View style={styles.itemsList}>
+                  {a.items.map((item, idx) => (
+                      <View key={item.id} style={[styles.itemRow, idx < a.items.length - 1 && styles.itemRowBorder]}>
+                        <View style={styles.itemBullet} />
+                        <Text style={styles.itemText} numberOfLines={1}>
+                          {item.quantity} {item.unit} — {item.product_name}
+                        </Text>
+                      </View>
+                    ))}
+                </View>
+
+                {/* Footer */}
+                {a.placed_at && (
+                  <View style={styles.cardFooter}>
+                    <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
+                    <Text style={styles.orderTime}>
+                      {formatTime(a.placed_at)} · {new Date(a.placed_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                    </Text>
+                    <Text style={styles.itemCountBadge}>{a.items.length} item{a.items.length !== 1 ? "s" : ""}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+          />
       ) : (
-        <FlatList
-          data={previousOrders}
-          keyExtractor={(o) => o.id}
-          initialNumToRender={10}
-          maxToRenderPerBatch={10}
-          windowSize={5}
-          contentContainerStyle={styles.list}
-          refreshing={false}
-          onRefresh={fetchPreviousOrders}
-          ListEmptyComponent={
-            <View style={styles.emptyWrap}>
-              <View style={styles.emptyIconWrap}>
-                <Ionicons name="time-outline" size={40} color={colors.primary} />
-              </View>
-              <Text style={styles.emptyTitle}>No previous orders</Text>
-              <Text style={styles.emptySub}>Delivered orders will appear here</Text>
+        /* Previous orders tab */
+        previousOrders.length === 0 ? (
+          <View style={styles.emptyWrap}>
+            <View style={styles.emptyIconWrap}>
+              <Ionicons name="time-outline" size={40} color={colors.primary} />
             </View>
-          }
-          renderItem={({ item: o }) => {
-            const rawDate = o.created_at ?? o.createdAt ?? o.updated_at ?? o.updatedAt;
-            const parsed = rawDate ? new Date(rawDate) : null;
-            const validDate = parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
-            const statusColor = getStatusColor(o.status);
-            return (
-              <TouchableOpacity
-                style={[styles.orderCard, { borderLeftColor: statusColor }]}
-                onPress={() => router.push(`/invoice/${o.id}`)}
-                activeOpacity={0.75}
-              >
-                <View style={styles.orderCardLeft}>
-                  <Text style={styles.orderCardCode}>#{o.order_code}</Text>
-                  {validDate && (
-                    <Text style={styles.orderCardTime}>
-                      {validDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      {" · "}
-                      {validDate.toLocaleDateString()}
-                    </Text>
-                  )}
-                </View>
-                <View style={styles.orderCardRight}>
-                  <View style={[styles.statusBadge, { backgroundColor: statusColor + "22" }]}>
-                    <Text style={[styles.statusBadgeText, { color: statusColor }]}>
-                      {formatStatus(o.status)}
-                    </Text>
+            <Text style={styles.emptyTitle}>No previous orders</Text>
+            <Text style={styles.emptySub}>Delivered orders will appear here</Text>
+          </View>
+        ) : (
+          <SectionList
+            sections={groupedPreviousOrders}
+            keyExtractor={(o) => o.id}
+            contentContainerStyle={styles.list}
+            refreshing={false}
+            onRefresh={fetchPreviousOrders}
+            stickySectionHeadersEnabled={false}
+            renderSectionHeader={({ section }) => (
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionHeaderText}>{section.title}</Text>
+                <View style={styles.sectionHeaderLine} />
+              </View>
+            )}
+            renderItem={({ item: o }) => {
+              const rawDate = o.created_at ?? o.createdAt ?? o.placed_at ?? "";
+              const validDate = rawDate && !Number.isNaN(new Date(rawDate).getTime());
+              const statusColor = getStatusColor(o.status);
+              const itemCount = Array.isArray(o.order_items) ? o.order_items.length : 0;
+              const itemPreview = Array.isArray(o.order_items)
+                ? o.order_items.slice(0, 2).map((it: any) => it?.product_name).filter(Boolean).join(", ")
+                : "";
+              const hasMore = itemCount > 2;
+
+              return (
+                <TouchableOpacity
+                  style={styles.prevCard}
+                  onPress={() => router.push(`/invoice/${o.id}`)}
+                  activeOpacity={0.72}
+                >
+                  <View style={[styles.prevCardAccent, { backgroundColor: statusColor }]} />
+
+                  <View style={styles.prevCardBody}>
+                    <Text style={styles.prevCardCode}>#{o.order_code}</Text>
+
+                    {itemPreview ? (
+                      <Text style={styles.prevCardItems} numberOfLines={1}>
+                        {itemPreview}{hasMore ? ` +${itemCount - 2} more` : ""}
+                      </Text>
+                    ) : null}
+
+                    <View style={styles.prevCardBottom}>
+                      {validDate && (
+                        <View style={styles.metaRow}>
+                          <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
+                          <Text style={styles.prevCardTime}>{formatTime(rawDate)}</Text>
+                        </View>
+                      )}
+                      {itemCount > 0 && (
+                        <Text style={styles.prevCardItemCount}>{itemCount} item{itemCount !== 1 ? "s" : ""}</Text>
+                      )}
+                      <View style={styles.spacer} />
+                      <View style={[styles.statusPill, { backgroundColor: statusColor + "18", borderColor: statusColor + "50" }]}>
+                        <Text style={[styles.statusPillText, { color: statusColor }]}>
+                          {formatStatus(o.status)}
+                        </Text>
+                      </View>
+                    </View>
                   </View>
-                  <Text style={styles.orderCardAmount}>{formatMoneyINR(getDisplayTotal(o))}</Text>
-                </View>
-              </TouchableOpacity>
-            );
-          }}
-        />
+
+                  <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} style={styles.prevCardChevron} />
+                </TouchableOpacity>
+              );
+            }}
+          />
+        )
       )}
     </SafeAreaView>
   );
@@ -395,29 +438,25 @@ const styles = StyleSheet.create({
   countBadge: {
     backgroundColor: colors.primary,
     borderRadius: radius.full,
-    minWidth: 28,
-    height: 28,
+    minWidth: 26,
+    height: 26,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 8,
   },
-  countBadgeText: {
-    color: "#fff",
-    fontSize: 13,
-    fontWeight: "700",
-  },
+  countBadgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
 
   tabs: {
     flexDirection: "row",
     paddingHorizontal: spacing.lg,
     gap: spacing.sm,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   tab: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: spacing.lg,
-    paddingVertical: 10,
+    paddingVertical: 9,
     borderRadius: radius.full,
     borderWidth: 1,
     borderColor: colors.border,
@@ -432,28 +471,113 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 4,
   },
-  tabText: {
-    color: colors.textTertiary,
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  tabTextActive: {
-    color: "#fff",
-  },
+  tabText: { color: colors.textTertiary, fontSize: 14, fontWeight: "600" },
+  tabTextActive: { color: "#fff" },
 
   list: {
-    padding: spacing.lg,
-    paddingTop: 0,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xl,
     gap: spacing.sm,
   },
 
-  // Active order cards
+  // ── Section header ─────────────────────────────────────────────
+  sectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  sectionHeaderText: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    flexShrink: 0,
+  },
+  sectionHeaderLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: colors.borderLight,
+  },
+
+  // ── Previous order card ────────────────────────────────────────
+  prevCard: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+    marginBottom: spacing.xs,
+  },
+  prevCardAccent: {
+    width: 4,
+    alignSelf: "stretch",
+  },
+  prevCardBody: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    gap: 4,
+  },
+  prevCardCode: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  prevCardItems: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginTop: 1,
+  },
+  prevCardBottom: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginTop: 4,
+  },
+  prevCardTime: {
+    color: colors.textTertiary,
+    fontSize: 11,
+  },
+  prevCardItemCount: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    marginLeft: spacing.xs,
+  },
+  spacer: { flex: 1 },
+  statusPill: {
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: radius.full,
+    borderWidth: 1,
+  },
+  statusPillText: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  prevCardChevron: {
+    alignSelf: "center",
+    marginRight: spacing.sm,
+  },
+
+  // ── Active order card ──────────────────────────────────────────
   activeCard: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
-    padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.border,
+    overflow: "hidden",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
@@ -463,108 +587,137 @@ const styles = StyleSheet.create({
   activeCardTop: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: spacing.sm,
+    alignItems: "flex-start",
+    padding: spacing.md,
   },
-  activeCardLeft: { gap: 2 },
+  activeCardLeft: { gap: 3 },
   orderCode: {
     color: colors.textPrimary,
     fontSize: 16,
     fontWeight: "700",
   },
+  metaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
   orderMeta: {
     color: colors.textTertiary,
     fontSize: 12,
   },
-  pickupCodeBox: {
-    backgroundColor: colors.primary + "12",
-    borderRadius: radius.md,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.primary + "30",
-    alignItems: "center",
-  },
-  pickupCodeLabel: {
-    color: colors.textTertiary,
-    fontSize: 11,
-    fontWeight: "600",
-    marginBottom: 2,
-  },
-  pickupCodeValue: {
-    color: colors.primary,
-    fontSize: 24,
-    fontWeight: "800",
-    letterSpacing: 2,
-  },
-  pickupCodeHint: {
-    color: colors.textTertiary,
-    fontSize: 11,
-    marginTop: 2,
-  },
-  itemsList: {
-    gap: 6,
-    marginBottom: spacing.sm,
-  },
-  itemRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  itemText: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    flex: 1,
-  },
-  orderTime: {
-    color: colors.textTertiary,
-    fontSize: 11,
-    marginTop: 2,
-  },
-
-  // Previous order cards
-  orderCard: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: spacing.md,
-    backgroundColor: colors.surfaceVariant,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    borderLeftWidth: 4,
-  },
-  orderCardLeft: { gap: 3 },
-  orderCardCode: {
-    color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  orderCardTime: {
-    color: colors.textTertiary,
-    fontSize: 11,
-  },
-  orderCardRight: {
-    alignItems: "flex-end",
-    gap: 4,
-  },
   statusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: radius.full,
+    borderWidth: 1,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   statusBadgeText: {
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 0.3,
   },
-  orderCardAmount: {
-    color: colors.textPrimary,
-    fontSize: 14,
-    fontWeight: "700",
+
+  pickupCodeBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.primary + "10",
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: colors.primary + "25",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  pickupCodeLabel: {
+    color: colors.textTertiary,
+    fontSize: 10,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  pickupCodeValue: {
+    color: colors.primary,
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: 6,
+  },
+  pickupCodeHint: {
+    color: colors.textTertiary,
+    fontSize: 11,
   },
 
-  // Empty states
+  itemsDivider: {
+    height: 1,
+    backgroundColor: colors.borderLight,
+    marginHorizontal: spacing.md,
+  },
+  itemsList: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+  },
+  itemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+  },
+  itemRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+  },
+  itemBullet: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: colors.primary,
+    flexShrink: 0,
+  },
+  itemText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    flex: 1,
+  },
+  itemPrice: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: "600",
+    flexShrink: 0,
+  },
+
+  cardFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderLight,
+    marginTop: spacing.xs,
+  },
+  orderTime: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    flex: 1,
+  },
+  itemCountBadge: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    backgroundColor: colors.surfaceVariant,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+
+  // ── Empty states ──────────────────────────────────────────────
   emptyWrap: {
     flex: 1,
     alignItems: "center",
