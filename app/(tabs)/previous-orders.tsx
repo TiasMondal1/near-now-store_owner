@@ -8,6 +8,7 @@ import {
   FlatList,
   Animated,
   SectionList,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
@@ -68,6 +69,7 @@ export default function OrdersTab() {
 
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [allocLoading, setAllocLoading] = useState(true);
+  const [respondingId, setRespondingId] = useState<string | null>(null);
 
   const [allOrders, setAllOrders] = useState<any[]>([]);
   const [prevLoading, setPrevLoading] = useState(true);
@@ -120,20 +122,29 @@ export default function OrdersTab() {
       const res = await fetch(`${API_BASE}/shopkeeper/orders`, {
         headers: { Authorization: `Bearer ${session.token}` },
       });
+      if (!res.ok) {
+        if (__DEV__) console.warn("[orders] fetchActiveOrders failed:", res.status, await res.text());
+        return;
+      }
       const json = await res.json();
       if (json?.success) {
-        const accepted = (json.orders || []).filter(
-          (a: Allocation) => a.alloc_status === "accepted"
+        // Show both pending and accepted orders in the Active tab
+        const active = (json.orders || []).filter(
+          (a: Allocation) => a.alloc_status === "accepted" || a.alloc_status === "pending_acceptance"
         );
         setAllocations((prev) => {
           const prevMap = new Map(prev.map((a) => [a.allocation_id, a]));
-          return accepted.map((o: Allocation) => ({
+          return active.map((o: Allocation) => ({
             ...o,
             pickup_code: o.pickup_code ?? prevMap.get(o.allocation_id)?.pickup_code ?? null,
           }));
         });
+      } else if (__DEV__) {
+        console.warn("[orders] fetchActiveOrders: success=false", json);
       }
-    } catch { /* silent */ }
+    } catch (e) {
+      if (__DEV__) console.warn("[orders] fetchActiveOrders threw:", e);
+    }
   }, [session?.token]);
 
   const fetchPreviousOrders = useCallback(async () => {
@@ -173,6 +184,61 @@ export default function OrdersTab() {
       setAllOrders([]);
     }
   }, [session, storeId]);
+
+  const acceptAllocation = useCallback(async (allocId: string) => {
+    if (!session?.token || respondingId) return;
+    setRespondingId(allocId);
+    try {
+      const alloc = allocations.find((a) => a.allocation_id === allocId);
+      const itemIds = alloc?.items.map((i) => i.id) ?? [];
+      const res = await fetch(`${API_BASE}/shopkeeper/allocations/${allocId}/accept`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ accepted_item_ids: itemIds }),
+      });
+      const json = await res.json();
+      if (json?.success) {
+        // Optimistically mark as accepted and store pickup code
+        setAllocations((prev) =>
+          prev.map((a) =>
+            a.allocation_id === allocId
+              ? { ...a, alloc_status: "accepted", pickup_code: json.pickup_code ?? a.pickup_code }
+              : a
+          )
+        );
+      } else {
+        Alert.alert("Error", json?.error || "Failed to accept order");
+      }
+    } catch {
+      Alert.alert("Error", "Failed to accept order. Please try again.");
+    } finally {
+      setRespondingId(null);
+    }
+  }, [session?.token, allocations, respondingId]);
+
+  const rejectAllocation = useCallback((allocId: string, orderCode: string) => {
+    Alert.alert("Reject Order", `Reject order #${orderCode}? This cannot be undone.`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Reject", style: "destructive",
+        onPress: async () => {
+          if (!session?.token) return;
+          setRespondingId(allocId);
+          try {
+            await fetch(`${API_BASE}/shopkeeper/allocations/${allocId}/reject`, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${session.token}` },
+            });
+            setAllocations((prev) => prev.filter((a) => a.allocation_id !== allocId));
+          } catch {
+            Alert.alert("Error", "Failed to reject. Please try again.");
+          } finally {
+            setRespondingId(null);
+          }
+        },
+      },
+    ]);
+  }, [session?.token]);
 
   useEffect(() => {
     if (session && storeId) {
@@ -281,8 +347,13 @@ export default function OrdersTab() {
               <Text style={styles.emptySub}>Accepted orders will appear here</Text>
             </View>
           }
-          renderItem={({ item: a }) => (
-              <View style={styles.activeCard}>
+          renderItem={({ item: a }) => {
+            const isPending = a.alloc_status === "pending_acceptance";
+            const isResponding = respondingId === a.allocation_id;
+            const badgeColor = isPending ? "#FF9800" : colors.success;
+            const badgeLabel = isPending ? "New" : "Active";
+            return (
+              <View style={[styles.activeCard, isPending && styles.activeCardPending]}>
                 {/* Card top row */}
                 <View style={styles.activeCardTop}>
                   <View style={styles.activeCardLeft}>
@@ -294,14 +365,14 @@ export default function OrdersTab() {
                       </View>
                     )}
                   </View>
-                  <View style={[styles.statusBadge, { backgroundColor: colors.success + "20", borderColor: colors.success + "50" }]}>
-                    <View style={[styles.statusDot, { backgroundColor: colors.success }]} />
-                    <Text style={[styles.statusBadgeText, { color: colors.success }]}>Active</Text>
+                  <View style={[styles.statusBadge, { backgroundColor: badgeColor + "20", borderColor: badgeColor + "50" }]}>
+                    <View style={[styles.statusDot, { backgroundColor: badgeColor }]} />
+                    <Text style={[styles.statusBadgeText, { color: badgeColor }]}>{badgeLabel}</Text>
                   </View>
                 </View>
 
-                {/* Pickup code */}
-                {a.pickup_code && (
+                {/* Pickup code (accepted only) */}
+                {!isPending && a.pickup_code && (
                   <View style={styles.pickupCodeBox}>
                     <Ionicons name="key-outline" size={14} color={colors.primary} style={{ marginRight: 6 }} />
                     <View style={{ flex: 1 }}>
@@ -316,14 +387,37 @@ export default function OrdersTab() {
                 <View style={styles.itemsDivider} />
                 <View style={styles.itemsList}>
                   {a.items.map((item, idx) => (
-                      <View key={item.id} style={[styles.itemRow, idx < a.items.length - 1 && styles.itemRowBorder]}>
-                        <View style={styles.itemBullet} />
-                        <Text style={styles.itemText} numberOfLines={1}>
-                          {item.quantity} {item.unit} — {item.product_name}
-                        </Text>
-                      </View>
-                    ))}
+                    <View key={item.id} style={[styles.itemRow, idx < a.items.length - 1 && styles.itemRowBorder]}>
+                      <View style={styles.itemBullet} />
+                      <Text style={styles.itemText} numberOfLines={1}>
+                        {item.quantity} {item.unit} — {item.product_name}
+                      </Text>
+                    </View>
+                  ))}
                 </View>
+
+                {/* Accept / Reject for pending orders */}
+                {isPending && (
+                  <View style={styles.pendingActions}>
+                    <TouchableOpacity
+                      style={styles.rejectActionBtn}
+                      onPress={() => rejectAllocation(a.allocation_id, a.order_code)}
+                      disabled={!!isResponding}
+                    >
+                      <Text style={styles.rejectActionText}>Reject</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.acceptActionBtn, isResponding && styles.actionBtnDisabled]}
+                      onPress={() => acceptAllocation(a.allocation_id)}
+                      disabled={!!isResponding}
+                    >
+                      {isResponding
+                        ? <ActivityIndicator size="small" color="#fff" />
+                        : <Text style={styles.acceptActionText}>Accept All</Text>
+                      }
+                    </TouchableOpacity>
+                  </View>
+                )}
 
                 {/* Footer */}
                 {a.placed_at && (
@@ -336,7 +430,8 @@ export default function OrdersTab() {
                   </View>
                 )}
               </View>
-            )}
+            );
+          }}
           />
       ) : (
         /* Previous orders tab */
@@ -684,13 +779,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     flex: 1,
   },
-  itemPrice: {
-    color: colors.textPrimary,
-    fontSize: 13,
-    fontWeight: "600",
-    flexShrink: 0,
-  },
-
   cardFooter: {
     flexDirection: "row",
     alignItems: "center",
@@ -715,6 +803,49 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     borderWidth: 1,
     borderColor: colors.borderLight,
+  },
+
+  // ── Pending order actions ──────────────────────────────────���──
+  activeCardPending: {
+    borderColor: "#FF9800" + "50",
+    borderWidth: 1.5,
+  },
+  pendingActions: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderLight,
+  },
+  rejectActionBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    alignItems: "center",
+    backgroundColor: colors.error + "15",
+    borderWidth: 1,
+    borderColor: colors.error + "50",
+  },
+  rejectActionText: {
+    color: colors.error,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  acceptActionBtn: {
+    flex: 2,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    alignItems: "center",
+    backgroundColor: colors.primary,
+  },
+  actionBtnDisabled: {
+    opacity: 0.5,
+  },
+  acceptActionText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "700",
   },
 
   // ── Empty states ──────────────────────────────────────────────
