@@ -58,10 +58,67 @@ const androidDir = path.join(rootDir, "android");
 const isWin = process.platform === "win32";
 const gradleWrapper = isWin ? "gradlew.bat" : "gradlew";
 const gradle = path.join(androidDir, gradleWrapper);
+const localPropertiesPath = path.join(androidDir, "local.properties");
 
-// Use whatever JAVA_HOME / PATH the environment provides; don't hardcode JDK paths.
+const resolveJava17Home = () => {
+  if (process.platform !== "darwin") return "";
+  const candidates = [];
+  const javaHomeResult = spawnSync("/usr/libexec/java_home", ["-v", "17"], { encoding: "utf8" });
+  const javaHomeCandidate = (javaHomeResult.stdout || "").trim();
+  if (javaHomeResult.status === 0 && javaHomeCandidate) {
+    candidates.push(javaHomeCandidate);
+  }
+  // Homebrew openjdk@17 is keg-only by default and may not be visible to /usr/libexec/java_home.
+  candidates.push("/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home");
+  candidates.push("/usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home");
+
+  for (const candidate of candidates) {
+    const versionCheck = spawnSync(path.join(candidate, "bin", "java"), ["-version"], { encoding: "utf8" });
+    const versionText = `${versionCheck.stdout || ""}\n${versionCheck.stderr || ""}`;
+    const majorMatch = versionText.match(/version "(?:1\.)?(\d+)/);
+    const major = majorMatch ? Number(majorMatch[1]) : NaN;
+    if (major === 17) return candidate;
+  }
+  return "";
+};
+
+const java17Home = resolveJava17Home();
+if (java17Home) {
+  console.log("Using Java home:", java17Home);
+} else {
+  console.warn("JDK 17 not found on macOS. Install it (e.g. brew install openjdk@17) and/or set JAVA_HOME to JDK 17.");
+}
+
+const resolveAndroidSdkDir = () => {
+  const candidates = [
+    process.env.ANDROID_HOME,
+    process.env.ANDROID_SDK_ROOT,
+    "/Users/tiasmondal166/Library/Android/sdk",
+    path.join(process.env.HOME || "", "Library/Android/sdk"),
+    "/opt/android-sdk",
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const adbPath = path.join(candidate, "platform-tools", isWin ? "adb.exe" : "adb");
+    if (fs.existsSync(adbPath)) return candidate;
+  }
+  return "";
+};
+
+const sdkDir = resolveAndroidSdkDir();
+if (sdkDir) {
+  const escapedSdkDir = sdkDir.replace(/\\/g, "\\\\");
+  fs.writeFileSync(localPropertiesPath, `sdk.dir=${escapedSdkDir}\n`, "utf8");
+  console.log("Using Android SDK:", sdkDir);
+} else {
+  console.warn("Android SDK not found. Set ANDROID_HOME/ANDROID_SDK_ROOT or create android/local.properties with sdk.dir.");
+}
+
 const env = {
   ...process.env,
+  ...(java17Home ? { JAVA_HOME: java17Home } : {}),
+  ...(java17Home ? { PATH: `${path.join(java17Home, "bin")}:${process.env.PATH || ""}` } : {}),
+  ...(sdkDir ? { ANDROID_HOME: sdkDir, ANDROID_SDK_ROOT: sdkDir } : {}),
   JAVA_TOOL_OPTIONS:
     "--enable-native-access=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED",
 };
