@@ -25,6 +25,7 @@ import { config } from "../../lib/config";
 import { useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
 
 const API_BASE = config.API_BASE;
+const AUTO_COMPLETE_MS = 2 * 60 * 1000;
 
 type AllocationItem = {
   id: string;
@@ -60,7 +61,7 @@ function formatTime(dateStr: string): string {
   return new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function AllocationCard({
+const AllocationCard = React.memo(function AllocationCard({
   alloc,
   accepting,
   onAccept,
@@ -160,7 +161,7 @@ function AllocationCard({
       )}
     </View>
   );
-}
+});
 
 export default function OrdersTab() {
   const [tab, setTab] = useState<"incoming" | "active" | "previous">("incoming");
@@ -189,7 +190,11 @@ export default function OrdersTab() {
     let cancelled = false;
     (async () => {
       try {
-        const s: any = await getSession();
+        let s: any = await getSession();
+        if (!s?.token) {
+          await new Promise(r => setTimeout(r, 300));
+          s = await getSession();
+        }
         if (!s?.token) {
           if (!cancelled) router.replace("/landing");
           return;
@@ -220,7 +225,6 @@ export default function OrdersTab() {
     return () => { cancelled = true; };
   }, []);
 
-  const AUTO_COMPLETE_MS = 2 * 60 * 1000;
   // Ref so fetchActiveOrders can call fetchPreviousOrders without a circular dep
   const fetchPreviousOrdersRef = useRef<(() => Promise<void>) | null>(null);
 

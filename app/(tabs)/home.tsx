@@ -39,48 +39,22 @@ import {
   clearStoreCache,
   type CachedStore,
 } from "../../lib/appCache";
-import { useOrders } from "../../hooks/useOrders";
 
 const API_BASE = config.API_BASE;
+const BRAND_LOGO = require("../../near_now_shopkeeper.png");
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
-const BRAND_LOGO = require("../../near_now_shopkeeper.png");
 
 type StoreRow = CachedStore;
 
 
 
-function OrderItemRow({ item }: { item: any }) {
-  const [imgErr, setImgErr] = React.useState(false);
-  const src =
-    !imgErr && item?.image_url
-      ? { uri: item.image_url }
-      : BRAND_LOGO;
-  return (
-    <View style={styles.itemRow}>
-      <Image
-        source={src}
-        style={styles.itemImg}
-        onError={() => setImgErr(true)}
-      />
-      <View>
-        <Text style={styles.itemName}>{item.product_name}</Text>
-        <Text style={styles.itemQty}>{item.quantity} {item.unit}</Text>
-      </View>
-    </View>
-  );
-}
 
 export default function HomeTab() {
-  const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
-  const slideAnim = useRef(new Animated.Value(24)).current;
-  const scaleAnim = useRef(new Animated.Value(1)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   const [session, setSession] = useState<any | null>(null);
   const [stores, setStores] = useState<StoreRow[]>([]);
-
-  const { fetchOrders } = useOrders(session?.token ?? null);
 
   const [loading, setLoading] = useState(true);
 
@@ -140,7 +114,13 @@ export default function HomeTab() {
 
     (async () => {
       try {
-        const s: any = await getSession();
+        let s: any = await getSession();
+        // Retry once — AsyncStorage writes aren't always immediately visible
+        // on the first read right after being written from another screen.
+        if (!s?.token) {
+          await new Promise(r => setTimeout(r, 300));
+          s = await getSession();
+        }
         if (!s?.token) {
           if (!cancelled) router.replace("/landing");
           return;
@@ -190,7 +170,6 @@ export default function HomeTab() {
   useEffect(() => {
     if (!session || !selectedStore) return;
     const task = InteractionManager.runAfterInteractions(() => {
-      fetchOrders();
       fetchStoreProducts();
     });
     return () => { task.cancel && task.cancel(); };
@@ -540,46 +519,6 @@ export default function HomeTab() {
           </View>
         </Modal>
 
-        <Modal visible={!!selectedOrder} transparent animationType="fade">
-          <View style={styles.overlay}>
-            <Animated.View
-              style={[
-                styles.popup,
-                {
-                  transform: [{ translateY: slideAnim }, { scale: scaleAnim }],
-                },
-              ]}
-            >
-              {selectedOrder ? (
-                <>
-                  <Text style={styles.popupTitle}>Order Details</Text>
-
-                  <Text style={styles.orderCodeBig}>
-                    #{selectedOrder?.order_code ?? "---"}
-                  </Text>
-
-                  <ScrollView style={{ maxHeight: 260 }}>
-                    {Array.isArray(selectedOrder.order_items) &&
-                      selectedOrder.order_items.map((item: any, idx: number) => (
-                        <OrderItemRow key={idx} item={item} />
-                      ))}
-                  </ScrollView>
-
-                  <View style={styles.actions}>
-                    <TouchableOpacity
-                      onPress={() => setSelectedOrder(null)}
-                      style={[styles.btn, { backgroundColor: "#ae1616ff" }]}
-                    >
-                      <Text style={styles.btnText}>Close</Text>
-                    </TouchableOpacity>
-                  </View>
-                </>
-              ) : (
-                <ActivityIndicator color="#fff" />
-              )}
-            </Animated.View>
-          </View>
-        </Modal>
 
 
         <View>

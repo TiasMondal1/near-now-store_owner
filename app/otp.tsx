@@ -10,6 +10,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  InteractionManager,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, router } from "expo-router";
@@ -200,7 +201,12 @@ export default function StoreOwnerOtpScreen() {
           },
         };
         await saveSession(sessionData);
-        router.replace("/(tabs)/home");
+        // Defer navigation until the current JS frame and any pending
+        // interactions finish. Without this, router.replace on a busy thread
+        // can cause a blank screen before (tabs) finishes mounting in production.
+        InteractionManager.runAfterInteractions(() => {
+          router.replace("/(tabs)/home");
+        });
         return;
       }
 
