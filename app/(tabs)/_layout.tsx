@@ -5,6 +5,7 @@ import { useSegments } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../../lib/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { IncomingOrdersProvider, useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
 
 import HomeTab from "./home";
 import PreviousOrdersTab from "./previous-orders";
@@ -13,9 +14,10 @@ import StockTab from "./stock";
 
 const Tab = createBottomTabNavigator();
 
-export default function TabsLayout() {
+function TabsNavigator() {
   const insets = useSafeAreaInsets();
   const segments = useSegments();
+  const { incomingCount } = useIncomingOrdersCount();
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -31,10 +33,7 @@ export default function TabsLayout() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        // lazy: first render only happens when tab is first visited
         lazy: true,
-        // unmountOnBlur defaults to false — screens stay mounted after first visit,
-        // preventing data refetch on every tab switch. No explicit override needed.
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textTertiary,
         tabBarStyle: {
@@ -67,6 +66,8 @@ export default function TabsLayout() {
         component={PreviousOrdersTab}
         options={{
           title: "Orders",
+          tabBarBadge: incomingCount > 0 ? incomingCount : undefined,
+          tabBarBadgeStyle: { backgroundColor: "#FF9800", fontSize: 11, minWidth: 18, height: 18 },
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="receipt-outline" size={size} color={color} />
           ),
@@ -93,5 +94,13 @@ export default function TabsLayout() {
         }}
       />
     </Tab.Navigator>
+  );
+}
+
+export default function TabsLayout() {
+  return (
+    <IncomingOrdersProvider>
+      <TabsNavigator />
+    </IncomingOrdersProvider>
   );
 }

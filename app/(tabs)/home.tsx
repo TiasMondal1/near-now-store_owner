@@ -40,7 +40,6 @@ import {
   type CachedStore,
 } from "../../lib/appCache";
 import { useOrders } from "../../hooks/useOrders";
-import IncomingOrderPopup from "../../components/IncomingOrderPopup";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
@@ -49,127 +48,7 @@ const BRAND_LOGO = require("../../near_now_shopkeeper.png");
 
 type StoreRow = CachedStore;
 
-import type { Allocation } from "../../hooks/useOrders";
 
-function AllocationCard({
-  alloc,
-  accepting,
-  onAccept,
-  onReject,
-}: {
-  alloc: Allocation;
-  accepting: boolean;
-  onAccept: (allocId: string, itemIds: string[]) => void;
-  onReject: (allocId: string, orderCode: string) => void;
-}) {
-  const [checkedIds, setCheckedIds] = React.useState<Set<string>>(
-    () => new Set(alloc.items.map((i) => i.id))
-  );
-  const [expanded, setExpanded] = React.useState(alloc.alloc_status === 'pending_acceptance');
-
-  const toggleItem = (id: string) => {
-    setCheckedIds((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
-
-  const isPending = alloc.alloc_status === 'pending_acceptance';
-  const isAccepted = alloc.alloc_status === 'accepted';
-
-  return (
-    <View style={allocStyles.card}>
-      <TouchableOpacity
-        style={allocStyles.cardHeader}
-        onPress={() => setExpanded((e) => !e)}
-        activeOpacity={0.75}
-      >
-        <View style={allocStyles.cardHeaderLeft}>
-          <Text style={allocStyles.orderCode}>#{alloc.order_code}</Text>
-          {alloc.customer_distance && (
-            <Text style={allocStyles.distance}>{alloc.customer_distance} away</Text>
-          )}
-        </View>
-        <View style={allocStyles.cardHeaderRight}>
-          <View style={[allocStyles.badge, isPending ? allocStyles.badgePending : allocStyles.badgeAccepted]}>
-            <Text style={[allocStyles.badgeText, isPending ? allocStyles.badgeTextPending : allocStyles.badgeTextAccepted]}>
-              {isPending ? 'NEW' : 'ACCEPTED'}
-            </Text>
-          </View>
-          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textTertiary} />
-        </View>
-      </TouchableOpacity>
-
-      {isAccepted && alloc.pickup_code && (
-        <View style={allocStyles.codeBox}>
-          <Text style={allocStyles.codeLabel}>Pickup Code</Text>
-          <Text style={allocStyles.codeValue}>{alloc.pickup_code}</Text>
-          <Text style={allocStyles.codeHint}>Give this code to the driver</Text>
-        </View>
-      )}
-
-      {expanded && (
-        <View style={allocStyles.cardBody}>
-          {alloc.items.map((item) => (
-            <View key={item.id} style={allocStyles.itemRow}>
-              <Text
-                style={[
-                  allocStyles.itemName,
-                  isPending && !checkedIds.has(item.id) && allocStyles.itemNameUnchecked,
-                ]}
-                numberOfLines={1}
-              >
-                {item.quantity} {item.unit} — {item.product_name}
-              </Text>
-              {isPending && (
-                <View style={allocStyles.itemBtns}>
-                  <TouchableOpacity
-                    style={[allocStyles.itemBtn, allocStyles.itemBtnAccept, checkedIds.has(item.id) && allocStyles.itemBtnAcceptActive]}
-                    onPress={() => !checkedIds.has(item.id) && toggleItem(item.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name="checkmark" size={14} color={checkedIds.has(item.id) ? "#fff" : colors.success} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[allocStyles.itemBtn, allocStyles.itemBtnReject, !checkedIds.has(item.id) && allocStyles.itemBtnRejectActive]}
-                    onPress={() => checkedIds.has(item.id) && toggleItem(item.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name="close" size={14} color={!checkedIds.has(item.id) ? "#fff" : colors.error} />
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-          ))}
-
-          {isPending && (
-            <View style={allocStyles.cardActions}>
-              <TouchableOpacity
-                style={allocStyles.rejectBtn}
-                onPress={() => onReject(alloc.allocation_id, alloc.order_code)}
-                disabled={accepting}
-              >
-                <Text style={allocStyles.rejectBtnText}>Reject</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[allocStyles.acceptBtn, (checkedIds.size === 0 || accepting) && allocStyles.acceptBtnDisabled]}
-                onPress={() => onAccept(alloc.allocation_id, Array.from(checkedIds))}
-                disabled={checkedIds.size === 0 || accepting}
-              >
-                {accepting ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={allocStyles.acceptBtnText}>Accept ({checkedIds.size} items)</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-      )}
-    </View>
-  );
-}
 
 function OrderItemRow({ item }: { item: any }) {
   const [imgErr, setImgErr] = React.useState(false);
@@ -200,16 +79,8 @@ export default function HomeTab() {
 
   const [session, setSession] = useState<any | null>(null);
   const [stores, setStores] = useState<StoreRow[]>([]);
-  const [acceptingAllocId, setAcceptingAllocId] = useState<string | null>(null);
 
-  const {
-    allocations,
-    incomingAlloc,
-    countdown,
-    acceptOrder,
-    rejectOrder,
-    fetchOrders,
-  } = useOrders(session?.token ?? null);
+  const { fetchOrders } = useOrders(session?.token ?? null);
 
   const [loading, setLoading] = useState(true);
 
@@ -250,10 +121,7 @@ export default function HomeTab() {
     return storeProducts.filter((p) => (p.name || "").toLowerCase().includes(q));
   }, [storeProducts, debouncedSearchQuery]);
 
-  const activeOrderCount = useMemo(
-    () => allocations.filter((a) => a.alloc_status === 'accepted').length,
-    [allocations]
-  );
+  const activeOrderCount = 0;
 
   useEffect(() => {
     if (!isStoreOnline) return;
@@ -406,48 +274,6 @@ export default function HomeTab() {
     }, [session?.token, selectedStore?.id])
   );
 
-  // Accept a specific allocation from the list card (not the popup)
-  const acceptAllocation = useCallback(async (allocId: string, itemIds: string[]) => {
-    if (!session?.token) return;
-    setAcceptingAllocId(allocId);
-    try {
-      await fetch(`${API_BASE}/shopkeeper/allocations/${allocId}/accept`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${session.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accepted_item_ids: itemIds }),
-      });
-      fetchOrders();
-    } catch {
-      Alert.alert('Error', 'Failed to accept. Please try again.');
-    } finally {
-      setAcceptingAllocId(null);
-    }
-  }, [session?.token, fetchOrders]);
-
-  const rejectAllocation = useCallback((allocId: string, orderCode: string) => {
-    Alert.alert(
-      'Reject Order',
-      `Reject order #${orderCode}? This cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reject',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await fetch(`${API_BASE}/shopkeeper/allocations/${allocId}/reject`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${session!.token}` },
-              });
-              fetchOrders();
-            } catch {
-              Alert.alert('Error', 'Failed to reject. Please try again.');
-            }
-          },
-        },
-      ]
-    );
-  }, [session?.token, fetchOrders]);
 
   const fetchStoreProducts = useCallback(async (silent = false) => {
     if (!session?.token || !selectedStore?.id) return;
@@ -755,39 +581,6 @@ export default function HomeTab() {
           </View>
         </Modal>
 
-
-        <IncomingOrderPopup
-          visible={!!incomingAlloc}
-          alloc={incomingAlloc}
-          countdown={countdown}
-          onAccept={acceptOrder}
-          onReject={rejectOrder}
-        />
-
-        {allocations.length > 0 && (
-          <View style={allocStyles.section}>
-            <View style={allocStyles.sectionHeader}>
-              <Text style={allocStyles.sectionTitle}>Incoming Orders</Text>
-              <View style={allocStyles.sectionBadge}>
-                <Text style={allocStyles.sectionBadgeText}>
-                  {allocations.filter((a) => a.alloc_status === 'pending_acceptance').length} new
-                </Text>
-              </View>
-            </View>
-            {allocations
-              .slice()
-              .sort((a, _b) => (a.alloc_status === 'pending_acceptance' ? -1 : 1))
-              .map((alloc) => (
-                <AllocationCard
-                  key={alloc.allocation_id}
-                  alloc={alloc}
-                  accepting={acceptingAllocId === alloc.allocation_id}
-                  onAccept={acceptAllocation}
-                  onReject={rejectAllocation}
-                />
-              ))}
-          </View>
-        )}
 
         <View>
           <View style={styles.stockSection}>
@@ -1577,206 +1370,3 @@ const styles = StyleSheet.create({
   },
 });
 
-const allocStyles = StyleSheet.create({
-  section: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1.5,
-    borderColor: colors.primary + "55",
-    marginBottom: spacing.lg,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  sectionTitle: {
-    color: colors.textPrimary,
-    fontSize: 18,
-    fontWeight: "800",
-    letterSpacing: -0.3,
-    flex: 1,
-  },
-  sectionBadge: {
-    backgroundColor: colors.primary,
-    borderRadius: radius.full,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  sectionBadgeText: {
-    color: "#fff",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  card: {
-    backgroundColor: colors.surfaceVariant,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: spacing.md,
-    overflow: "hidden",
-  },
-  cardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: spacing.md,
-  },
-  cardHeaderLeft: { gap: 2 },
-  cardHeaderRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  orderCode: {
-    color: colors.textPrimary,
-    fontSize: 16,
-    fontWeight: "800",
-  },
-  distance: {
-    color: colors.textTertiary,
-    fontSize: 12,
-  },
-  badge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: radius.full,
-    borderWidth: 1,
-  },
-  badgePending: {
-    backgroundColor: "#FF9800" + "20",
-    borderColor: "#FF9800" + "60",
-  },
-  badgeAccepted: {
-    backgroundColor: colors.success + "20",
-    borderColor: colors.success + "60",
-  },
-  badgeText: {
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 0.5,
-  },
-  badgeTextPending: { color: "#FF9800" },
-  badgeTextAccepted: { color: colors.success },
-  codeBox: {
-    backgroundColor: colors.primary + "12",
-    borderTopWidth: 1,
-    borderTopColor: colors.primary + "30",
-    alignItems: "center",
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    gap: 4,
-  },
-  codeLabel: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    fontWeight: "600",
-    textTransform: "uppercase",
-    letterSpacing: 1,
-  },
-  codeValue: {
-    color: colors.primary,
-    fontSize: 40,
-    fontWeight: "900",
-    letterSpacing: 12,
-    fontVariant: ["tabular-nums"],
-  },
-  codeHint: {
-    color: colors.textTertiary,
-    fontSize: 12,
-  },
-  cardBody: {
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: spacing.md,
-    gap: spacing.xs,
-  },
-  itemRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-  },
-  itemBtns: {
-    flexDirection: "row",
-    gap: 6,
-    flexShrink: 0,
-  },
-  itemBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1.5,
-  },
-  itemBtnAccept: {
-    borderColor: colors.success,
-    backgroundColor: colors.surface,
-  },
-  itemBtnAcceptActive: {
-    backgroundColor: colors.success,
-  },
-  itemBtnReject: {
-    borderColor: colors.error,
-    backgroundColor: colors.surface,
-  },
-  itemBtnRejectActive: {
-    backgroundColor: colors.error,
-  },
-  itemName: {
-    color: colors.textPrimary,
-    fontSize: 14,
-    fontWeight: "500",
-    flex: 1,
-  },
-  itemNameUnchecked: {
-    color: colors.textTertiary,
-    textDecorationLine: "line-through",
-  },
-  cardActions: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    marginTop: spacing.md,
-  },
-  rejectBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: radius.md,
-    alignItems: "center",
-    backgroundColor: colors.error + "15",
-    borderWidth: 1,
-    borderColor: colors.error + "50",
-  },
-  rejectBtnText: {
-    color: colors.error,
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  acceptBtn: {
-    flex: 2,
-    paddingVertical: 12,
-    borderRadius: radius.md,
-    alignItems: "center",
-    backgroundColor: colors.primary,
-  },
-  acceptBtnDisabled: {
-    backgroundColor: colors.primary + "50",
-  },
-  acceptBtnText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "700",
-  },
-});

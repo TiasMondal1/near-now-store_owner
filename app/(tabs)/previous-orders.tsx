@@ -22,6 +22,7 @@ import { getStatusColor, formatStatus, isDelivered } from "../../lib/order-utils
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
 import { useSmartPoll } from "../../lib/useSmartPoll";
 import { config } from "../../lib/config";
+import { useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
 
 const API_BASE = config.API_BASE;
 
@@ -59,8 +60,111 @@ function formatTime(dateStr: string): string {
   return new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function AllocationCard({
+  alloc,
+  accepting,
+  onAccept,
+  onReject,
+}: {
+  alloc: Allocation;
+  accepting: boolean;
+  onAccept: (allocId: string, itemIds: string[]) => void;
+  onReject: (allocId: string, orderCode: string) => void;
+}) {
+  const [checkedIds, setCheckedIds] = React.useState<Set<string>>(
+    () => new Set(alloc.items.map((i) => i.id))
+  );
+
+  const toggleItem = (id: string) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <View style={allocStyles.card}>
+      <View style={allocStyles.cardHeader}>
+        <View style={allocStyles.cardHeaderLeft}>
+          <Text style={allocStyles.orderCode}>#{alloc.order_code}</Text>
+          {alloc.customer_distance && (
+            <Text style={allocStyles.distance}>{alloc.customer_distance} away</Text>
+          )}
+        </View>
+        <View style={[allocStyles.badge, allocStyles.badgePending]}>
+          <Text style={[allocStyles.badgeText, allocStyles.badgeTextPending]}>NEW</Text>
+        </View>
+      </View>
+
+      <View style={allocStyles.cardBody}>
+        {alloc.items.map((item) => (
+          <View key={item.id} style={allocStyles.itemRow}>
+            <Text
+              style={[
+                allocStyles.itemName,
+                !checkedIds.has(item.id) && allocStyles.itemNameUnchecked,
+              ]}
+              numberOfLines={1}
+            >
+              {item.quantity} {item.unit} — {item.product_name}
+            </Text>
+            <View style={allocStyles.itemBtns}>
+              <TouchableOpacity
+                style={[allocStyles.itemBtn, allocStyles.itemBtnAccept, checkedIds.has(item.id) && allocStyles.itemBtnAcceptActive]}
+                onPress={() => !checkedIds.has(item.id) && toggleItem(item.id)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="checkmark" size={14} color={checkedIds.has(item.id) ? "#fff" : colors.success} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[allocStyles.itemBtn, allocStyles.itemBtnReject, !checkedIds.has(item.id) && allocStyles.itemBtnRejectActive]}
+                onPress={() => checkedIds.has(item.id) && toggleItem(item.id)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="close" size={14} color={!checkedIds.has(item.id) ? "#fff" : colors.error} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        ))}
+
+        <View style={allocStyles.cardActions}>
+          <TouchableOpacity
+            style={allocStyles.rejectBtn}
+            onPress={() => onReject(alloc.allocation_id, alloc.order_code)}
+            disabled={accepting}
+          >
+            <Text style={allocStyles.rejectBtnText}>Reject</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[allocStyles.acceptBtn, (checkedIds.size === 0 || accepting) && allocStyles.acceptBtnDisabled]}
+            onPress={() => onAccept(alloc.allocation_id, Array.from(checkedIds))}
+            disabled={checkedIds.size === 0 || accepting}
+          >
+            {accepting ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={allocStyles.acceptBtnText}>Accept ({checkedIds.size} items)</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {alloc.placed_at && (
+        <View style={allocStyles.cardFooter}>
+          <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
+          <Text style={allocStyles.cardFooterText}>
+            {formatTime(alloc.placed_at)} · {new Date(alloc.placed_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 export default function OrdersTab() {
-  const [tab, setTab] = useState<"active" | "previous">("active");
+  const [tab, setTab] = useState<"incoming" | "active" | "previous">("incoming");
+  const { setIncomingCount } = useIncomingOrdersCount();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(20)).current;
 
@@ -185,20 +289,19 @@ export default function OrdersTab() {
     }
   }, [session, storeId]);
 
-  const acceptAllocation = useCallback(async (allocId: string) => {
+  const acceptAllocation = useCallback(async (allocId: string, itemIds?: string[]) => {
     if (!session?.token || respondingId) return;
     setRespondingId(allocId);
     try {
       const alloc = allocations.find((a) => a.allocation_id === allocId);
-      const itemIds = alloc?.items.map((i) => i.id) ?? [];
+      const ids = itemIds ?? alloc?.items.map((i) => i.id) ?? [];
       const res = await fetch(`${API_BASE}/shopkeeper/allocations/${allocId}/accept`, {
         method: "POST",
         headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ accepted_item_ids: itemIds }),
+        body: JSON.stringify({ accepted_item_ids: ids }),
       });
       const json = await res.json();
       if (json?.success) {
-        // Optimistically mark as accepted and store pickup code
         setAllocations((prev) =>
           prev.map((a) =>
             a.allocation_id === allocId
@@ -247,6 +350,12 @@ export default function OrdersTab() {
     }
   }, [session, storeId]);
 
+  // Sync incoming count to bottom tab badge
+  useEffect(() => {
+    const count = allocations.filter((a) => a.alloc_status === "pending_acceptance").length;
+    setIncomingCount(count);
+  }, [allocations, setIncomingCount]);
+
   useSmartPoll(fetchActiveOrders, {
     intervalMs: 10_000,
     slowIntervalMs: 20_000,
@@ -264,6 +373,16 @@ export default function OrdersTab() {
       if (session?.token) fetchActiveOrders();
       if (session?.token && storeId) fetchPreviousOrders();
     }, [session?.token, storeId])
+  );
+
+  const incomingAllocations = useMemo(
+    () => allocations.filter((a) => a.alloc_status === "pending_acceptance"),
+    [allocations]
+  );
+
+  const activeAllocations = useMemo(
+    () => allocations.filter((a) => a.alloc_status === "accepted"),
+    [allocations]
   );
 
   const previousOrders = useMemo(
@@ -297,9 +416,14 @@ export default function OrdersTab() {
       <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
         <View style={styles.headerRow}>
           <Text style={styles.header}>Orders</Text>
-          {tab === "active" && allocations.length > 0 && (
+          {tab === "incoming" && incomingAllocations.length > 0 && (
+            <View style={[styles.countBadge, { backgroundColor: "#FF9800" }]}>
+              <Text style={styles.countBadgeText}>{incomingAllocations.length}</Text>
+            </View>
+          )}
+          {tab === "active" && activeAllocations.length > 0 && (
             <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>{allocations.length}</Text>
+              <Text style={styles.countBadgeText}>{activeAllocations.length}</Text>
             </View>
           )}
           {tab === "previous" && previousOrders.length > 0 && (
@@ -310,30 +434,64 @@ export default function OrdersTab() {
         </View>
 
         <View style={styles.tabs}>
-          {(["active", "previous"] as const).map((t) => (
-            <TouchableOpacity
-              key={t}
-              style={[styles.tab, tab === t && styles.tabActive]}
-              onPress={() => setTab(t)}
-            >
-              <Ionicons
-                name={t === "active" ? "flash-outline" : "time-outline"}
-                size={16}
-                color={tab === t ? "#fff" : colors.textTertiary}
-                style={{ marginRight: 6 }}
-              />
-              <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
-                {t === "active" ? "Active" : "Previous"}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {(["incoming", "active", "previous"] as const).map((t) => {
+            const icons = { incoming: "alert-circle-outline", active: "flash-outline", previous: "time-outline" } as const;
+            const labels = { incoming: "Incoming", active: "Active", previous: "Previous" };
+            const isActive = tab === t;
+            return (
+              <TouchableOpacity
+                key={t}
+                style={[styles.tab, isActive && styles.tabActive, t === "incoming" && isActive && styles.tabActiveIncoming]}
+                onPress={() => setTab(t)}
+              >
+                {t === "incoming" && incomingAllocations.length > 0 && !isActive && (
+                  <View style={styles.tabIncomingDot} />
+                )}
+                <Ionicons
+                  name={icons[t]}
+                  size={16}
+                  color={isActive ? "#fff" : colors.textTertiary}
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={[styles.tabText, isActive && styles.tabTextActive]}>
+                  {labels[t]}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </Animated.View>
 
-      {/* Active orders tab */}
-      {tab === "active" ? (
+      {/* Incoming orders tab */}
+      {tab === "incoming" ? (
         <FlatList
-          data={allocations}
+          data={incomingAllocations}
+          keyExtractor={(a) => a.allocation_id}
+          contentContainerStyle={styles.list}
+          refreshing={false}
+          onRefresh={fetchActiveOrders}
+          ListEmptyComponent={
+            <View style={styles.emptyWrap}>
+              <View style={styles.emptyIconWrap}>
+                <Ionicons name="alert-circle-outline" size={40} color="#FF9800" />
+              </View>
+              <Text style={styles.emptyTitle}>No incoming orders</Text>
+              <Text style={styles.emptySub}>New orders waiting for your response will appear here</Text>
+            </View>
+          }
+          renderItem={({ item: a }) => (
+            <AllocationCard
+              alloc={a}
+              accepting={respondingId === a.allocation_id}
+              onAccept={acceptAllocation}
+              onReject={rejectAllocation}
+            />
+          )}
+        />
+      ) : tab === "active" ? (
+        /* Active (accepted) orders tab */
+        <FlatList
+          data={activeAllocations}
           keyExtractor={(a) => a.allocation_id}
           contentContainerStyle={styles.list}
           refreshing={false}
@@ -347,92 +505,63 @@ export default function OrdersTab() {
               <Text style={styles.emptySub}>Accepted orders will appear here</Text>
             </View>
           }
-          renderItem={({ item: a }) => {
-            const isPending = a.alloc_status === "pending_acceptance";
-            const isResponding = respondingId === a.allocation_id;
-            const badgeColor = isPending ? "#FF9800" : colors.success;
-            const badgeLabel = isPending ? "New" : "Active";
-            return (
-              <View style={[styles.activeCard, isPending && styles.activeCardPending]}>
-                {/* Card top row */}
-                <View style={styles.activeCardTop}>
-                  <View style={styles.activeCardLeft}>
-                    <Text style={styles.orderCode}>#{a.order_code}</Text>
-                    {a.customer_distance && (
-                      <View style={styles.metaRow}>
-                        <Ionicons name="location-outline" size={12} color={colors.textTertiary} />
-                        <Text style={styles.orderMeta}>{a.customer_distance} away</Text>
-                      </View>
-                    )}
-                  </View>
-                  <View style={[styles.statusBadge, { backgroundColor: badgeColor + "20", borderColor: badgeColor + "50" }]}>
-                    <View style={[styles.statusDot, { backgroundColor: badgeColor }]} />
-                    <Text style={[styles.statusBadgeText, { color: badgeColor }]}>{badgeLabel}</Text>
-                  </View>
-                </View>
-
-                {/* Pickup code (accepted only) */}
-                {!isPending && a.pickup_code && (
-                  <View style={styles.pickupCodeBox}>
-                    <Ionicons name="key-outline" size={14} color={colors.primary} style={{ marginRight: 6 }} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.pickupCodeLabel}>Pickup Code</Text>
-                      <Text style={styles.pickupCodeValue}>{a.pickup_code}</Text>
+          renderItem={({ item: a }) => (
+            <View style={styles.activeCard}>
+              {/* Card top row */}
+              <View style={styles.activeCardTop}>
+                <View style={styles.activeCardLeft}>
+                  <Text style={styles.orderCode}>#{a.order_code}</Text>
+                  {a.customer_distance && (
+                    <View style={styles.metaRow}>
+                      <Ionicons name="location-outline" size={12} color={colors.textTertiary} />
+                      <Text style={styles.orderMeta}>{a.customer_distance} away</Text>
                     </View>
-                    <Text style={styles.pickupCodeHint}>Give to driver</Text>
-                  </View>
-                )}
-
-                {/* Items */}
-                <View style={styles.itemsDivider} />
-                <View style={styles.itemsList}>
-                  {a.items.map((item, idx) => (
-                    <View key={item.id} style={[styles.itemRow, idx < a.items.length - 1 && styles.itemRowBorder]}>
-                      <View style={styles.itemBullet} />
-                      <Text style={styles.itemText} numberOfLines={1}>
-                        {item.quantity} {item.unit} — {item.product_name}
-                      </Text>
-                    </View>
-                  ))}
+                  )}
                 </View>
-
-                {/* Accept / Reject for pending orders */}
-                {isPending && (
-                  <View style={styles.pendingActions}>
-                    <TouchableOpacity
-                      style={styles.rejectActionBtn}
-                      onPress={() => rejectAllocation(a.allocation_id, a.order_code)}
-                      disabled={!!isResponding}
-                    >
-                      <Text style={styles.rejectActionText}>Reject</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.acceptActionBtn, isResponding && styles.actionBtnDisabled]}
-                      onPress={() => acceptAllocation(a.allocation_id)}
-                      disabled={!!isResponding}
-                    >
-                      {isResponding
-                        ? <ActivityIndicator size="small" color="#fff" />
-                        : <Text style={styles.acceptActionText}>Accept All</Text>
-                      }
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {/* Footer */}
-                {a.placed_at && (
-                  <View style={styles.cardFooter}>
-                    <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
-                    <Text style={styles.orderTime}>
-                      {formatTime(a.placed_at)} · {new Date(a.placed_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-                    </Text>
-                    <Text style={styles.itemCountBadge}>{a.items.length} item{a.items.length !== 1 ? "s" : ""}</Text>
-                  </View>
-                )}
+                <View style={[styles.statusBadge, { backgroundColor: colors.success + "20", borderColor: colors.success + "50" }]}>
+                  <View style={[styles.statusDot, { backgroundColor: colors.success }]} />
+                  <Text style={[styles.statusBadgeText, { color: colors.success }]}>Active</Text>
+                </View>
               </View>
-            );
-          }}
-          />
+
+              {/* Pickup code */}
+              {a.pickup_code && (
+                <View style={styles.pickupCodeBox}>
+                  <Ionicons name="key-outline" size={14} color={colors.primary} style={{ marginRight: 6 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.pickupCodeLabel}>Pickup Code</Text>
+                    <Text style={styles.pickupCodeValue}>{a.pickup_code}</Text>
+                  </View>
+                  <Text style={styles.pickupCodeHint}>Give to driver</Text>
+                </View>
+              )}
+
+              {/* Items */}
+              <View style={styles.itemsDivider} />
+              <View style={styles.itemsList}>
+                {a.items.map((item, idx) => (
+                  <View key={item.id} style={[styles.itemRow, idx < a.items.length - 1 && styles.itemRowBorder]}>
+                    <View style={styles.itemBullet} />
+                    <Text style={styles.itemText} numberOfLines={1}>
+                      {item.quantity} {item.unit} — {item.product_name}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+
+              {/* Footer */}
+              {a.placed_at && (
+                <View style={styles.cardFooter}>
+                  <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
+                  <Text style={styles.orderTime}>
+                    {formatTime(a.placed_at)} · {new Date(a.placed_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                  </Text>
+                  <Text style={styles.itemCountBadge}>{a.items.length} item{a.items.length !== 1 ? "s" : ""}</Text>
+                </View>
+              )}
+            </View>
+          )}
+        />
       ) : (
         /* Previous orders tab */
         previousOrders.length === 0 ? (
@@ -565,6 +694,18 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 6,
     elevation: 4,
+  },
+  tabActiveIncoming: {
+    backgroundColor: "#FF9800",
+    borderColor: "#FF9800",
+    shadowColor: "#FF9800",
+  },
+  tabIncomingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#FF9800",
+    marginRight: 4,
   },
   tabText: { color: colors.textTertiary, fontSize: 14, fontWeight: "600" },
   tabTextActive: { color: "#fff" },
@@ -876,5 +1017,154 @@ const styles = StyleSheet.create({
     marginTop: 6,
     textAlign: "center",
     paddingHorizontal: spacing.xl,
+  },
+});
+
+const allocStyles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+    borderColor: "#FF9800" + "55",
+    marginBottom: spacing.sm,
+    overflow: "hidden",
+    shadowColor: "#FF9800",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: spacing.md,
+  },
+  cardHeaderLeft: { gap: 3 },
+  orderCode: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  distance: {
+    color: colors.textTertiary,
+    fontSize: 12,
+  },
+  badge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radius.full,
+    borderWidth: 1,
+  },
+  badgePending: {
+    backgroundColor: "#FF9800" + "20",
+    borderColor: "#FF9800" + "60",
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  badgeTextPending: { color: "#FF9800" },
+  cardBody: {
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderLight,
+    paddingTop: spacing.md,
+    gap: spacing.xs,
+  },
+  itemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+  },
+  itemBtns: {
+    flexDirection: "row",
+    gap: 6,
+    flexShrink: 0,
+  },
+  itemBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+  },
+  itemBtnAccept: {
+    borderColor: colors.success,
+    backgroundColor: colors.surface,
+  },
+  itemBtnAcceptActive: {
+    backgroundColor: colors.success,
+  },
+  itemBtnReject: {
+    borderColor: colors.error,
+    backgroundColor: colors.surface,
+  },
+  itemBtnRejectActive: {
+    backgroundColor: colors.error,
+  },
+  itemName: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: "500",
+    flex: 1,
+  },
+  itemNameUnchecked: {
+    color: colors.textTertiary,
+    textDecorationLine: "line-through",
+  },
+  cardActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  rejectBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: radius.md,
+    alignItems: "center",
+    backgroundColor: colors.error + "15",
+    borderWidth: 1,
+    borderColor: colors.error + "50",
+  },
+  rejectBtnText: {
+    color: colors.error,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  acceptBtn: {
+    flex: 2,
+    paddingVertical: 12,
+    borderRadius: radius.md,
+    alignItems: "center",
+    backgroundColor: "#FF9800",
+  },
+  acceptBtnDisabled: {
+    backgroundColor: "#FF9800" + "60",
+  },
+  acceptBtnText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  cardFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderLight,
+  },
+  cardFooterText: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    flex: 1,
   },
 });
