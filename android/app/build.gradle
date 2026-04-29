@@ -66,30 +66,7 @@ react {
 /**
  * Set this to true in release builds to optimize the app using [R8](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization).
  */
-def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBuilds') ?: 'true').toBoolean()
-
-def enableShrinkResourcesInReleaseBuilds = (findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'true').toBoolean()
-
-// Base versionCode from defaultConfig; overridden per-ABI below for split APKs.
-def baseVersionCode = 2
-
-// versionCode needs to be unique per output APK on Play Store.
-// Universal APK keeps a separate versionCode from ABI splits.
-def abiVersionCodes = [
-        "armeabi-v7a": baseVersionCode * 1000 + 1,
-        "arm64-v8a"  : baseVersionCode * 1000 + 2,
-        "x86_64"     : baseVersionCode * 1000 + 3,
-        "universal"  : baseVersionCode * 1000 + 0,
-]
-
-def keystorePropertiesFile = rootProject.file('keystore.properties')
-def keystoreProperties = new Properties()
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-} else {
-    // Keep builds working locally, but warn that release won't be production-signed.
-    println "WARNING: ${keystorePropertiesFile} not found. `assembleRelease` will use the debug keystore signing."
-}
+def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBuilds') ?: false).toBoolean()
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -115,7 +92,7 @@ android {
         applicationId 'com.nearandnow.shopkeeper'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode baseVersionCode
+        versionCode 2
         versionName "1.0.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
@@ -127,27 +104,6 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
-        release {
-            // When `android/keystore.properties` exists, it must define:
-            // storeFile, storePassword, keyAlias, keyPassword
-            def storeFilePath = keystoreProperties.getProperty("storeFile")
-            def storePasswordValue = keystoreProperties.getProperty("storePassword")
-            def keyAliasValue = keystoreProperties.getProperty("keyAlias")
-            def keyPasswordValue = keystoreProperties.getProperty("keyPassword")
-
-            if (keystorePropertiesFile.exists() && storeFilePath && storePasswordValue && keyAliasValue && keyPasswordValue) {
-                storeFile file(storeFilePath)
-                storePassword storePasswordValue
-                keyAlias keyAliasValue
-                keyPassword keyPasswordValue
-            } else {
-                // Fallback for dev environments without keystore.properties.
-                storeFile file('debug.keystore')
-                storePassword 'android'
-                keyAlias 'androiddebugkey'
-                keyPassword 'android'
-            }
-        }
     }
     buildTypes {
         debug {
@@ -156,26 +112,15 @@ android {
         release {
             // Caution! In production, you need to generate your own keystore file.
             // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.release
-            shrinkResources enableShrinkResourcesInReleaseBuilds
+            signingConfig signingConfigs.debug
+            def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
+            shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
-            // Use the optimized default proguard config; R8 will still be in charge.
-            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
             def enablePngCrunchInRelease = findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true'
             crunchPngs enablePngCrunchInRelease.toBoolean()
         }
     }
-    splits {
-        abi {
-            enable true
-            reset()
-            // Only generate split APKs for the ABIs you requested.
-            include "arm64-v8a", "armeabi-v7a", "x86_64"
-            // Also generate a universal APK that includes all ABIs above.
-            universalApk true
-        }
-    }
-
     packagingOptions {
         jniLibs {
             def enableLegacyPackaging = findProperty('expo.useLegacyPackaging') ?: 'false'
@@ -184,21 +129,6 @@ android {
     }
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
-    }
-}
-
-// Ensure each split APK has a unique versionCode.
-android.applicationVariants.all { variant ->
-    variant.outputs.each { output ->
-        // AGP provides the filter key as OutputFile.ABI; to keep this build script IDE-friendly,
-        // we use the literal value.
-        def abi = output.getFilter("ABI")
-        if (abi != null) {
-            output.versionCodeOverride = abiVersionCodes.get(abi)
-        } else {
-            // Universal APK output has no ABI filter.
-            output.versionCodeOverride = abiVersionCodes.get("universal")
-        }
     }
 }
 
