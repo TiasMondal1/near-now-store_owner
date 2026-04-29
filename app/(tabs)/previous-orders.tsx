@@ -220,6 +220,10 @@ export default function OrdersTab() {
     return () => { cancelled = true; };
   }, []);
 
+  const AUTO_COMPLETE_MS = 2 * 60 * 1000;
+  // Ref so fetchActiveOrders can call fetchPreviousOrders without a circular dep
+  const fetchPreviousOrdersRef = useRef<(() => Promise<void>) | null>(null);
+
   const fetchActiveOrders = useCallback(async () => {
     if (!session?.token) return;
     try {
@@ -232,13 +236,38 @@ export default function OrdersTab() {
       }
       const json = await res.json();
       if (json?.success) {
-        // Show both pending and accepted orders in the Active tab
         const active = (json.orders || []).filter(
           (a: Allocation) => a.alloc_status === "accepted" || a.alloc_status === "pending_acceptance"
         );
+
+        // Auto-complete accepted orders older than AUTO_COMPLETE_MS (simulation)
+        const now = Date.now();
+        const toComplete = active.filter((a: Allocation) => {
+          if (a.alloc_status !== "accepted") return false;
+          const ts = (a as any).accepted_at ?? a.placed_at;
+          return ts && now - new Date(ts).getTime() >= AUTO_COMPLETE_MS;
+        });
+
+        if (toComplete.length > 0) {
+          await Promise.allSettled(
+            toComplete.map((a: Allocation) =>
+              fetch(`${API_BASE}/shopkeeper/allocations/${a.allocation_id}/complete`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${session.token}` },
+              }).catch(() => {})
+            )
+          );
+          // Re-fetch after completing so previous tab gets the delivered orders
+          fetchPreviousOrdersRef.current?.();
+        }
+
+        const stillActive = active.filter(
+          (a: Allocation) => !toComplete.some((c: Allocation) => c.allocation_id === a.allocation_id)
+        );
+
         setAllocations((prev) => {
           const prevMap = new Map(prev.map((a) => [a.allocation_id, a]));
-          return active.map((o: Allocation) => ({
+          return stillActive.map((o: Allocation) => ({
             ...o,
             pickup_code: o.pickup_code ?? prevMap.get(o.allocation_id)?.pickup_code ?? null,
           }));
@@ -288,6 +317,9 @@ export default function OrdersTab() {
       setAllOrders([]);
     }
   }, [session, storeId]);
+
+  // Keep the ref current so fetchActiveOrders can call it without a circular dep
+  useEffect(() => { fetchPreviousOrdersRef.current = fetchPreviousOrders; }, [fetchPreviousOrders]);
 
   const acceptAllocation = useCallback(async (allocId: string, itemIds?: string[]) => {
     if (!session?.token || respondingId) return;
@@ -386,7 +418,10 @@ export default function OrdersTab() {
   );
 
   const previousOrders = useMemo(
-    () => allOrders.filter((o: any) => isDelivered(o.status)),
+    () => allOrders.filter((o: any) => {
+      const s = (o.status || "").toLowerCase().replace(/-/g, "_");
+      return isDelivered(o.status) || s === "picked_up" || s === "store_accepted" || s === "ready_for_pickup";
+    }),
     [allOrders]
   );
 
