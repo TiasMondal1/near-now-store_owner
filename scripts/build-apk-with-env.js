@@ -85,17 +85,31 @@ const resolveJava17Home = () => {
 const java17Home = resolveJava17Home();
 if (java17Home) {
   console.log("Using Java home:", java17Home);
-} else {
-  console.warn("JDK 17 not found on macOS. Install it (e.g. brew install openjdk@17) and/or set JAVA_HOME to JDK 17.");
+} else if (process.platform === "darwin") {
+  // This script runs on both Windows and macOS. The macOS-only lookup is
+  // intentionally skipped on Windows, so don't warn there.
+  console.warn(
+    "JDK 17 not found on macOS. Install it (e.g. brew install openjdk@17) and/or set JAVA_HOME to JDK 17."
+  );
 }
 
 const resolveAndroidSdkDir = () => {
+  const winCandidates =
+    process.platform === "win32"
+      ? [
+          process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Android", "Sdk") : null,
+          process.env.USERPROFILE ? path.join(process.env.USERPROFILE, "AppData", "Local", "Android", "Sdk") : null,
+          "C:\\Android\\Sdk",
+        ]
+      : [];
+
   const candidates = [
     process.env.ANDROID_HOME,
     process.env.ANDROID_SDK_ROOT,
     "/Users/tiasmondal166/Library/Android/sdk",
     path.join(process.env.HOME || "", "Library/Android/sdk"),
     "/opt/android-sdk",
+    ...winCandidates,
   ].filter(Boolean);
 
   for (const candidate of candidates) {
@@ -156,23 +170,77 @@ bundleDirs.forEach((dir) => {
   }
 });
 
-const target = (process.argv[2] || "apk").toLowerCase();
-const gradleTask = target === "aab" ? "bundleRelease" : "assembleRelease";
-const outputHint =
-  target === "aab"
-    ? "android/app/build/outputs/bundle/release/app-release.aab"
-    : "android/app/build/outputs/apk/release/app-release.apk";
+const argv = process.argv.slice(2);
+const positionalArgs = argv.filter((a) => !a.startsWith("-"));
 
-console.log(`Gradle task: ${gradleTask} → ${outputHint}\n`);
+const target = (positionalArgs[0] || "apk").toLowerCase();
+const isAab = target === "aab";
+const gradleTask = isAab ? "bundleRelease" : "assembleRelease";
+const ext = isAab ? ".aab" : ".apk";
 
-const result = run([gradleTask]);
+let reactNativeArchitectures = null;
+let alias = null;
+
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+
+  if (a.startsWith("--arch=")) {
+    reactNativeArchitectures = a.slice("--arch=".length);
+  } else if (a === "--arch" && argv[i + 1]) {
+    reactNativeArchitectures = argv[++i];
+  } else if (a.startsWith("--reactNativeArchitectures=")) {
+    reactNativeArchitectures = a.slice("--reactNativeArchitectures=".length);
+  } else if (a === "--reactNativeArchitectures" && argv[i + 1]) {
+    reactNativeArchitectures = argv[++i];
+  } else if (a.startsWith("--alias=")) {
+    alias = a.slice("--alias=".length);
+  } else if (a === "--alias" && argv[i + 1]) {
+    alias = argv[++i];
+  }
+}
+
+const outputHint = isAab
+  ? "android/app/build/outputs/bundle/release/app-release.aab"
+  : "android/app/build/outputs/apk/release/app-release.apk";
+
+const gradleArgs = [gradleTask];
+if (reactNativeArchitectures) {
+  // Controls which ABIs are built. Example: arm64-v8a or armeabi-v7a
+  gradleArgs.push(`-PreactNativeArchitectures=${reactNativeArchitectures}`);
+}
+
+console.log(
+  `Gradle task: ${gradleTask}` +
+    (reactNativeArchitectures ? ` (reactNativeArchitectures=${reactNativeArchitectures})` : "") +
+    ` → ${outputHint}\n`
+);
+
+const result = run(gradleArgs);
 
 if (result.error) {
   console.error("Gradle failed to start:", result.error.message || result.error);
 }
 
 if ((result.status ?? 1) === 0) {
-  console.log(`\nDone. Output: ${path.join(rootDir, outputHint)}`);
+  const builtPath = path.join(rootDir, outputHint);
+  let finalMessage = `\nDone. Output: ${builtPath}`;
+
+  if (alias) {
+    const aliasLower = alias.toLowerCase();
+    const destFilename = aliasLower.endsWith(".apk") || aliasLower.endsWith(".aab") ? alias : `${alias}${ext}`;
+    // Gradle may wipe the `release/` output directory between builds, which would
+    // delete our copied files. Keep them in a stable variants folder instead.
+    const destDir = isAab
+      ? path.join(rootDir, "android", "app", "build", "outputs", "bundle", "variants")
+      : path.join(rootDir, "android", "app", "build", "outputs", "apk", "variants");
+    fs.mkdirSync(destDir, { recursive: true });
+    const destPath = path.join(destDir, destFilename);
+
+    fs.copyFileSync(builtPath, destPath);
+    finalMessage += `\nCopied to: ${destPath}`;
+  }
+
+  console.log(finalMessage);
 }
 
 process.exit(result.status ?? 1);
