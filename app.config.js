@@ -1,6 +1,8 @@
 // Single-source dynamic Expo config (no app.json).
 // Uses EXPO_PUBLIC_API_BASE_URL and your custom logo for icons.
 
+const withAbiSplits = require("./plugins/withAbiSplits");
+
 module.exports = () => {
   const googleMapsApiKey =
     process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ||
@@ -56,7 +58,7 @@ module.exports = () => {
       url: "https://u.expo.dev/f0f709ec-f013-416a-b543-729b80cbd4b0",
     },
     runtimeVersion: "1.0.0",
-    plugins: ["expo-router", "expo-font"],
+    plugins: ["expo-router", "expo-font", withAbiSplits],
     extra: {
       apiBaseUrl:
         process.env.EXPO_PUBLIC_API_BASE_URL ||
