@@ -14,3 +14,8 @@ local.properties
 
 # Bundle artifacts
 *.jsbundle
+
+# Signing credentials — never commit these
+keystore.properties
+*.keystore
+*.jks
