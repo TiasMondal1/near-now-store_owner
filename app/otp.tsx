@@ -46,11 +46,24 @@ export default function StoreOwnerOtpScreen() {
 
   const handleDigitChange = (index: number, value: string) => {
     const only = value.replace(/[^0-9]/g, "");
+
+    if (only.length > 1) {
+      // SMS autofill or paste — fill all 6 boxes starting from index 0
+      const nextDigits = ["", "", "", "", "", ""];
+      for (let i = 0; i < 6; i++) {
+        nextDigits[i] = only[i] ?? "";
+      }
+      setDigits(nextDigits);
+      // Focus the last filled box (or box 5)
+      inputsRef.current[Math.min(only.length - 1, 5)]?.focus();
+      return;
+    }
+
     const nextDigits = [...digits];
-    nextDigits[index] = only.slice(-1);
+    nextDigits[index] = only;
     setDigits(nextDigits);
 
-    if (only && index < inputsRef.current.length - 1) {
+    if (only && index < 5) {
       inputsRef.current[index + 1]?.focus();
     }
   };
@@ -319,18 +332,16 @@ export default function StoreOwnerOtpScreen() {
               {digits.map((d, idx) => (
                 <TextInput
                   key={idx}
-                  ref={(el) => {
-                  inputsRef.current[idx] = el;
-                }}
+                  ref={(el) => { inputsRef.current[idx] = el; }}
                   style={styles.otpInput}
                   keyboardType="number-pad"
-                  maxLength={1}
                   value={d}
                   onChangeText={(v) => handleDigitChange(idx, v)}
-                  onKeyPress={({ nativeEvent }) =>
-                    handleKeyPress(idx, nativeEvent.key)
-                  }
+                  onKeyPress={({ nativeEvent }) => handleKeyPress(idx, nativeEvent.key)}
                   autoFocus={idx === 0}
+                  textContentType="oneTimeCode"
+                  autoComplete={idx === 0 ? "sms-otp" : "off"}
+                  importantForAutofill={idx === 0 ? "yes" : "no"}
                 />
               ))}
             </View>
