@@ -98,7 +98,26 @@ function deleteAndroidDirWithRetry() {
   );
 }
 
-// ─── 5. Run expo prebuild ─────────────────────────────────────────────────────
+// ─── 5. Write local.properties (always recreate after expo deletes android/) ──
+function writeLocalProperties() {
+  const localProps = path.join(androidDir, "local.properties");
+  if (fs.existsSync(localProps)) return;
+
+  const sdkDir = (
+    process.env.ANDROID_HOME ||
+    process.env.ANDROID_SDK_ROOT ||
+    path.join(process.env.LOCALAPPDATA || "", "Android", "Sdk")
+  ).replace(/\\/g, "\\\\");
+
+  try {
+    fs.writeFileSync(localProps, `sdk.dir=${sdkDir}\n`, "utf8");
+    console.log(`Wrote local.properties (sdk.dir=${sdkDir})`);
+  } catch (e) {
+    console.warn("Could not write local.properties:", e.message);
+  }
+}
+
+// ─── 6. Run expo prebuild ─────────────────────────────────────────────────────
 function runExpoPrebuild() {
   const args = ["expo", "prebuild", "--platform", "android", "--clean"];
   console.log(`Running: npx ${args.join(" ")}`);
@@ -119,4 +138,6 @@ sleep(800); // give the OS a moment to release file handles after kills
 removeGradleLocks();
 deleteAndroidDirWithRetry();
 
-process.exit(runExpoPrebuild());
+const exitCode = runExpoPrebuild();
+writeLocalProperties(); // restore after expo regenerates android/
+process.exit(exitCode);
