@@ -39,8 +39,8 @@ export function useOrders(token: string | null, _storeId?: string | null) {
   const [incomingAlloc, setIncomingAlloc] = useState<Allocation | null>(null);
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState(ORDER_TIMEOUT_SECONDS);
-  const [pickupCode, setPickupCode] = useState<string | null>(null);
 
+  const [pickupCode, setPickupCode] = useState<string | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const deadlineRef = useRef<number | null>(null);
   const incomingRef = useRef<Allocation | null>(null);
@@ -165,9 +165,8 @@ export function useOrders(token: string | null, _storeId?: string | null) {
         }
       );
       const json = await res.json();
-      if (json?.success && json?.pickup_code) {
-        setPickupCode(json.pickup_code);
-      }
+      if (!json?.success) throw new Error(json?.error || 'Accept failed');
+      if (json?.pickup_code) setPickupCode(json.pickup_code);
       closeIncomingOrder();
       fetchOrders();
     } catch {

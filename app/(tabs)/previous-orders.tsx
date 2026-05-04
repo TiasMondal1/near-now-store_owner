@@ -563,7 +563,7 @@ export default function OrdersTab() {
                 </View>
               </View>
 
-              {/* Pickup code */}
+              {/* Pickup code — shown after shopkeeper accepts; tell this to the delivery partner */}
               {a.pickup_code && (
                 <View style={styles.pickupCodeBox}>
                   <Ionicons name="key-outline" size={14} color={colors.primary} style={{ marginRight: 6 }} />
@@ -571,7 +571,7 @@ export default function OrdersTab() {
                     <Text style={styles.pickupCodeLabel}>Pickup Code</Text>
                     <Text style={styles.pickupCodeValue}>{a.pickup_code}</Text>
                   </View>
-                  <Text style={styles.pickupCodeHint}>Give to driver</Text>
+                  <Text style={styles.pickupCodeHint}>Tell to driver</Text>
                 </View>
               )}
 
