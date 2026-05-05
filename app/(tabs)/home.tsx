@@ -397,19 +397,27 @@ export default function HomeTab() {
   }, [session?.token, fetchStoreProducts]);
 
   const deleteProduct = useCallback(async (product: any) => {
-    if (!product.storeProductId || !supabase) return;
+    if (!product.storeProductId || !session?.token) return;
 
-    const { error } = await supabase
-      .from("products")
-      .delete()
-      .eq("id", product.storeProductId);
-
-    if (error) return;
+    try {
+      const res = await fetch(`${config.API_BASE}/store-owner/products/${product.storeProductId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        Alert.alert("Error", body.error || "Failed to remove product. Please try again.");
+        return;
+      }
+    } catch {
+      Alert.alert("Error", "Network error. Please try again.");
+      return;
+    }
 
     setStoreProducts((prev) => prev.filter((p) => p.id !== product.id));
     await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
     await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
-  }, []);
+  }, [session?.token]);
 
   if (loading) {
     return (
