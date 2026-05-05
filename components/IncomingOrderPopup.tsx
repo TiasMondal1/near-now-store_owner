@@ -29,13 +29,12 @@ export default function IncomingOrderPopup({
   onAccept: (acceptedItemIds: string[]) => void;
   onReject: () => void;
 }) {
-  const [checkedIds, setCheckedIds] = useState<Set<string>>(() =>
-    new Set(alloc?.items.map((i) => i.id) ?? [])
-  );
+  // Start unchecked — shopkeeper confirms what they actually have
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
 
-  // Reset checkboxes when a new alloc comes in
+  // Reset to all-unchecked when a new allocation arrives
   React.useEffect(() => {
-    setCheckedIds(new Set(alloc?.items.map((i) => i.id) ?? []));
+    setCheckedIds(new Set());
   }, [alloc?.allocation_id]);
 
   if (!alloc) return null;
@@ -48,7 +47,11 @@ export default function IncomingOrderPopup({
     });
   };
 
+  const tickAll = () => setCheckedIds(new Set(alloc.items.map((i) => i.id)));
+  const untickAll = () => setCheckedIds(new Set());
+
   const selectedCount = checkedIds.size;
+  const allSelected = selectedCount === alloc.items.length;
 
   return (
     <Modal visible={visible} transparent animationType="fade">
@@ -77,10 +80,17 @@ export default function IncomingOrderPopup({
             </View>
           )}
 
-          {/* Items — check off any unavailable ones */}
-          <Text style={styles.sectionLabel}>
-            Mark items you CAN fulfil ({selectedCount}/{alloc.items.length})
-          </Text>
+          {/* Items — tick what you have in stock */}
+          <View style={styles.sectionRow}>
+            <Text style={styles.sectionLabel}>
+              Tick items you have ({selectedCount}/{alloc.items.length})
+            </Text>
+            <TouchableOpacity onPress={allSelected ? untickAll : tickAll} activeOpacity={0.7}>
+              <Text style={styles.selectAllBtn}>
+                {allSelected ? "Deselect All" : "Select All"}
+              </Text>
+            </TouchableOpacity>
+          </View>
 
           <ScrollView style={styles.itemsList} showsVerticalScrollIndicator={false}>
             {alloc.items.map((item) => {
@@ -176,13 +186,23 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   distanceText: { color: MUTED, fontSize: 12 },
+  sectionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
   sectionLabel: {
     color: MUTED,
     fontSize: 11,
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 0.5,
-    marginBottom: 8,
+  },
+  selectAllBtn: {
+    color: PRIMARY,
+    fontSize: 12,
+    fontWeight: "700",
   },
   itemsList: { maxHeight: 200, marginBottom: 14 },
   itemRow: {
