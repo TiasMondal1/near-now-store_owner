@@ -32,12 +32,15 @@ function formatDateTime(dateStr: string | null | undefined): string {
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
-  let label: string;
-  if (d.toDateString() === today.toDateString()) label = "Today";
-  else if (d.toDateString() === yesterday.toDateString()) label = "Yesterday";
-  else label = d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-  const time = d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-  return `${label}, ${time}`;
+  // Use toLocaleString for time-only extraction (reliable across RN engines)
+  const time = d.toLocaleString("en-IN", { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === today.toDateString()) return `Today, ${time}`;
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday, ${time}`;
+  // Single combined call — same pattern as rider app, proven reliable on Hermes
+  return d.toLocaleDateString("en-IN", {
+    day: "numeric", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
 }
 
 function formatINR(value: number): string {
@@ -94,7 +97,7 @@ const PayoutCard = React.memo(function PayoutCard({
   onPress: () => void;
 }) {
   const { order, amount } = item;
-  const dateLabel = formatDateTime(order.created_at) || dateFromOrderCode(order.order_code);
+  const dateLabel = formatDateTime(order.placed_at ?? order.created_at) || dateFromOrderCode(order.order_code);
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>

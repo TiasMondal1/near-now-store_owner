@@ -72,6 +72,8 @@ export type OrderForStore = {
   status: string;
   total_amount: number;
   created_at: string;
+  /** Exact time the customer placed the order (from customer_orders). Prefer over created_at for display. */
+  placed_at?: string;
   order_items: Array<{
     id: string;
     product_name: string;

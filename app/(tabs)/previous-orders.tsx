@@ -74,14 +74,16 @@ function resolveOrderDate(o: any): Date | null {
  * Returns a display string for the order date + time.
  * Prefers placed_at (customer_orders — always has exact time) over created_at
  * (store_orders — may be date-only). Falls back to order-code date with no time.
+ * Uses a single toLocaleDateString call with combined date+time options — more
+ * reliable on React Native (Hermes) than a separate toLocaleTimeString call.
  */
 function resolveOrderDateStr(o: any): string {
-  // placed_at from customer_orders has the real order time
   const fromTs = safeDate(o.placed_at) || safeDate(o.created_at);
   if (fromTs) {
-    const date = fromTs.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-    const time = fromTs.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-    return `${date}, ${time}`;
+    return fromTs.toLocaleDateString("en-IN", {
+      day: "numeric", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
   }
   const d = dateFromOrderCode(o.order_code);
   return d ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "";
