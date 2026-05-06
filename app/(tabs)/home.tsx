@@ -12,7 +12,6 @@ import {
   Image,
   Alert,
   Animated,
-  InteractionManager,
   TextInput,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -65,7 +64,7 @@ export default function HomeTab() {
   const [storeProducts, setStoreProducts] = useState<
     Array<{ id: string; name: string; unit?: string; storeProductId?: string; is_active?: boolean; quantity?: number }>
   >([]);
-  const [storeProductsLoading, setStoreProductsLoading] = useState(false);
+  const [storeProductsLoading, setStoreProductsLoading] = useState(true);
   const [togglingProductId, setTogglingProductId] = useState<string | null>(null);
   const [stockExpanded, setStockExpanded] = useState(false);
   const [stockSearchOpen, setStockSearchOpen] = useState(false);
@@ -166,85 +165,54 @@ export default function HomeTab() {
 
   // Initial data load when session + store are ready
   useEffect(() => {
-    if (!session || !selectedStore) return;
-    const task = InteractionManager.runAfterInteractions(() => {
-      fetchStoreProducts();
-    });
-    return () => { task.cancel && task.cancel(); };
-  }, [session, selectedStore]);
+    if (!session?.token || !selectedStore?.id) return;
+    fetchStoreProducts();
+    // fetchStoreProducts is memoized on the same [session?.token, selectedStore?.id] deps
+    // so it's always current when these primitives change — no need to include it here
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.token, selectedStore?.id]);
+
+  // Ref is declared here so the channel callback below can reference it safely.
+  // The sync effect that writes to it is placed after fetchStoreProducts is declared.
+  const fetchStoreProductsRef = useRef<((silent?: boolean) => Promise<void>) | null>(null);
 
   useEffect(() => {
-    if (!selectedStore?.id) return;
+    if (!selectedStore?.id || !supabase) return;
 
-    let cancelled = false;
-    let channel: any = null;
+    const channel = supabase
+      .channel(`products-${selectedStore.id}-${Date.now()}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "products", filter: `store_id=eq.${selectedStore.id}` }, () => {
+        fetchStoreProductsRef.current?.(true);
+      })
+      .subscribe();
 
-    const task = InteractionManager.runAfterInteractions(() => {
-      if (cancelled || !selectedStore?.id || !supabase) return;
-
-      channel = supabase
-        .channel(`products-${selectedStore.id}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "products",
-            filter: `store_id=eq.${selectedStore.id}`,
-          },
-          () => { fetchStoreProducts(true); }
-        )
-        .subscribe();
-    });
-
-    return () => {
-      cancelled = true;
-      task.cancel && task.cancel();
-      if (channel) {
-        supabase?.removeChannel(channel);
-        channel = null;
-      }
-    };
+    return () => { supabase?.removeChannel(channel); };
   }, [selectedStore?.id]);
 
   useEffect(() => {
-    if (!selectedStore?.id || !session?.token) return;
+    if (!selectedStore?.id || !session?.token || !supabase) return;
 
-    let cancelled = false;
-    let channel: any = null;
+    const token = session.token;
+    const userId = session.user?.id;
+    const channel = supabase
+      .channel(`store-${selectedStore.id}-${Date.now()}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${selectedStore.id}` }, () => {
+        fetchStores(token, userId);
+      })
+      .subscribe();
 
-    const task = InteractionManager.runAfterInteractions(() => {
-      if (cancelled || !selectedStore?.id || !session?.token || !supabase) return;
-
-      channel = supabase
-        .channel(`store-${selectedStore.id}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "stores",
-            filter: `id=eq.${selectedStore.id}`,
-          },
-          () => {
-            if (session?.token) fetchStores(session.token, session.user?.id);
-          }
-        )
-        .subscribe();
-    });
-
-    return () => {
-      cancelled = true;
-      task.cancel && task.cancel();
-      if (channel) {
-        supabase?.removeChannel(channel);
-        channel = null;
-      }
-    };
+    return () => { supabase?.removeChannel(channel); };
   }, [selectedStore?.id, session?.token]);
 
+  const firstFocusRef = useRef(true);
   useFocusEffect(
     React.useCallback(() => {
+      // Skip the very first focus (initial mount) — the useEffect above already
+      // calls fetchStoreProducts on mount. Only refresh on subsequent focuses.
+      if (firstFocusRef.current) {
+        firstFocusRef.current = false;
+        return;
+      }
       if (session?.token && selectedStore?.id) {
         fetchStoreProducts(true);
       }
@@ -276,6 +244,8 @@ export default function HomeTab() {
       if (!silent) setStoreProductsLoading(false);
     }
   }, [session?.token, selectedStore?.id]);
+  // Keep ref current so the Supabase channel callback always calls the latest version
+  useEffect(() => { fetchStoreProductsRef.current = fetchStoreProducts; }, [fetchStoreProducts]);
 
   const fetchStores = useCallback(async (token: string, userId?: string): Promise<StoreRow[]> => {
     try {
@@ -410,7 +380,7 @@ export default function HomeTab() {
 
     setStoreProducts((prev) => prev.filter((p) => p.id !== product.id));
     await AsyncStorage.multiRemove(CACHE_KEYS);
-  }, [session?.token]);
+  }, []);
 
   if (loading) {
     return (

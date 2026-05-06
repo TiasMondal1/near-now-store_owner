@@ -148,7 +148,8 @@ async function getOrdersFromDbViaCustomerOrders(storeId: string): Promise<OrderF
       order_code: co?.order_code ?? `ORD-${String(so.id).slice(0, 8)}`,
       status,
       total_amount: storeTotal > 0 ? storeTotal : Number(co?.total_amount ?? 0),
-      created_at: so.created_at ?? co?.placed_at ?? new Date().toISOString(),
+      created_at: so.created_at || co?.placed_at || new Date().toISOString(),
+      placed_at: co?.placed_at || so.created_at || undefined,
       order_items,
       store_id: so.store_id,
       customer_order_id: so.customer_order_id ?? co?.id,
@@ -192,12 +193,15 @@ async function getOrdersFromDbViaRpc(storeId: string): Promise<OrderForStore[]> 
     raw = [data];
   }
 
-  return raw.map((row) => ({
+  const mapped: OrderForStore[] = raw.map((row) => ({
     id: row.id,
     order_code: row.order_code ?? `ORD-${String(row.id).slice(0, 8)}`,
     status: row.status ?? "pending_store",
     total_amount: Number(row.total_amount ?? 0),
-    created_at: row.created_at ?? new Date().toISOString(),
+    created_at: row.created_at || row.placed_at || new Date().toISOString(),
+    placed_at: row.placed_at || row.created_at || undefined,
+    subtotal_amount: row.subtotal_amount != null ? Number(row.subtotal_amount) : undefined,
+    delivery_fee: row.delivery_fee != null ? Number(row.delivery_fee) : undefined,
     order_items: Array.isArray(row.order_items) ? row.order_items.map((it: any) => ({
       id: it.id,
       product_name: it.product_name ?? "Item",
@@ -209,6 +213,30 @@ async function getOrdersFromDbViaRpc(storeId: string): Promise<OrderForStore[]> 
     store_id: row.store_id,
     customer_order_id: row.customer_order_id,
   })) as OrderForStore[];
+
+  // If the RPC didn't include placed_at (SQL function may not expose it),
+  // do one batch query to customer_orders to get the exact order timestamps.
+  const needsTs = mapped.filter((o) => !o.placed_at && o.customer_order_id);
+  if (needsTs.length > 0) {
+    const coIds = [...new Set(needsTs.map((o) => o.customer_order_id as string))];
+    const { data: coData } = await supabase
+      .from("customer_orders")
+      .select("id, placed_at")
+      .in("id", coIds);
+    if (coData?.length) {
+      const tsMap: Record<string, string> = {};
+      (coData as { id: string; placed_at?: string }[]).forEach(
+        (co) => { if (co.placed_at) tsMap[co.id] = co.placed_at; }
+      );
+      return mapped.map((o) => {
+        const ts = o.customer_order_id ? tsMap[o.customer_order_id as string] : undefined;
+        if (!ts) return { ...o, created_at: o.created_at || new Date().toISOString() };
+        return { ...o, placed_at: ts, created_at: o.created_at || ts };
+      });
+    }
+  }
+
+  return mapped.map((o) => ({ ...o, created_at: o.created_at || new Date().toISOString() }));
 }
 
 /**
@@ -317,12 +345,53 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[
       order_code: co?.order_code ?? `ORD-${String(so.id).slice(0, 8)}`,
       status,
       total_amount: storeTotal > 0 ? storeTotal : Number(co?.total_amount ?? 0),
-      created_at: so.created_at ?? co?.placed_at ?? new Date().toISOString(),
+      created_at: so.created_at || co?.placed_at || new Date().toISOString(),
+      placed_at: co?.placed_at || so.created_at || undefined,
       order_items,
       store_id: so.store_id,
       customer_order_id: so.customer_order_id ?? undefined,
     } as OrderForStore;
   });
+}
+
+/**
+ * Fetch placed_at for a batch of store_order ids.
+ * Returns a map of store_order_id → placed_at string.
+ * Uses the same two-step pattern as getOrderByIdFromDb (which is known to work):
+ *   1. store_orders → get customer_order_id
+ *   2. customer_orders → get placed_at
+ */
+export async function getPlacedAtMap(storeOrderIds: string[]): Promise<Record<string, string>> {
+  if (!supabase || storeOrderIds.length === 0) return {};
+
+  const { data: soRows } = await supabase
+    .from("store_orders")
+    .select("id, customer_order_id")
+    .in("id", storeOrderIds);
+
+  if (!soRows?.length) return {};
+
+  const coIdByStoreId: Record<string, string> = {};
+  (soRows as { id: string; customer_order_id?: string }[]).forEach((r) => {
+    if (r.customer_order_id) coIdByStoreId[r.id] = r.customer_order_id;
+  });
+
+  const coIds = Object.values(coIdByStoreId);
+  if (coIds.length === 0) return {};
+
+  const { data: coRows } = await supabase
+    .from("customer_orders")
+    .select("id, placed_at")
+    .in("id", coIds);
+
+  const coTs: Record<string, string> = {};
+  (coRows ?? []).forEach((co: any) => { if (co.placed_at) coTs[co.id] = co.placed_at; });
+
+  const result: Record<string, string> = {};
+  Object.entries(coIdByStoreId).forEach(([storeId, coId]) => {
+    if (coTs[coId]) result[storeId] = coTs[coId];
+  });
+  return result;
 }
 
 /** Fetch a single store_order with items (for order details modal). */
@@ -379,7 +448,8 @@ export async function getOrderByIdFromDb(orderId: string): Promise<OrderForStore
     order_code: co?.order_code ?? `ORD-${String(so.id).slice(0, 8)}`,
     status,
     total_amount: storeTotal > 0 ? storeTotal : Number(co?.total_amount ?? 0),
-    created_at: so.created_at ?? co?.placed_at ?? new Date().toISOString(),
+    created_at: so.created_at || co?.placed_at || new Date().toISOString(),
+    placed_at: co?.placed_at || so.created_at || undefined,
     order_items,
   } as OrderForStore;
 }

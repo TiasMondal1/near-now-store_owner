@@ -47,18 +47,44 @@ type Allocation = {
   customer_distance: string | null;
 };
 
-function formatDateLabel(dateStr: string): string {
-  const d = new Date(dateStr);
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  if (d.toDateString() === today.toDateString()) return "Today";
-  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+/** Normalise Postgres timestamps: `2024-01-15 10:30:00+05:30` → ISO with T. */
+function safeDate(str: string | null | undefined): Date | null {
+  if (!str) return null;
+  const s = str.trim().replace(/^(\d{4}-\d{2}-\d{2})\s/, "$1T");
+  const d = new Date(s);
+  return Number.isFinite(d.getTime()) ? d : null;
 }
 
-function formatTime(dateStr: string): string {
-  return new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+/** Parse date from order code like NN20260429-0012 → Date object */
+function dateFromOrderCode(code: string | null | undefined): Date | null {
+  if (!code) return null;
+  const m = code.match(/(\d{4})(\d{2})(\d{2})/);
+  if (!m) return null;
+  // Use local noon to avoid UTC-midnight → IST 5:30 AM conversion artifact
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
+/** Best available date for an order — created_at → placed_at → order code */
+function resolveOrderDate(o: any): Date | null {
+  return safeDate(o.created_at) || safeDate(o.placed_at) || dateFromOrderCode(o.order_code);
+}
+
+/**
+ * Returns a display string for the order date + time.
+ * Prefers placed_at (customer_orders — always has exact time) over created_at
+ * (store_orders — may be date-only). Falls back to order-code date with no time.
+ */
+function resolveOrderDateStr(o: any): string {
+  // placed_at from customer_orders has the real order time
+  const fromTs = safeDate(o.placed_at) || safeDate(o.created_at);
+  if (fromTs) {
+    const date = fromTs.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+    const time = fromTs.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+    return `${date}, ${time}`;
+  }
+  const d = dateFromOrderCode(o.order_code);
+  return d ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "";
 }
 
 const AllocationCard = React.memo(function AllocationCard({
@@ -155,7 +181,7 @@ const AllocationCard = React.memo(function AllocationCard({
         <View style={allocStyles.cardFooter}>
           <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
           <Text style={allocStyles.cardFooterText}>
-            {formatTime(alloc.placed_at)} · {new Date(alloc.placed_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+            {safeDate(alloc.placed_at)?.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })} · {safeDate(alloc.placed_at)?.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
           </Text>
         </View>
       )}
@@ -178,6 +204,15 @@ export default function OrdersTab() {
 
   const [allOrders, setAllOrders] = useState<any[]>([]);
   const [prevLoading, setPrevLoading] = useState(true);
+  const [collapsedDates, setCollapsedDates] = useState<Set<string>>(new Set());
+
+  const toggleDate = useCallback((title: string) => {
+    setCollapsedDates((prev) => {
+      const next = new Set(prev);
+      next.has(title) ? next.delete(title) : next.add(title);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const anim = Animated.parallel([
@@ -291,20 +326,29 @@ export default function OrdersTab() {
     try {
       const fromDb = await getOrdersFromDb(storeId);
       if (Array.isArray(fromDb) && fromDb.length > 0) {
-        const withItems = await Promise.all(
+        // Single pass: fetch items AND placed_at together for any order that needs either.
+        // getOrderByIdFromDb does the proven two-step lookup (store_orders → customer_orders)
+        // which is known to return placed_at correctly (same as the individual detail view).
+        const withTs = await Promise.all(
           fromDb.map(async (o: any) => {
-            if (Array.isArray(o.order_items) && o.order_items.length > 0) return o;
+            const needsItems = !Array.isArray(o.order_items) || o.order_items.length === 0;
+            const needsTs = !o.placed_at;
+            if (!needsItems && !needsTs) return o;
             if (!o?.id) return o;
             try {
               const detail = await getOrderByIdFromDb(String(o.id));
               if (!detail) return o;
-              return { ...o, order_items: detail.order_items };
+              return {
+                ...o,
+                ...(needsItems ? { order_items: detail.order_items } : {}),
+                ...(needsTs && detail.placed_at ? { placed_at: detail.placed_at } : {}),
+              };
             } catch {
               return o;
             }
           })
         );
-        setAllOrders(withItems);
+        setAllOrders(withTs);
         return;
       }
     } catch { /* fall through to HTTP */ }
@@ -431,17 +475,34 @@ export default function OrdersTab() {
     [allOrders]
   );
 
-  // Group previous orders by date
+  // Group previous orders by calendar date, newest first
   const groupedPreviousOrders = useMemo(() => {
+    const sorted = [...previousOrders].sort((a, b) => {
+      const ta = resolveOrderDate(a)?.getTime() ?? 0;
+      const tb = resolveOrderDate(b)?.getTime() ?? 0;
+      return tb - ta;
+    });
     const groups: Record<string, any[]> = {};
-    for (const o of previousOrders) {
-      const rawDate = o.created_at ?? o.createdAt ?? o.placed_at ?? "";
-      const label = rawDate ? formatDateLabel(rawDate) : "Unknown Date";
-      if (!groups[label]) groups[label] = [];
+    const groupOrder: string[] = [];
+    for (const o of sorted) {
+      const d = resolveOrderDate(o);
+      const label = d
+        ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+        : "Unknown Date";
+      if (!groups[label]) { groups[label] = []; groupOrder.push(label); }
       groups[label].push(o);
     }
-    return Object.entries(groups).map(([title, data]) => ({ title, data }));
+    return groupOrder.map((title) => ({ title, totalCount: groups[title].length, data: groups[title] }));
   }, [previousOrders]);
+
+  // Collapse sections whose title is in collapsedDates
+  const visibleSections = useMemo(
+    () => groupedPreviousOrders.map((s) => ({
+      ...s,
+      data: collapsedDates.has(s.title) ? [] : s.data,
+    })),
+    [groupedPreviousOrders, collapsedDates]
+  );
 
   if (allocLoading && prevLoading) {
     return (
@@ -468,7 +529,7 @@ export default function OrdersTab() {
             </View>
           )}
           {tab === "previous" && previousOrders.length > 0 && (
-            <View style={[styles.countBadge, { backgroundColor: colors.textTertiary }]}>
+            <View style={[styles.countBadge, { backgroundColor: "#3B82F6" }]}>
               <Text style={styles.countBadgeText}>{previousOrders.length}</Text>
             </View>
           )}
@@ -482,7 +543,7 @@ export default function OrdersTab() {
             return (
               <TouchableOpacity
                 key={t}
-                style={[styles.tab, isActive && styles.tabActive, t === "incoming" && isActive && styles.tabActiveIncoming]}
+                style={[styles.tab, isActive && styles.tabActive, t === "incoming" && isActive && styles.tabActiveIncoming, t === "previous" && isActive && styles.tabActivePrevious]}
                 onPress={() => setTab(t)}
               >
                 {t === "incoming" && incomingAllocations.length > 0 && !isActive && (
@@ -595,7 +656,7 @@ export default function OrdersTab() {
                 <View style={styles.cardFooter}>
                   <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
                   <Text style={styles.orderTime}>
-                    {formatTime(a.placed_at)} · {new Date(a.placed_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                    {safeDate(a.placed_at)?.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })} · {safeDate(a.placed_at)?.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
                   </Text>
                   <Text style={styles.itemCountBadge}>{a.items.length} item{a.items.length !== 1 ? "s" : ""}</Text>
                 </View>
@@ -607,73 +668,85 @@ export default function OrdersTab() {
         /* Previous orders tab */
         previousOrders.length === 0 ? (
           <View style={styles.emptyWrap}>
-            <View style={styles.emptyIconWrap}>
-              <Ionicons name="time-outline" size={40} color={colors.primary} />
+            <View style={[styles.emptyIconWrap, { backgroundColor: "#3B82F6" + "18" }]}>
+              <Ionicons name="time-outline" size={40} color="#3B82F6" />
             </View>
             <Text style={styles.emptyTitle}>No previous orders</Text>
             <Text style={styles.emptySub}>Delivered orders will appear here</Text>
           </View>
         ) : (
           <SectionList
-            sections={groupedPreviousOrders}
+            sections={visibleSections}
             keyExtractor={(o) => o.id}
             contentContainerStyle={styles.list}
             refreshing={false}
             onRefresh={fetchPreviousOrders}
             stickySectionHeadersEnabled={false}
-            renderSectionHeader={({ section }) => (
-              <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionHeaderText}>{section.title}</Text>
-                <View style={styles.sectionHeaderLine} />
-              </View>
-            )}
+            renderSectionHeader={({ section }) => {
+              const collapsed = collapsedDates.has(section.title);
+              return (
+                <TouchableOpacity
+                  style={styles.sectionHeaderRow}
+                  onPress={() => toggleDate(section.title)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.sectionHeaderText}>{section.title}</Text>
+                  <View style={styles.sectionHeaderLine} />
+                  <View style={styles.sectionHeaderRight}>
+                    <Text style={styles.sectionHeaderCount}>
+                      {section.totalCount}
+                    </Text>
+                    <Ionicons
+                      name={collapsed ? "chevron-forward" : "chevron-down"}
+                      size={14}
+                      color={colors.textTertiary}
+                    />
+                  </View>
+                </TouchableOpacity>
+              );
+            }}
             renderItem={({ item: o }) => {
-              const rawDate = o.created_at ?? o.createdAt ?? o.placed_at ?? "";
-              const validDate = rawDate && !Number.isNaN(new Date(rawDate).getTime());
+              const dateTimeStr = resolveOrderDateStr(o);
               const statusColor = getStatusColor(o.status);
-              const itemCount = Array.isArray(o.order_items) ? o.order_items.length : 0;
-              const itemPreview = Array.isArray(o.order_items)
-                ? o.order_items.slice(0, 2).map((it: any) => it?.product_name).filter(Boolean).join(", ")
-                : "";
-              const hasMore = itemCount > 2;
-
+              const items: any[] = Array.isArray(o.order_items) ? o.order_items : [];
+              const itemCount = items.length;
               return (
                 <TouchableOpacity
                   style={styles.prevCard}
-                  onPress={() => router.push(`/invoice/${o.id}`)}
+                  onPress={() => router.push(`/invoice/${o.id}?source=orders`)}
                   activeOpacity={0.72}
                 >
-                  <View style={[styles.prevCardAccent, { backgroundColor: statusColor }]} />
+                  <View style={styles.prevCardAccent} />
 
-                  <View style={styles.prevCardBody}>
-                    <Text style={styles.prevCardCode}>#{o.order_code}</Text>
-
-                    {itemPreview ? (
-                      <Text style={styles.prevCardItems} numberOfLines={1}>
-                        {itemPreview}{hasMore ? ` +${itemCount - 2} more` : ""}
-                      </Text>
-                    ) : null}
-
-                    <View style={styles.prevCardBottom}>
-                      {validDate && (
-                        <View style={styles.metaRow}>
-                          <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
-                          <Text style={styles.prevCardTime}>{formatTime(rawDate)}</Text>
-                        </View>
-                      )}
-                      {itemCount > 0 && (
-                        <Text style={styles.prevCardItemCount}>{itemCount} item{itemCount !== 1 ? "s" : ""}</Text>
-                      )}
-                      <View style={styles.spacer} />
-                      <View style={[styles.statusPill, { backgroundColor: statusColor + "18", borderColor: statusColor + "50" }]}>
+                  <View style={{ flex: 1 }}>
+                    {/* Top row: order code + status badge */}
+                    <View style={styles.prevCardTop}>
+                      <View style={{ flex: 1, gap: 5 }}>
+                        <Text style={styles.prevCardCode}>#{o.order_code ?? "—"}</Text>
+                        {dateTimeStr ? (
+                          <View style={styles.metaRow}>
+                            <Ionicons name="calendar-outline" size={11} color="#3B82F6" />
+                            <Text style={styles.prevCardTime}>{dateTimeStr}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <View style={[styles.statusPill, { backgroundColor: statusColor + "18", borderColor: statusColor + "40" }]}>
                         <Text style={[styles.statusPillText, { color: statusColor }]}>
                           {formatStatus(o.status)}
                         </Text>
                       </View>
                     </View>
-                  </View>
 
-                  <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} style={styles.prevCardChevron} />
+                    {/* Footer: item count + chevron */}
+                    <View style={styles.prevCardFooter}>
+                      <Ionicons name="cube-outline" size={12} color="#3B82F6" />
+                      <Text style={styles.prevCardItemCount}>
+                        {itemCount} item{itemCount !== 1 ? "s" : ""}
+                      </Text>
+                      <View style={styles.spacer} />
+                      <Ionicons name="chevron-forward" size={14} color={colors.textTertiary} />
+                    </View>
+                  </View>
                 </TouchableOpacity>
               );
             }}
@@ -741,6 +814,11 @@ const styles = StyleSheet.create({
     borderColor: "#FF9800",
     shadowColor: "#FF9800",
   },
+  tabActivePrevious: {
+    backgroundColor: "#3B82F6",
+    borderColor: "#3B82F6",
+    shadowColor: "#3B82F6",
+  },
   tabIncomingDot: {
     width: 7,
     height: 7,
@@ -765,6 +843,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginBottom: spacing.xs,
     marginTop: spacing.sm,
+    paddingVertical: 4,
   },
   sectionHeaderText: {
     color: colors.textTertiary,
@@ -779,57 +858,75 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: colors.borderLight,
   },
+  sectionHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    flexShrink: 0,
+  },
+  sectionHeaderCount: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    fontWeight: "700",
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.full,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    overflow: "hidden",
+  },
 
   // ── Previous order card ────────────────────────────────────────
   prevCard: {
     flexDirection: "row",
-    alignItems: "stretch",
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     overflow: "hidden",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 1,
+    shadowColor: "#3B82F6",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
     marginBottom: spacing.xs,
   },
   prevCardAccent: {
     width: 4,
+    backgroundColor: "#3B82F6",
     alignSelf: "stretch",
   },
-  prevCardBody: {
-    flex: 1,
-    paddingVertical: spacing.md,
+  prevCardTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
     paddingHorizontal: spacing.md,
-    gap: 4,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xs,
   },
   prevCardCode: {
     color: colors.textPrimary,
     fontSize: 15,
     fontWeight: "700",
   },
-  prevCardItems: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    marginTop: 1,
+  prevCardTime: {
+    color: "#3B82F6",
+    fontSize: 13,
+    fontWeight: "600",
   },
-  prevCardBottom: {
+  prevCardFooter: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.xs,
-    marginTop: 4,
-  },
-  prevCardTime: {
-    color: colors.textTertiary,
-    fontSize: 11,
+    gap: 5,
+    paddingHorizontal: spacing.md,
+    paddingTop: 2,
+    paddingBottom: spacing.sm,
   },
   prevCardItemCount: {
-    color: colors.textTertiary,
-    fontSize: 11,
-    marginLeft: spacing.xs,
+    color: "#3B82F6",
+    fontSize: 12,
+    fontWeight: "600",
   },
   spacer: { flex: 1 },
   statusPill: {
@@ -842,10 +939,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 0.2,
-  },
-  prevCardChevron: {
-    alignSelf: "center",
-    marginRight: spacing.sm,
   },
 
   // ── Active order card ──────────────────────────────────────────

@@ -114,7 +114,8 @@ type LineItem = {
 };
 
 export default function InvoiceScreen() {
-  const { orderId } = useLocalSearchParams<{ orderId?: string }>();
+  const { orderId, source } = useLocalSearchParams<{ orderId?: string; source?: string }>();
+  const isOrdersContext = source === "orders";
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
   const [order, setOrder] = useState<OrderForStore | null>(null);
@@ -226,7 +227,7 @@ export default function InvoiceScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.75}>
           <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={styles.topTitle}>Invoice</Text>
+        <Text style={styles.topTitle}>{isOrdersContext ? "Order Details" : "Invoice"}</Text>
         <TouchableOpacity onPress={handleDownload} style={styles.downloadBtn} activeOpacity={0.75} disabled={downloading}>
           {downloading
             ? <ActivityIndicator size="small" color={colors.primary} />
@@ -241,7 +242,7 @@ export default function InvoiceScreen() {
             <Image source={BRAND_LOGO} style={styles.brandLogo} />
             <View style={{ flex: 1 }}>
               <Text style={styles.brandName}>Near &amp; Now</Text>
-              <Text style={styles.brandSub}>Shopkeeper payout invoice</Text>
+              <Text style={styles.brandSub}>{isOrdersContext ? "Order summary" : "Shopkeeper payout invoice"}</Text>
             </View>
             <View style={styles.badge}>
               <Text style={styles.badgeText}>{String(order.status ?? "").toUpperCase() || "DELIVERED"}</Text>
@@ -273,8 +274,12 @@ export default function InvoiceScreen() {
           <View style={styles.tableHeader}>
             <Text style={[styles.th, { flex: 1.9 }]}>Item</Text>
             <Text style={[styles.th, { width: 44, textAlign: "right" }]}>Qty</Text>
-            <Text style={[styles.th, { width: 80, textAlign: "right" }]}>Unit</Text>
-            <Text style={[styles.th, { width: 90, textAlign: "right" }]}>Amount</Text>
+            {!isOrdersContext && (
+              <>
+                <Text style={[styles.th, { width: 80, textAlign: "right" }]}>Unit</Text>
+                <Text style={[styles.th, { width: 90, textAlign: "right" }]}>Amount</Text>
+              </>
+            )}
           </View>
 
           {lineItems.map((it) => (
@@ -293,35 +298,43 @@ export default function InvoiceScreen() {
                 </View>
               </View>
               <Text style={[styles.td, { width: 44, textAlign: "right" }]}>{it.qty}</Text>
-              <Text style={[styles.td, { width: 80, textAlign: "right" }]}>
-                {it.unitPrice != null ? fmt(it.unitPrice) : "—"}
-              </Text>
-              <Text style={[styles.tdStrong, { width: 90, textAlign: "right" }]}>
-                {it.amount != null ? fmt(it.amount) : "—"}
-              </Text>
+              {!isOrdersContext && (
+                <>
+                  <Text style={[styles.td, { width: 80, textAlign: "right" }]}>
+                    {it.unitPrice != null ? fmt(it.unitPrice) : "—"}
+                  </Text>
+                  <Text style={[styles.tdStrong, { width: 90, textAlign: "right" }]}>
+                    {it.amount != null ? fmt(it.amount) : "—"}
+                  </Text>
+                </>
+              )}
             </View>
           ))}
         </View>
 
-        {/* Totals */}
-        <View style={styles.totalsCard}>
-          <View style={styles.noteRow}>
-            <Ionicons name="information-circle-outline" size={14} color={colors.textTertiary} />
-            <Text style={styles.noteText}>
-              Prices include applicable GST. Payout covers product items only.
-            </Text>
+        {/* Totals — only shown on invoice (payout) view, not order summary */}
+        {!isOrdersContext && (
+          <View style={styles.totalsCard}>
+            <View style={styles.noteRow}>
+              <Ionicons name="information-circle-outline" size={14} color={colors.textTertiary} />
+              <Text style={styles.noteText}>
+                Prices include applicable GST. Payout covers product items only.
+              </Text>
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.totalRow}>
+              <Text style={styles.grandLabel}>Payout Amount</Text>
+              <Text style={styles.grandValue}>{fmt(subtotal)}</Text>
+            </View>
           </View>
-          <View style={styles.divider} />
-          <View style={styles.totalRow}>
-            <Text style={styles.grandLabel}>Payout Amount</Text>
-            <Text style={styles.grandValue}>{fmt(subtotal)}</Text>
-          </View>
-        </View>
+        )}
 
         {/* Footer note */}
         <View style={styles.footerCard}>
           <Text style={styles.footerText}>
-            This invoice is generated by Near &amp; Now and represents the payout owed to you for the above order.
+            {isOrdersContext
+            ? "This is a summary of the order placed through Near & Now."
+            : "This invoice is generated by Near & Now and represents the payout owed to you for the above order."}
           </Text>
         </View>
       </ScrollView>

@@ -6,7 +6,7 @@ export function getStatusColor(status: string): string {
   if (s === "accepted") return colors.success;
   if (s === "rejected" || s === "cancelled") return colors.error;
   if (s === "ready") return "#3B82F6";
-  if (s === "delivered" || s === "order_delivered") return colors.textTertiary;
+  if (s === "delivered" || s === "order_delivered" || s === "completed") return "#3B82F6";
   return colors.textTertiary;
 }
 

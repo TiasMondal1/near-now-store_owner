@@ -43,6 +43,22 @@ export async function getMasterProductsFromDb(): Promise<
   return (data ?? []) as Array<{ id: string; name: string; unit?: string }>;
 }
 
+// Cached join select — avoids re-probing both variants on every call.
+// Set on first successful join; cleared on logout/store change if needed.
+let _workingJoinSelect: string | null = null;
+
+function mapJoinRows(rows: any[], select: string): StoreProductWithName[] {
+  const relationKey = select.includes("master_products(") ? "master_products" : "master_product";
+  return rows.map((row) => {
+    const rel = row[relationKey];
+    const fromMaster = rel?.name ?? (rel && (rel as any).name);
+    const resolvedName = (fromMaster && String(fromMaster).trim()) || row.name || "Product";
+    const unitFromMaster = rel?.unit ? String(rel.unit) : "";
+    const { master_products, master_product, ...rest } = row;
+    return { ...rest, name: resolvedName, unit: unitFromMaster } as StoreProductWithName;
+  });
+}
+
 /**
  * Get store products with names. Tries joined query first (master_products.name),
  * then falls back to two-query merge. Uses products.name if present (e.g. custom products).
@@ -52,30 +68,29 @@ export async function getStoreProductsWithNames(
 ): Promise<StoreProductWithName[]> {
   if (!supabase) return [];
 
-  const joinSelects = [
+  const allSelects = [
     "id, store_id, master_product_id, is_active, name, phone, master_products(name, unit)",
     "id, store_id, master_product_id, is_active, name, phone, master_product(name, unit)",
   ];
-  for (const select of joinSelects) {
-    const { data: joinedData, error: joinError } = await supabase
+  // Put the cached winner first so we skip the probe on warm calls
+  const toTry = _workingJoinSelect
+    ? [_workingJoinSelect, ...allSelects.filter((s) => s !== _workingJoinSelect)]
+    : allSelects;
+
+  for (const select of toTry) {
+    const { data, error } = await supabase
       .from("products")
       .select(select)
       .eq("store_id", storeId)
       .is("deleted_at", null)
       .order("created_at", { ascending: true });
-    if (!joinError && Array.isArray(joinedData) && joinedData.length > 0) {
-      const relationKey = select.includes("master_products(") ? "master_products" : "master_product";
-      return (joinedData as any[]).map((row) => {
-        const rel = row[relationKey];
-        const fromMaster = rel?.name ?? (rel && (rel as any).name);
-        const resolvedName = (fromMaster && String(fromMaster).trim()) || row.name || "Product";
-        const unitFromMaster = rel?.unit ? String(rel.unit) : "";
-        const { master_products, master_product, ...rest } = row;
-        return { ...rest, name: resolvedName, unit: unitFromMaster };
-      });
+    if (!error && Array.isArray(data) && data.length > 0) {
+      _workingJoinSelect = select;
+      return mapJoinRows(data, select);
     }
   }
 
+  // Fallback: two parallel queries when neither join works
   const [storeRows, masterList] = await Promise.all([
     getStoreProductsFromDb(storeId),
     getMasterProductsFromDb(),
@@ -97,7 +112,7 @@ export async function getStoreProductsWithNames(
       ...row,
       name: name && String(name).trim() ? String(name).trim() : "Product",
       unit: unitByMasterId[key] || "",
-    };
+    } as StoreProductWithName;
   });
 }
 
