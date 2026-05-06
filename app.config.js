@@ -59,7 +59,7 @@ module.exports = () => {
       url: "https://u.expo.dev/f0f709ec-f013-416a-b543-729b80cbd4b0",
     },
     runtimeVersion: "1.0.0",
-    plugins: ["expo-router", "expo-font", withAbiSplits, withTabletSupport],
+    plugins: ["expo-router", "expo-font", "expo-print", withAbiSplits, withTabletSupport],
     extra: {
       apiBaseUrl:
         process.env.EXPO_PUBLIC_API_BASE_URL ||
