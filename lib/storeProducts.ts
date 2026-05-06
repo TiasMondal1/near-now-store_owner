@@ -18,7 +18,7 @@ export type StoreProductRow = {
 
 export type StoreProductWithName = StoreProductRow & { name: string };
 
-/** Fetch all product rows for a store from the DB */
+/** Fetch all active (non-deleted) product rows for a store from the DB */
 export async function getStoreProductsFromDb(
   storeId: string
 ): Promise<StoreProductRow[]> {
@@ -27,6 +27,7 @@ export async function getStoreProductsFromDb(
     .from("products")
     .select("id, store_id, master_product_id, is_active, quantity, name, phone")
     .eq("store_id", storeId)
+    .is("deleted_at", null)
     .order("created_at", { ascending: true });
   if (error) return [];
   return (data ?? []) as StoreProductRow[];
@@ -60,6 +61,7 @@ export async function getStoreProductsWithNames(
       .from("products")
       .select(select)
       .eq("store_id", storeId)
+      .is("deleted_at", null)
       .order("created_at", { ascending: true });
     if (!joinError && Array.isArray(joinedData) && joinedData.length > 0) {
       const relationKey = select.includes("master_products(") ? "master_products" : "master_product";
@@ -133,7 +135,7 @@ export async function updateProductQuantity(
 
 export type UpsertResult = { id: string } | { error: string };
 
-/** Insert or update one product row. */
+/** Insert or update one product row. Re-adds soft-deleted products by clearing deleted_at. */
 export async function upsertStoreProduct(
   storeId: string,
   masterProductId: string,
@@ -143,9 +145,10 @@ export async function upsertStoreProduct(
   if (!supabase) return { error: "Supabase not configured" };
   if (!storeId || !masterProductId) return { error: "Missing store_id or master_product_id" };
 
+  // Include soft-deleted rows so we can restore them instead of inserting a duplicate
   const { data: existing, error: selectErr } = await supabase
     .from("products")
-    .select("id")
+    .select("id, deleted_at")
     .eq("store_id", storeId)
     .eq("master_product_id", masterProductId)
     .maybeSingle();
@@ -153,7 +156,11 @@ export async function upsertStoreProduct(
   if (selectErr) return { error: selectErr.message };
 
   if (existing?.id) {
-    const updatePayload: any = { updated_at: new Date().toISOString() };
+    const updatePayload: any = {
+      updated_at: new Date().toISOString(),
+      deleted_at: null,   // un-delete if previously soft-deleted
+      is_active: true,
+    };
     if (storeName) updatePayload.name = storeName;
     if (ownerPhone) updatePayload.phone = ownerPhone;
     const { error: updateErr } = await supabase

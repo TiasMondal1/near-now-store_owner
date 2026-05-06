@@ -28,37 +28,41 @@ export function useStore(token: string | null) {
 
   // Fetch stores from API
   const fetchStores = useCallback(async (authToken: string) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
     try {
       const res = await fetch(`${API_BASE}/store-owner/stores`, {
         headers: { Authorization: `Bearer ${authToken}` },
+        signal: ctrl.signal,
       });
-      
+      clearTimeout(timer);
+
       const raw = await res.text();
-      
+
       if (!res.ok) {
         throw new Error(`Failed to fetch stores: ${res.status}`);
       }
 
       const json = raw ? JSON.parse(raw) : null;
       const storeList = json?.stores || [];
-      
+
       setStores(storeList);
-      
+
       // Auto-select first store or restore from cache
       if (storeList.length > 0) {
         const cachedId = await AsyncStorage.getItem(SELECTED_STORE_KEY);
-        const storeToSelect = cachedId 
+        const storeToSelect = cachedId
           ? storeList.find((s: Store) => s.id === cachedId) || storeList[0]
           : storeList[0];
-        
         setSelectedStore(storeToSelect);
         await AsyncStorage.setItem(SELECTED_STORE_KEY, storeToSelect.id);
       }
-      
+
       setError(null);
       return storeList;
     } catch (err: any) {
-      console.error('[useStore] Error fetching stores:', err);
+      clearTimeout(timer);
+      if (__DEV__) console.error('[useStore] Error fetching stores:', err);
       setError(err.message || 'Failed to fetch stores');
       setStores([]);
       return [];
@@ -96,7 +100,7 @@ export function useStore(token: string | null) {
       
       return true;
     } catch (err: any) {
-      console.error('[useStore] Error toggling status:', err);
+      if (__DEV__) console.error('[useStore] Error toggling status:', err);
       Alert.alert('Error', 'Failed to update store status. Please try again.');
       return false;
     }

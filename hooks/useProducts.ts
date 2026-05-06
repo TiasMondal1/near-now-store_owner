@@ -53,7 +53,7 @@ export function useProducts(token: string | null, storeId: string | null) {
 
       await fetchProductsFromAPI(token, storeId);
     } catch (err) {
-      console.error('[useProducts] Error fetching products:', err);
+      if (__DEV__) console.error('[useProducts] Error fetching products:', err);
       setProducts([]);
     } finally {
       setLoading(false);
@@ -87,10 +87,9 @@ export function useProducts(token: string | null, storeId: string | null) {
   // Invalidate cache
   const invalidateCache = useCallback(async () => {
     try {
-      await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
-      await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
+      await AsyncStorage.multiRemove([INVENTORY_CACHE_KEY, INVENTORY_PERSISTED_KEY]);
     } catch (err) {
-      console.warn('[useProducts] Failed to invalidate cache:', err);
+      if (__DEV__) console.warn('[useProducts] Failed to invalidate cache:', err);
     }
   }, []);
 

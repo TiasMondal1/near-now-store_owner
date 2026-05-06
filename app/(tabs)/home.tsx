@@ -44,6 +44,10 @@ const API_BASE = config.API_BASE;
 const BRAND_LOGO = require("../../near_now_shopkeeper.png");
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
+const CACHE_KEYS = [INVENTORY_PERSISTED_KEY, INVENTORY_CACHE_KEY];
+
+// Stable object — avoids new allocation on every render of the Switch
+const SWITCH_TRACK_COLOR = { false: colors.error + "55", true: colors.primaryLight };
 
 type StoreRow = CachedStore;
 
@@ -381,8 +385,7 @@ export default function HomeTab() {
           )
         );
       } else {
-        await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
-        await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
+        await AsyncStorage.multiRemove(CACHE_KEYS);
         fetchStoreProducts(true);
       }
     } catch {
@@ -397,26 +400,22 @@ export default function HomeTab() {
   }, [session?.token, fetchStoreProducts]);
 
   const deleteProduct = useCallback(async (product: any) => {
-    if (!product.storeProductId || !session?.token) return;
+    if (!product.storeProductId || !supabase) return;
 
-    try {
-      const res = await fetch(`${config.API_BASE}/store-owner/products/${product.storeProductId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${session.token}` },
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        Alert.alert("Error", body.error || "Failed to remove product. Please try again.");
-        return;
-      }
-    } catch {
-      Alert.alert("Error", "Network error. Please try again.");
+    // Soft delete: set deleted_at so the row stays in DB for order history,
+    // but is filtered out of all active-product queries.
+    const { error } = await supabase
+      .from("products")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", product.storeProductId);
+
+    if (error) {
+      Alert.alert("Error", "Failed to remove product. Please try again.");
       return;
     }
 
     setStoreProducts((prev) => prev.filter((p) => p.id !== product.id));
-    await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
-    await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
+    await AsyncStorage.multiRemove(CACHE_KEYS);
   }, [session?.token]);
 
   if (loading) {
@@ -461,7 +460,7 @@ export default function HomeTab() {
             <Switch
               value={isStoreOnline}
               onValueChange={handleStatusToggle}
-              trackColor={{ false: colors.error + "55", true: colors.primaryLight }}
+              trackColor={SWITCH_TRACK_COLOR}
               thumbColor={isStoreOnline ? colors.primary : colors.error}
               ios_backgroundColor={colors.border}
             />

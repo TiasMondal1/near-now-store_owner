@@ -180,10 +180,12 @@ export default function OrdersTab() {
   const [prevLoading, setPrevLoading] = useState(true);
 
   useEffect(() => {
-    Animated.parallel([
+    const anim = Animated.parallel([
       Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
       Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
-    ]).start();
+    ]);
+    anim.start();
+    return () => anim.stop();
   }, []);
 
   useEffect(() => {

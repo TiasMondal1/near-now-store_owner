@@ -232,11 +232,7 @@ function InventoryCatalogSection({
       from: page * CATALOG_PAGE_SIZE,
     })
       .then(({ data, hasMore: more }) => {
-        let results = data;
-        if (page === 0 && !selectedCategory && !debouncedSearch) {
-          results = [...data].sort(() => Math.random() - 0.5);
-        }
-        setProducts((prev) => (page === 0 ? results : [...prev, ...results]));
+        setProducts((prev) => (page === 0 ? data : [...prev, ...data]));
         setHasMore(more);
       })
       .catch(() => { if (page === 0) setProducts([]); })
@@ -522,7 +518,7 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
 
   const pickFromGallery = async () => {
     const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ["images"],
       base64: true,
       quality: 0.8,
     });
