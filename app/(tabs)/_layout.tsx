@@ -1,18 +1,10 @@
 import React, { useEffect } from "react";
 import { BackHandler, Platform } from "react-native";
-import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { useSegments } from "expo-router";
+import { Tabs, useSegments } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../../lib/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { IncomingOrdersProvider, useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
-
-import HomeTab from "./home";
-import PreviousOrdersTab from "./previous-orders";
-import PaymentsTab from "./payments";
-import StockTab from "./stock";
-
-const Tab = createBottomTabNavigator();
 
 function TabsNavigator() {
   const insets = useSafeAreaInsets();
@@ -30,10 +22,9 @@ function TabsNavigator() {
   }, [segments]);
 
   return (
-    <Tab.Navigator
+    <Tabs
       screenOptions={{
         headerShown: false,
-        lazy: true,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textTertiary,
         tabBarStyle: {
@@ -51,9 +42,8 @@ function TabsNavigator() {
         },
       }}
     >
-      <Tab.Screen
+      <Tabs.Screen
         name="home"
-        component={HomeTab}
         options={{
           title: "Home",
           tabBarIcon: ({ color, size }) => (
@@ -61,9 +51,8 @@ function TabsNavigator() {
           ),
         }}
       />
-      <Tab.Screen
+      <Tabs.Screen
         name="previous-orders"
-        component={PreviousOrdersTab}
         options={{
           title: "Orders",
           tabBarBadge: incomingCount > 0 ? incomingCount : undefined,
@@ -73,9 +62,8 @@ function TabsNavigator() {
           ),
         }}
       />
-      <Tab.Screen
+      <Tabs.Screen
         name="payments"
-        component={PaymentsTab}
         options={{
           title: "Payouts",
           tabBarIcon: ({ color, size }) => (
@@ -83,9 +71,8 @@ function TabsNavigator() {
           ),
         }}
       />
-      <Tab.Screen
+      <Tabs.Screen
         name="stock"
-        component={StockTab}
         options={{
           title: "Inventory",
           tabBarIcon: ({ color, size }) => (
@@ -93,7 +80,7 @@ function TabsNavigator() {
           ),
         }}
       />
-    </Tab.Navigator>
+    </Tabs>
   );
 }
 
