@@ -118,13 +118,7 @@ export default function HomeTab() {
 
     (async () => {
       try {
-        let s: any = await getSession();
-        // Retry once — AsyncStorage writes aren't always immediately visible
-        // on the first read right after being written from another screen.
-        if (!s?.token) {
-          await new Promise(r => setTimeout(r, 300));
-          s = await getSession();
-        }
+        const s: any = await getSession();
         if (!s?.token) {
           if (!cancelled) router.replace("/landing");
           return;
