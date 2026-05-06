@@ -201,10 +201,11 @@ export default function StoreOwnerOtpScreen() {
           },
         };
         await saveSession(sessionData);
-        // Mark as navigated so the finally block keeps the spinner up
-        // during the screen transition instead of briefly flashing the OTP form.
+        // Navigate to the splash/index screen, which detects the session and
+        // redirects to home. This uses the same proven path as cold start,
+        // avoiding navigation state conflicts when coming from the OTP screen.
         navigatedAway.current = true;
-        router.replace("/(tabs)/home");
+        router.replace("/");
         return;
       }
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { View, Text, StyleSheet, Animated, Easing, Image } from "react-native";
 import { useRouter } from "expo-router";
-import { getSession } from "../session";
+import { getSession, isJustLoggedIn, guardFreshInstall } from "../session";
 import { hydrateStoreCache } from "../lib/appCache";
 import { colors } from "../lib/theme";
 
@@ -14,8 +14,16 @@ export default function SplashScreen() {
   const opacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // Start animation
-    Animated.parallel([
+    // If the user just logged in (session is in memory from OTP), skip the
+    // animation entirely and navigate to home immediately. This avoids the
+    // "double splash" experience after a fresh login.
+    if (isJustLoggedIn()) {
+      router.replace("/(tabs)/home");
+      return;
+    }
+
+    // Cold start: run the splash animation in parallel with session check.
+    const anim = Animated.parallel([
       Animated.timing(opacity, {
         toValue: 1,
         duration: 350,
@@ -28,16 +36,15 @@ export default function SplashScreen() {
         tension: 45,
         useNativeDriver: true,
       }),
-    ]).start();
+    ]);
+    anim.start();
 
-    // Run session check + cache hydration in parallel with animation.
-    // Navigate as soon as both session check AND minimum animation complete.
     const startMs = Date.now();
     let cancelled = false;
 
     (async () => {
       try {
-        // Parallel: check session AND warm the store cache from AsyncStorage
+        await guardFreshInstall();
         const [session] = await Promise.all([
           getSession(),
           hydrateStoreCache(),
@@ -47,7 +54,6 @@ export default function SplashScreen() {
 
         const elapsed = Date.now() - startMs;
         const remaining = Math.max(0, MIN_SPLASH_MS - elapsed);
-
         await new Promise<void>((resolve) => setTimeout(resolve, remaining));
 
         if (cancelled) return;
@@ -65,14 +71,13 @@ export default function SplashScreen() {
 
     return () => {
       cancelled = true;
+      anim.stop();
     };
   }, []);
 
   return (
     <View style={styles.container}>
-      <Animated.View
-        style={{ opacity, transform: [{ scale }] }}
-      >
+      <Animated.View style={{ opacity, transform: [{ scale }] }}>
         <Image source={BRAND_LOGO} style={styles.logo} resizeMode="contain" />
       </Animated.View>
       <Text style={styles.tagline}>Shopkeeper</Text>

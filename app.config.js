@@ -2,6 +2,7 @@
 // Uses EXPO_PUBLIC_API_BASE_URL and your custom logo for icons.
 
 const withAbiSplits = require("./plugins/withAbiSplits");
+const withTabletSupport = require("./plugins/withTabletSupport");
 
 module.exports = () => {
   const googleMapsApiKey =
@@ -58,7 +59,7 @@ module.exports = () => {
       url: "https://u.expo.dev/f0f709ec-f013-416a-b543-729b80cbd4b0",
     },
     runtimeVersion: "1.0.0",
-    plugins: ["expo-router", "expo-font", withAbiSplits],
+    plugins: ["expo-router", "expo-font", withAbiSplits, withTabletSupport],
     extra: {
       apiBaseUrl:
         process.env.EXPO_PUBLIC_API_BASE_URL ||
