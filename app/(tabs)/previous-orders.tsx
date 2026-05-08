@@ -17,6 +17,7 @@ import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, radius, spacing } from "../../lib/theme";
 import { getOrderByIdFromDb, getOrdersFromDb } from "../../lib/orders-db";
+import { supabase } from "../../lib/supabase";
 import { getStatusColor, formatStatus, isDelivered } from "../../lib/order-utils";
 // price is intentionally omitted from this screen — handled in Payouts
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
@@ -80,10 +81,9 @@ function resolveOrderDate(o: any): Date | null {
 function resolveOrderDateStr(o: any): string {
   const fromTs = safeDate(o.placed_at) || safeDate(o.created_at);
   if (fromTs) {
-    return fromTs.toLocaleDateString("en-IN", {
-      day: "numeric", month: "short", year: "numeric",
-      hour: "2-digit", minute: "2-digit",
-    });
+    const date = fromTs.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+    const time = fromTs.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+    return time ? `${date}, ${time}` : date;
   }
   const d = dateFromOrderCode(o.order_code);
   return d ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "";
@@ -327,44 +327,49 @@ export default function OrdersTab() {
     if (!session || !storeId) return;
     try {
       const fromDb = await getOrdersFromDb(storeId);
-      if (Array.isArray(fromDb) && fromDb.length > 0) {
-        // Single pass: fetch items AND placed_at together for any order that needs either.
-        // getOrderByIdFromDb does the proven two-step lookup (store_orders → customer_orders)
-        // which is known to return placed_at correctly (same as the individual detail view).
-        const withTs = await Promise.all(
-          fromDb.map(async (o: any) => {
-            const needsItems = !Array.isArray(o.order_items) || o.order_items.length === 0;
-            const needsTs = !o.placed_at;
-            if (!needsItems && !needsTs) return o;
-            if (!o?.id) return o;
-            try {
-              const detail = await getOrderByIdFromDb(String(o.id));
-              if (!detail) return o;
-              return {
-                ...o,
-                ...(needsItems ? { order_items: detail.order_items } : {}),
-                ...(needsTs && detail.placed_at ? { placed_at: detail.placed_at } : {}),
-              };
-            } catch {
-              return o;
-            }
-          })
-        );
-        setAllOrders(withTs);
-        return;
-      }
-    } catch { /* fall through to HTTP */ }
+      if (!Array.isArray(fromDb) || fromDb.length === 0) return;
 
-    try {
-      const res = await fetch(
-        `${API_BASE}/store-owner/stores/${storeId}/orders`,
-        { headers: { Authorization: `Bearer ${session.token}` } }
+      // Batch-fetch placed_at directly from customer_orders — one query, always fresh.
+      // This is the same source the invoice page uses and is proven to return the correct time.
+      const coIds = [
+        ...new Set(
+          fromDb.map((o: any) => o.customer_order_id).filter(Boolean) as string[]
+        ),
+      ];
+      const tsMap: Record<string, string> = {};
+      if (coIds.length > 0 && supabase) {
+        const { data } = await supabase
+          .from("customer_orders")
+          .select("id, placed_at")
+          .in("id", coIds);
+        if (data) {
+          (data as { id: string; placed_at?: string }[]).forEach((co) => {
+            if (co.placed_at) tsMap[co.id] = co.placed_at;
+          });
+        }
+      }
+
+      // Apply timestamps + fetch missing order items
+      const withData = await Promise.all(
+        fromDb.map(async (o: any) => {
+          const placedAt =
+            (o.customer_order_id && tsMap[o.customer_order_id]) ||
+            o.placed_at ||
+            undefined;
+          const base = { ...o, ...(placedAt ? { placed_at: placedAt } : {}) };
+
+          if (Array.isArray(o.order_items) && o.order_items.length > 0) return base;
+          if (!o?.id) return base;
+          try {
+            const detail = await getOrderByIdFromDb(String(o.id));
+            if (!detail) return base;
+            return { ...base, order_items: detail.order_items };
+          } catch {
+            return base;
+          }
+        })
       );
-      const raw = await res.text();
-      let json: any = null;
-      try { json = raw ? JSON.parse(raw) : null; } catch { return; }
-      if (!json?.success) return;
-      setAllOrders(json.orders || []);
+      setAllOrders(withData);
     } catch {
       setAllOrders([]);
     }
