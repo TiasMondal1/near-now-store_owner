@@ -2,6 +2,10 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
+// Expose hermesEnabled as a project extension so expo-modules-core can read it.
+// In Gradle 8.x, bare property access across projects no longer works.
+project.ext.hermesEnabled = (findProperty('hermesEnabled') ?: 'true').toBoolean()
+
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
 /**
