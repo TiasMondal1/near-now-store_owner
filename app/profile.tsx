@@ -198,7 +198,7 @@ export default function ProfileScreen() {
   const patchStore = async (fields: Record<string, string>) => {
     if (!session?.token || !storeInfo?.id) return;
     try {
-      await fetch(`${API_BASE}/store-owner/stores/${storeInfo.id}`, {
+      await fetch(`${API_BASE}/api/store-owner/stores/${storeInfo.id}`, {
         method: "PATCH",
         headers: {
           Authorization: `Bearer ${session.token}`,

@@ -89,7 +89,7 @@ export async function fetchStoresCached(
 
   _inflight = (async (): Promise<CachedStore[]> => {
     try {
-      const url = `${config.API_BASE}/store-owner/stores${
+      const url = `${config.API_BASE}/api/store-owner/stores${
         userId ? `?userId=${userId}` : ""
       }`;
       const ctrl = new AbortController();

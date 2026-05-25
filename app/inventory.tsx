@@ -138,7 +138,7 @@ export default function InventoryScreen() {
   const fetchInventory = async (authToken: string, storeIdVal: string) => {
     const [masterRes, storeProductsRes] = await Promise.all([
       fetch(`${API_BASE}/api/products/master-products?isActive=true`),
-      fetch(`${API_BASE}/store-owner/stores/${storeIdVal}/products`, {
+      fetch(`${API_BASE}/api/store-owner/stores/${storeIdVal}/products`, {
         headers: { Authorization: `Bearer ${authToken}` },
       }),
     ]);
@@ -248,7 +248,7 @@ export default function InventoryScreen() {
         const auth = { Authorization: `Bearer ${session.token}` };
         const userId = session.user?.id;
         const [storeRes, masterRes] = await Promise.all([
-          fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, { headers: auth }),
+          fetch(`${API_BASE}/api/store-owner/stores${userId ? `?userId=${userId}` : ''}`, { headers: auth }),
           fetch(`${API_BASE}/api/products/master-products?isActive=true`),
         ]);
         const [storeRaw, masterRaw] = await Promise.all([storeRes.text(), masterRes.text()]);
@@ -283,7 +283,7 @@ export default function InventoryScreen() {
         }
 
         const storeProductsRes = await fetch(
-          `${API_BASE}/store-owner/stores/${id}/products`,
+          `${API_BASE}/api/store-owner/stores/${id}/products`,
           { headers: auth },
         );
         const storeRaw2 = await storeProductsRes.text();

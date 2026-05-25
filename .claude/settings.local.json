@@ -4,7 +4,9 @@
       "Bash(npx tsc *)",
       "Bash(curl *)",
       "Bash(vercel --version)",
-      "Bash(npx vercel *)"
+      "Bash(npx vercel *)",
+      "Bash(./gradlew clean *)",
+      "Bash(java *)"
     ]
   }
 }

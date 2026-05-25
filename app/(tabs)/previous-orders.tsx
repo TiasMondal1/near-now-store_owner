@@ -270,7 +270,7 @@ export default function OrdersTab() {
   const fetchActiveOrders = useCallback(async () => {
     if (!session?.token) return;
     try {
-      const res = await fetch(`${API_BASE}/shopkeeper/orders`, {
+      const res = await fetch(`${API_BASE}/api/shopkeeper/orders`, {
         headers: { Authorization: `Bearer ${session.token}` },
       });
       if (!res.ok) {
@@ -294,7 +294,7 @@ export default function OrdersTab() {
         if (toComplete.length > 0) {
           await Promise.allSettled(
             toComplete.map((a: Allocation) =>
-              fetch(`${API_BASE}/shopkeeper/allocations/${a.allocation_id}/complete`, {
+              fetch(`${API_BASE}/api/shopkeeper/allocations/${a.allocation_id}/complete`, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${session.token}` },
               }).catch(() => {})
@@ -384,7 +384,7 @@ export default function OrdersTab() {
     try {
       const alloc = allocations.find((a) => a.allocation_id === allocId);
       const ids = itemIds ?? alloc?.items.map((i) => i.id) ?? [];
-      const res = await fetch(`${API_BASE}/shopkeeper/allocations/${allocId}/accept`, {
+      const res = await fetch(`${API_BASE}/api/shopkeeper/allocations/${allocId}/accept`, {
         method: "POST",
         headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ accepted_item_ids: ids }),
@@ -417,7 +417,7 @@ export default function OrdersTab() {
           if (!session?.token) return;
           setRespondingId(allocId);
           try {
-            await fetch(`${API_BASE}/shopkeeper/allocations/${allocId}/reject`, {
+            await fetch(`${API_BASE}/api/shopkeeper/allocations/${allocId}/reject`, {
               method: "POST",
               headers: { Authorization: `Bearer ${session.token}` },
             });

@@ -31,7 +31,7 @@ export function useStore(token: string | null) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15_000);
     try {
-      const res = await fetch(`${API_BASE}/store-owner/stores`, {
+      const res = await fetch(`${API_BASE}/api/store-owner/stores`, {
         headers: { Authorization: `Bearer ${authToken}` },
         signal: ctrl.signal,
       });
@@ -80,7 +80,7 @@ export function useStore(token: string | null) {
     if (!token) return;
 
     try {
-      const response = await fetch(`${API_BASE}/store-owner/stores/${store.id}/online`, {
+      const response = await fetch(`${API_BASE}/api/store-owner/stores/${store.id}/online`, {
         method: 'PATCH',
         headers: {
           Authorization: `Bearer ${token}`,

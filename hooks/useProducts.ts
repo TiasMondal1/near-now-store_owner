@@ -70,7 +70,7 @@ export function useProducts(token: string | null, storeId: string | null) {
       }
 
       const res = await fetch(
-        `${API_BASE}/store-owner/stores/${storeIdVal}/products`,
+        `${API_BASE}/api/store-owner/stores/${storeIdVal}/products`,
         { headers: { Authorization: `Bearer ${authToken}` } }
       );
 

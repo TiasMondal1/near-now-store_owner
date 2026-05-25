@@ -68,7 +68,7 @@ export function useOrders(token: string | null, _storeId?: string | null) {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
-      await fetch(`${API_BASE}/shopkeeper/allocations/${alloc.allocation_id}/reject`, {
+      await fetch(`${API_BASE}/api/shopkeeper/allocations/${alloc.allocation_id}/reject`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -114,7 +114,7 @@ export function useOrders(token: string | null, _storeId?: string | null) {
 
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/shopkeeper/orders`, {
+      const res = await fetch(`${API_BASE}/api/shopkeeper/orders`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -157,7 +157,7 @@ export function useOrders(token: string | null, _storeId?: string | null) {
 
     try {
       const res = await fetch(
-        `${API_BASE}/shopkeeper/allocations/${alloc.allocation_id}/accept`,
+        `${API_BASE}/api/shopkeeper/allocations/${alloc.allocation_id}/accept`,
         {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

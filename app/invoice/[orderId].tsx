@@ -132,7 +132,7 @@ export default function InvoiceScreen() {
         const fromDb = await getOrderByIdFromDb(id);
         if (fromDb) { setOrder(fromDb); setLoading(false); return; }
 
-        const res = await fetch(`${API_BASE}/store-owner/orders/${id}`, {
+        const res = await fetch(`${API_BASE}/api/store-owner/orders/${id}`, {
           headers: { Authorization: `Bearer ${s.token}` },
         });
         const raw = await res.text();

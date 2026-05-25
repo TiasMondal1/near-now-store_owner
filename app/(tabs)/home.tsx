@@ -269,7 +269,7 @@ export default function HomeTab() {
         confirmColor: colors.success,
         iconName: "storefront",
         onConfirm: async () => {
-          const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
+          const response = await fetch(`${API_BASE}/api/store-owner/stores/${selectedStore.id}/online`, {
             method: "PATCH",
             headers: {
               Authorization: `Bearer ${session.token}`,
@@ -296,7 +296,7 @@ export default function HomeTab() {
           setStoreProductsLoading(true);
           try {
             await setAllProductsOffline(selectedStore.id);
-            const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, {
+            const response = await fetch(`${API_BASE}/api/store-owner/stores/${selectedStore.id}/online`, {
               method: "PATCH",
               headers: {
                 Authorization: `Bearer ${session.token}`,

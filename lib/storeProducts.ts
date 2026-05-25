@@ -411,7 +411,7 @@ export async function updateProductActiveState(
 
   if (authToken) {
     try {
-      const res = await fetch(`${config.API_BASE}/store-owner/products/${storeProductId}`, {
+      const res = await fetch(`${config.API_BASE}/api/store-owner/products/${storeProductId}`, {
         method: "PATCH",
         headers: {
           Authorization: `Bearer ${authToken}`,

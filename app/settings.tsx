@@ -45,7 +45,7 @@ export default function SettingsScreen() {
 
       const userId = session.user?.id;
       const response = await fetch(
-        `${config.API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`,
+        `${config.API_BASE}/api/store-owner/stores${userId ? `?userId=${userId}` : ''}`,
         { headers: { Authorization: `Bearer ${session.token}` } }
       );
       const data = await response.json();
