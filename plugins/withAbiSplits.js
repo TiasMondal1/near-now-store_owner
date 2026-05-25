@@ -17,21 +17,6 @@ const SPLITS_BLOCK = `
         }
     }`;
 
-const VERSION_CODE_OVERRIDE = `
-// Unique versionCode per ABI so the Play Store accepts all splits simultaneously.
-// Layout (base versionCode = N): universal=N*1000, armeabi-v7a=N*1000+1,
-// arm64-v8a=N*1000+2, x86_64=N*1000+3.
-android.applicationVariants.all { variant ->
-    variant.outputs.each { output ->
-        def abiVersionCodes = ["armeabi-v7a": 1, "arm64-v8a": 2, "x86_64": 3]
-        def abi = output.getFilter("ABI")
-        if (abi != null) {
-            output.versionCodeOverride = android.defaultConfig.versionCode * 1000 + abiVersionCodes[abi]
-        } else {
-            output.versionCodeOverride = android.defaultConfig.versionCode * 1000
-        }
-    }
-}`;
 
 /**
  * Finds the closing brace of the `androidResources { }` block and inserts
@@ -71,18 +56,6 @@ module.exports = function withAbiSplits(config) {
       // androidResources block not found (future Expo template change).
       // Fall back to inserting before the dependencies block.
       console.warn("[withAbiSplits] Could not find androidResources block — splits not injected.");
-    }
-
-    // ── 2. Inject versionCodeOverride block after android { } ────────────────
-    if (!contents.includes("versionCodeOverride")) {
-      // Insert before "// Apply static values" comment or before "dependencies {"
-      const anchor = contents.match(/\n(\/\/ Apply static values|dependencies \{)/);
-      if (anchor) {
-        const pos = anchor.index;
-        contents = contents.slice(0, pos) + "\n" + VERSION_CODE_OVERRIDE + "\n" + contents.slice(pos);
-      } else {
-        contents += "\n" + VERSION_CODE_OVERRIDE + "\n";
-      }
     }
 
     mod.modResults.contents = contents;
