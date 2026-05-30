@@ -1,54 +1,58 @@
-import React, { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Image,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import { getSession, clearSession } from "../session";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { colors, radius, spacing } from "../lib/theme";
+import { colors, radius, spacing, shadows } from "../lib/theme";
+
+const BRAND_LOGO = require("../near_now_shopkeeper.png");
 
 export default function LandingScreen() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(20)).current;
 
   useEffect(() => {
     (async () => {
       const session = await getSession();
-
-      // CRITICAL: Store Owner app should NEVER have a customer session
       if (session?.user?.role === "customer") {
-        Alert.alert(
-          "Wrong Account Type",
-          "You're logged in as a customer, but this is the Store Owner app. Please clear the session and log in with your shopkeeper account.",
-          [
-            {
-              text: "Clear & Retry",
-              onPress: async () => {
-                await clearSession();
-                await AsyncStorage.removeItem("inventory_persisted_state");
-                await AsyncStorage.removeItem("inventory_products_cache");
-                setChecking(false);
-              },
-            },
-            { text: "Cancel", onPress: () => setChecking(false) },
-          ]
-        );
+        Alert.alert("Wrong Account Type", "You're logged in as a customer. This is the Store Owner app.", [
+          { text: "Clear & Retry", onPress: async () => { await clearSession(); await AsyncStorage.removeItem("inventory_persisted_state"); await AsyncStorage.removeItem("inventory_products_cache"); setChecking(false); } },
+          { text: "Cancel", onPress: () => setChecking(false) },
+        ]);
         return;
       }
-      
-      if (session?.token && session?.user?.id) {
-        router.replace("/(tabs)/home");
-      } else {
-        setChecking(false);
-      }
+      if (session?.token && session?.user?.id) { router.replace("/(tabs)/home"); }
+      else { setChecking(false); }
     })();
   }, []);
+
+  useEffect(() => {
+    if (!checking) {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
+        Animated.timing(slideAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [checking]);
 
   if (checking) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Checking session...</Text>
         </View>
       </SafeAreaView>
     );
@@ -56,128 +60,78 @@ export default function LandingScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
+      <Animated.View style={[styles.container, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
         <View style={styles.topSection}>
-          <Text style={styles.appTag}>Near&Now · Shopkeeper</Text>
-          <Text style={styles.title}>Welcome</Text>
+          <View style={styles.logoWrap}>
+            <Image source={BRAND_LOGO} style={styles.logo} resizeMode="contain" />
+          </View>
+          <Text style={styles.appTag}>Near&Now</Text>
+          <Text style={styles.title}>Welcome back,{"\n"}Shopkeeper</Text>
           <Text style={styles.subtitle}>
-            Manage orders, inventory and availability for your store.
+            Manage orders, inventory and payouts — all in one place.
           </Text>
         </View>
 
         <View style={styles.buttons}>
-          <TouchableOpacity
-            style={styles.primaryButton}
-            onPress={() => router.replace("/App")}
-            activeOpacity={0.85}
-          >
+          <TouchableOpacity style={styles.primaryButton} onPress={() => router.replace("/App")} activeOpacity={0.85}>
+            <Ionicons name="log-in-outline" size={20} color="#fff" />
             <Text style={styles.primaryButtonText}>Login</Text>
-            <Text style={styles.primaryHint}>Use your phone number &amp; OTP</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={() => router.replace("/App")}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.secondaryButtonText}>New store</Text>
-            <Text style={styles.secondaryHint}>Set up your store (phone + OTP)</Text>
+          <TouchableOpacity style={styles.secondaryButton} onPress={() => router.replace("/App")} activeOpacity={0.85}>
+            <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
+            <Text style={styles.secondaryButtonText}>Register new store</Text>
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.footer}>
-          Same verification as the main Near&amp;Now app — phone &amp; OTP only.
-        </Text>
-      </View>
+        <Text style={styles.footer}>Phone & OTP verification only</Text>
+      </Animated.View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  centered: {
-    flex: 1,
-    justifyContent: "center",
+  safeArea: { flex: 1, backgroundColor: colors.surface },
+  centered: { flex: 1, justifyContent: "center", alignItems: "center" },
+  container: { flex: 1, paddingHorizontal: spacing.xl, paddingTop: 56, paddingBottom: spacing.xl, justifyContent: "space-between" },
+  topSection: { gap: spacing.md },
+  logoWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 18,
+    backgroundColor: colors.primaryBg,
     alignItems: "center",
-    gap: spacing.md,
+    justifyContent: "center",
+    marginBottom: spacing.sm,
+    ...shadows.sm,
   },
-  loadingText: {
-    fontSize: 14,
-    color: colors.textSecondary,
-  },
-  container: {
-    flex: 1,
-    paddingHorizontal: spacing.xl,
-    paddingTop: 48,
-    paddingBottom: spacing.xl,
-    justifyContent: "space-between",
-  },
-  topSection: {
-    gap: spacing.sm,
-  },
-  appTag: {
-    fontSize: 11,
-    color: colors.textTertiary,
-    textTransform: "uppercase",
-    letterSpacing: 1.4,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: colors.textPrimary,
-    letterSpacing: 0.5,
-  },
-  subtitle: {
-    fontSize: 15,
-    color: colors.textSecondary,
-    marginTop: spacing.xs,
-    lineHeight: 22,
-  },
-  buttons: {
-    gap: spacing.lg,
-  },
+  logo: { width: 48, height: 48 },
+  appTag: { fontSize: 14, color: colors.primary, fontWeight: "700" },
+  title: { fontSize: 28, fontWeight: "700", color: colors.textPrimary, lineHeight: 36 },
+  subtitle: { fontSize: 15, color: colors.textSecondary, lineHeight: 23 },
+  buttons: { gap: spacing.md },
   primaryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
     backgroundColor: colors.primary,
     borderRadius: radius.md,
-    paddingVertical: 18,
-    paddingHorizontal: spacing.xl,
-    borderWidth: 0,
+    paddingVertical: 16,
+    ...shadows.md,
   },
-  primaryButtonText: {
-    fontSize: 17,
-    fontWeight: "600",
-    color: colors.surface,
-  },
-  primaryHint: {
-    fontSize: 12,
-    color: "rgba(255,255,255,0.9)",
-    marginTop: 4,
-  },
+  primaryButtonText: { fontSize: 16, fontWeight: "600", color: "#fff" },
   secondaryButton: {
-    backgroundColor: colors.surface,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.primaryBg,
     borderRadius: radius.md,
-    paddingVertical: 18,
-    paddingHorizontal: spacing.xl,
+    paddingVertical: 16,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.primary + "20",
   },
-  secondaryButtonText: {
-    fontSize: 17,
-    fontWeight: "600",
-    color: colors.textPrimary,
-  },
-  secondaryHint: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginTop: 4,
-  },
-  footer: {
-    fontSize: 11,
-    color: colors.textTertiary,
-    textAlign: "center",
-    lineHeight: 16,
-  },
+  secondaryButtonText: { fontSize: 16, fontWeight: "600", color: colors.primary },
+  footer: { fontSize: 12, color: colors.textTertiary, textAlign: "center" },
 });

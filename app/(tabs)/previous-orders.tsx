@@ -9,17 +9,17 @@ import {
   Animated,
   SectionList,
   Alert,
+  Easing,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
-import { colors, radius, spacing } from "../../lib/theme";
+import { colors, radius, spacing, shadows } from "../../lib/theme";
 import { getOrderByIdFromDb, getOrdersFromDb } from "../../lib/orders-db";
 import { supabase } from "../../lib/supabase";
 import { getStatusColor, formatStatus, isDelivered } from "../../lib/order-utils";
-// price is intentionally omitted from this screen — handled in Payouts
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
 import { useSmartPoll } from "../../lib/useSmartPoll";
 import { config } from "../../lib/config";
@@ -48,7 +48,6 @@ type Allocation = {
   customer_distance: string | null;
 };
 
-/** Normalise Postgres timestamps: `2024-01-15 10:30:00+05:30` → ISO with T. */
 function safeDate(str: string | null | undefined): Date | null {
   if (!str) return null;
   const s = str.trim().replace(/^(\d{4}-\d{2}-\d{2})\s/, "$1T");
@@ -56,28 +55,18 @@ function safeDate(str: string | null | undefined): Date | null {
   return Number.isFinite(d.getTime()) ? d : null;
 }
 
-/** Parse date from order code like NN20260429-0012 → Date object */
 function dateFromOrderCode(code: string | null | undefined): Date | null {
   if (!code) return null;
   const m = code.match(/(\d{4})(\d{2})(\d{2})/);
   if (!m) return null;
-  // Use local noon to avoid UTC-midnight → IST 5:30 AM conversion artifact
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
   return Number.isFinite(d.getTime()) ? d : null;
 }
 
-/** Best available date for an order — created_at → placed_at → order code */
 function resolveOrderDate(o: any): Date | null {
   return safeDate(o.created_at) || safeDate(o.placed_at) || dateFromOrderCode(o.order_code);
 }
 
-/**
- * Returns a display string for the order date + time.
- * Prefers placed_at (customer_orders — always has exact time) over created_at
- * (store_orders — may be date-only). Falls back to order-code date with no time.
- * Uses a single toLocaleDateString call with combined date+time options — more
- * reliable on React Native (Hermes) than a separate toLocaleTimeString call.
- */
 function resolveOrderDateStr(o: any): string {
   const fromTs = safeDate(o.placed_at) || safeDate(o.created_at);
   if (fromTs) {
@@ -118,11 +107,15 @@ const AllocationCard = React.memo(function AllocationCard({
         <View style={allocStyles.cardHeaderLeft}>
           <Text style={allocStyles.orderCode}>#{alloc.order_code}</Text>
           {alloc.customer_distance && (
-            <Text style={allocStyles.distance}>{alloc.customer_distance} away</Text>
+            <View style={allocStyles.distanceRow}>
+              <Ionicons name="location-outline" size={11} color={colors.textTertiary} />
+              <Text style={allocStyles.distance}>{alloc.customer_distance} away</Text>
+            </View>
           )}
         </View>
-        <View style={[allocStyles.badge, allocStyles.badgePending]}>
-          <Text style={[allocStyles.badgeText, allocStyles.badgeTextPending]}>NEW</Text>
+        <View style={allocStyles.badge}>
+          <View style={allocStyles.badgeDot} />
+          <Text style={allocStyles.badgeText}>NEW</Text>
         </View>
       </View>
 
@@ -163,6 +156,7 @@ const AllocationCard = React.memo(function AllocationCard({
             onPress={() => onReject(alloc.allocation_id, alloc.order_code)}
             disabled={accepting}
           >
+            <Ionicons name="close-circle-outline" size={16} color={colors.error} />
             <Text style={allocStyles.rejectBtnText}>Reject</Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -173,7 +167,10 @@ const AllocationCard = React.memo(function AllocationCard({
             {accepting ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Text style={allocStyles.acceptBtnText}>Accept ({checkedIds.size} items)</Text>
+              <>
+                <Ionicons name="checkmark-circle-outline" size={16} color="#fff" />
+                <Text style={allocStyles.acceptBtnText}>Accept ({checkedIds.size})</Text>
+              </>
             )}
           </TouchableOpacity>
         </View>
@@ -195,7 +192,7 @@ export default function OrdersTab() {
   const [tab, setTab] = useState<"incoming" | "active" | "previous">("incoming");
   const { setIncomingCount } = useIncomingOrdersCount();
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(20)).current;
+  const slideAnim = useRef(new Animated.Value(16)).current;
 
   const [session, setSession] = useState<any | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
@@ -217,12 +214,10 @@ export default function OrdersTab() {
   }, []);
 
   useEffect(() => {
-    const anim = Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
-    ]);
-    anim.start();
-    return () => anim.stop();
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
+    ]).start();
   }, []);
 
   useEffect(() => {
@@ -264,7 +259,6 @@ export default function OrdersTab() {
     return () => { cancelled = true; };
   }, []);
 
-  // Ref so fetchActiveOrders can call fetchPreviousOrders without a circular dep
   const fetchPreviousOrdersRef = useRef<(() => Promise<void>) | null>(null);
 
   const fetchActiveOrders = useCallback(async () => {
@@ -283,7 +277,6 @@ export default function OrdersTab() {
           (a: Allocation) => a.alloc_status === "accepted" || a.alloc_status === "pending_acceptance"
         );
 
-        // Auto-complete accepted orders older than AUTO_COMPLETE_MS (simulation)
         const now = Date.now();
         const toComplete = active.filter((a: Allocation) => {
           if (a.alloc_status !== "accepted") return false;
@@ -300,7 +293,6 @@ export default function OrdersTab() {
               }).catch(() => {})
             )
           );
-          // Re-fetch after completing so previous tab gets the delivered orders
           fetchPreviousOrdersRef.current?.();
         }
 
@@ -329,8 +321,6 @@ export default function OrdersTab() {
       const fromDb = await getOrdersFromDb(storeId);
       if (!Array.isArray(fromDb) || fromDb.length === 0) return;
 
-      // Batch-fetch placed_at directly from customer_orders — one query, always fresh.
-      // This is the same source the invoice page uses and is proven to return the correct time.
       const coIds = [
         ...new Set(
           fromDb.map((o: any) => o.customer_order_id).filter(Boolean) as string[]
@@ -349,7 +339,6 @@ export default function OrdersTab() {
         }
       }
 
-      // Apply timestamps + fetch missing order items
       const withData = await Promise.all(
         fromDb.map(async (o: any) => {
           const placedAt =
@@ -375,7 +364,6 @@ export default function OrdersTab() {
     }
   }, [session, storeId]);
 
-  // Keep the ref current so fetchActiveOrders can call it without a circular dep
   useEffect(() => { fetchPreviousOrdersRef.current = fetchPreviousOrders; }, [fetchPreviousOrders]);
 
   const acceptAllocation = useCallback(async (allocId: string, itemIds?: string[]) => {
@@ -439,7 +427,6 @@ export default function OrdersTab() {
     }
   }, [session, storeId]);
 
-  // Sync incoming count to bottom tab badge
   useEffect(() => {
     const count = allocations.filter((a) => a.alloc_status === "pending_acceptance").length;
     setIncomingCount(count);
@@ -482,7 +469,6 @@ export default function OrdersTab() {
     [allOrders]
   );
 
-  // Group previous orders by calendar date, newest first
   const groupedPreviousOrders = useMemo(() => {
     const sorted = [...previousOrders].sort((a, b) => {
       const ta = resolveOrderDate(a)?.getTime() ?? 0;
@@ -502,7 +488,6 @@ export default function OrdersTab() {
     return groupOrder.map((title) => ({ title, totalCount: groups[title].length, data: groups[title] }));
   }, [previousOrders]);
 
-  // Collapse sections whose title is in collapsedDates
   const visibleSections = useMemo(
     () => groupedPreviousOrders.map((s) => ({
       ...s,
@@ -514,14 +499,15 @@ export default function OrdersTab() {
   if (allocLoading && prevLoading) {
     return (
       <SafeAreaView style={styles.safe}>
-        <ActivityIndicator color={colors.primary} style={{ marginTop: 60 }} />
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator color={colors.primary} size="large" />
+        </View>
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.safe}>
-      {/* Header + tabs */}
       <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
         <View style={styles.headerRow}>
           <Text style={styles.header}>Orders</Text>
@@ -536,7 +522,7 @@ export default function OrdersTab() {
             </View>
           )}
           {tab === "previous" && previousOrders.length > 0 && (
-            <View style={[styles.countBadge, { backgroundColor: "#3B82F6" }]}>
+            <View style={[styles.countBadge, { backgroundColor: colors.info }]}>
               <Text style={styles.countBadgeText}>{previousOrders.length}</Text>
             </View>
           )}
@@ -552,15 +538,16 @@ export default function OrdersTab() {
                 key={t}
                 style={[styles.tab, isActive && styles.tabActive, t === "incoming" && isActive && styles.tabActiveIncoming, t === "previous" && isActive && styles.tabActivePrevious]}
                 onPress={() => setTab(t)}
+                activeOpacity={0.8}
               >
                 {t === "incoming" && incomingAllocations.length > 0 && !isActive && (
                   <View style={styles.tabIncomingDot} />
                 )}
                 <Ionicons
                   name={icons[t]}
-                  size={16}
+                  size={15}
                   color={isActive ? "#fff" : colors.textTertiary}
-                  style={{ marginRight: 6 }}
+                  style={{ marginRight: 5 }}
                 />
                 <Text style={[styles.tabText, isActive && styles.tabTextActive]}>
                   {labels[t]}
@@ -571,7 +558,6 @@ export default function OrdersTab() {
         </View>
       </Animated.View>
 
-      {/* Incoming orders tab */}
       {tab === "incoming" ? (
         <FlatList
           data={incomingAllocations}
@@ -581,11 +567,11 @@ export default function OrdersTab() {
           onRefresh={fetchActiveOrders}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
-              <View style={styles.emptyIconWrap}>
-                <Ionicons name="alert-circle-outline" size={40} color="#FF9800" />
+              <View style={[styles.emptyIconWrap, { backgroundColor: "#FF9800" + "12" }]}>
+                <Ionicons name="notifications-outline" size={36} color="#FF9800" />
               </View>
               <Text style={styles.emptyTitle}>No incoming orders</Text>
-              <Text style={styles.emptySub}>New orders waiting for your response will appear here</Text>
+              <Text style={styles.emptySub}>New orders will appear here</Text>
             </View>
           }
           renderItem={({ item: a }) => (
@@ -598,7 +584,6 @@ export default function OrdersTab() {
           )}
         />
       ) : tab === "active" ? (
-        /* Active (accepted) orders tab */
         <FlatList
           data={activeAllocations}
           keyExtractor={(a) => a.allocation_id}
@@ -608,7 +593,7 @@ export default function OrdersTab() {
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
               <View style={styles.emptyIconWrap}>
-                <Ionicons name="flash-outline" size={40} color={colors.primary} />
+                <Ionicons name="flash-outline" size={36} color={colors.primary} />
               </View>
               <Text style={styles.emptyTitle}>No active orders</Text>
               <Text style={styles.emptySub}>Accepted orders will appear here</Text>
@@ -616,7 +601,6 @@ export default function OrdersTab() {
           }
           renderItem={({ item: a }) => (
             <View style={styles.activeCard}>
-              {/* Card top row */}
               <View style={styles.activeCardTop}>
                 <View style={styles.activeCardLeft}>
                   <Text style={styles.orderCode}>#{a.order_code}</Text>
@@ -627,16 +611,17 @@ export default function OrdersTab() {
                     </View>
                   )}
                 </View>
-                <View style={[styles.statusBadge, { backgroundColor: colors.success + "20", borderColor: colors.success + "50" }]}>
+                <View style={[styles.statusBadge, { backgroundColor: colors.success + "14", borderColor: colors.success + "35" }]}>
                   <View style={[styles.statusDot, { backgroundColor: colors.success }]} />
                   <Text style={[styles.statusBadgeText, { color: colors.success }]}>Active</Text>
                 </View>
               </View>
 
-              {/* Pickup code — shown after shopkeeper accepts; tell this to the delivery partner */}
               {a.pickup_code && (
                 <View style={styles.pickupCodeBox}>
-                  <Ionicons name="key-outline" size={14} color={colors.primary} style={{ marginRight: 6 }} />
+                  <View style={styles.pickupCodeIcon}>
+                    <Ionicons name="key-outline" size={14} color={colors.primary} />
+                  </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.pickupCodeLabel}>Pickup Code</Text>
                     <Text style={styles.pickupCodeValue}>{a.pickup_code}</Text>
@@ -645,7 +630,6 @@ export default function OrdersTab() {
                 </View>
               )}
 
-              {/* Items */}
               <View style={styles.itemsDivider} />
               <View style={styles.itemsList}>
                 {a.items.map((item, idx) => (
@@ -658,25 +642,25 @@ export default function OrdersTab() {
                 ))}
               </View>
 
-              {/* Footer */}
               {a.placed_at && (
                 <View style={styles.cardFooter}>
                   <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
                   <Text style={styles.orderTime}>
                     {safeDate(a.placed_at)?.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })} · {safeDate(a.placed_at)?.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
                   </Text>
-                  <Text style={styles.itemCountBadge}>{a.items.length} item{a.items.length !== 1 ? "s" : ""}</Text>
+                  <View style={styles.itemCountPill}>
+                    <Text style={styles.itemCountPillText}>{a.items.length} item{a.items.length !== 1 ? "s" : ""}</Text>
+                  </View>
                 </View>
               )}
             </View>
           )}
         />
       ) : (
-        /* Previous orders tab */
         previousOrders.length === 0 ? (
           <View style={styles.emptyWrap}>
-            <View style={[styles.emptyIconWrap, { backgroundColor: "#3B82F6" + "18" }]}>
-              <Ionicons name="time-outline" size={40} color="#3B82F6" />
+            <View style={[styles.emptyIconWrap, { backgroundColor: colors.info + "12" }]}>
+              <Ionicons name="time-outline" size={36} color={colors.info} />
             </View>
             <Text style={styles.emptyTitle}>No previous orders</Text>
             <Text style={styles.emptySub}>Delivered orders will appear here</Text>
@@ -700,9 +684,9 @@ export default function OrdersTab() {
                   <Text style={styles.sectionHeaderText}>{section.title}</Text>
                   <View style={styles.sectionHeaderLine} />
                   <View style={styles.sectionHeaderRight}>
-                    <Text style={styles.sectionHeaderCount}>
-                      {section.totalCount}
-                    </Text>
+                    <View style={styles.sectionHeaderCountPill}>
+                      <Text style={styles.sectionHeaderCount}>{section.totalCount}</Text>
+                    </View>
                     <Ionicons
                       name={collapsed ? "chevron-forward" : "chevron-down"}
                       size={14}
@@ -726,27 +710,25 @@ export default function OrdersTab() {
                   <View style={styles.prevCardAccent} />
 
                   <View style={{ flex: 1 }}>
-                    {/* Top row: order code + status badge */}
                     <View style={styles.prevCardTop}>
-                      <View style={{ flex: 1, gap: 5 }}>
+                      <View style={{ flex: 1, gap: 4 }}>
                         <Text style={styles.prevCardCode}>#{o.order_code ?? "—"}</Text>
                         {dateTimeStr ? (
                           <View style={styles.metaRow}>
-                            <Ionicons name="calendar-outline" size={11} color="#3B82F6" />
+                            <Ionicons name="calendar-outline" size={11} color={colors.info} />
                             <Text style={styles.prevCardTime}>{dateTimeStr}</Text>
                           </View>
                         ) : null}
                       </View>
-                      <View style={[styles.statusPill, { backgroundColor: statusColor + "18", borderColor: statusColor + "40" }]}>
+                      <View style={[styles.statusPill, { backgroundColor: statusColor + "12", borderColor: statusColor + "30" }]}>
                         <Text style={[styles.statusPillText, { color: statusColor }]}>
                           {formatStatus(o.status)}
                         </Text>
                       </View>
                     </View>
 
-                    {/* Footer: item count + chevron */}
                     <View style={styles.prevCardFooter}>
-                      <Ionicons name="cube-outline" size={12} color="#3B82F6" />
+                      <Ionicons name="cube-outline" size={12} color={colors.info} />
                       <Text style={styles.prevCardItemCount}>
                         {itemCount} item{itemCount !== 1 ? "s" : ""}
                       </Text>
@@ -805,26 +787,19 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.background,
+    backgroundColor: colors.surface,
   },
   tabActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
-    elevation: 4,
   },
   tabActiveIncoming: {
     backgroundColor: "#FF9800",
     borderColor: "#FF9800",
-    shadowColor: "#FF9800",
   },
   tabActivePrevious: {
-    backgroundColor: "#3B82F6",
-    borderColor: "#3B82F6",
-    shadowColor: "#3B82F6",
+    backgroundColor: colors.info,
+    borderColor: colors.info,
   },
   tabIncomingDot: {
     width: 7,
@@ -833,28 +808,27 @@ const styles = StyleSheet.create({
     backgroundColor: "#FF9800",
     marginRight: 4,
   },
-  tabText: { color: colors.textTertiary, fontSize: 14, fontWeight: "600" },
+  tabText: { color: colors.textTertiary, fontSize: 13, fontWeight: "600" },
   tabTextActive: { color: "#fff" },
 
   list: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
-    paddingBottom: spacing.xl,
+    paddingBottom: spacing.xxxl,
     gap: spacing.sm,
   },
 
-  // ── Section header ─────────────────────────────────────────────
   sectionHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
     marginBottom: spacing.xs,
-    marginTop: spacing.sm,
+    marginTop: spacing.md,
     paddingVertical: 4,
   },
   sectionHeaderText: {
     color: colors.textTertiary,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 0.6,
@@ -871,20 +845,20 @@ const styles = StyleSheet.create({
     gap: 5,
     flexShrink: 0,
   },
+  sectionHeaderCountPill: {
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.full,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   sectionHeaderCount: {
     color: colors.textTertiary,
     fontSize: 11,
     fontWeight: "700",
-    backgroundColor: colors.surfaceVariant,
-    borderRadius: radius.full,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    overflow: "hidden",
   },
 
-  // ── Previous order card ────────────────────────────────────────
   prevCard: {
     flexDirection: "row",
     backgroundColor: colors.surface,
@@ -892,16 +866,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     overflow: "hidden",
-    shadowColor: "#3B82F6",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
+    ...shadows.sm,
     marginBottom: spacing.xs,
   },
   prevCardAccent: {
-    width: 4,
-    backgroundColor: "#3B82F6",
+    width: 3,
+    backgroundColor: colors.info,
     alignSelf: "stretch",
   },
   prevCardTop: {
@@ -918,8 +888,8 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   prevCardTime: {
-    color: "#3B82F6",
-    fontSize: 13,
+    color: colors.info,
+    fontSize: 12,
     fontWeight: "600",
   },
   prevCardFooter: {
@@ -931,7 +901,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.sm,
   },
   prevCardItemCount: {
-    color: "#3B82F6",
+    color: colors.info,
     fontSize: 12,
     fontWeight: "600",
   },
@@ -945,21 +915,16 @@ const styles = StyleSheet.create({
   statusPillText: {
     fontSize: 11,
     fontWeight: "700",
-    letterSpacing: 0.2,
+    letterSpacing: 0.1,
   },
 
-  // ── Active order card ──────────────────────────────────────────
   activeCard: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     overflow: "hidden",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+    ...shadows.md,
   },
   activeCardTop: {
     flexDirection: "row",
@@ -981,6 +946,7 @@ const styles = StyleSheet.create({
   orderMeta: {
     color: colors.textTertiary,
     fontSize: 12,
+    fontWeight: "500",
   },
   statusBadge: {
     flexDirection: "row",
@@ -999,18 +965,27 @@ const styles = StyleSheet.create({
   statusBadgeText: {
     fontSize: 11,
     fontWeight: "700",
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
 
   pickupCodeBox: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.primary + "10",
+    backgroundColor: colors.primary + "08",
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: colors.primary + "25",
+    borderColor: colors.primary + "20",
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
+    gap: spacing.sm,
+  },
+  pickupCodeIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.sm,
+    backgroundColor: colors.primary + "12",
+    alignItems: "center",
+    justifyContent: "center",
   },
   pickupCodeLabel: {
     color: colors.textTertiary,
@@ -1028,6 +1003,7 @@ const styles = StyleSheet.create({
   pickupCodeHint: {
     color: colors.textTertiary,
     fontSize: 11,
+    fontWeight: "500",
   },
 
   itemsDivider: {
@@ -1060,6 +1036,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 13,
     flex: 1,
+    fontWeight: "500",
   },
   cardFooter: {
     flexDirection: "row",
@@ -1075,62 +1052,22 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     fontSize: 11,
     flex: 1,
+    fontWeight: "500",
   },
-  itemCountBadge: {
-    color: colors.textTertiary,
-    fontSize: 11,
+  itemCountPill: {
     backgroundColor: colors.surfaceVariant,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: radius.full,
     borderWidth: 1,
-    borderColor: colors.borderLight,
+    borderColor: colors.border,
+  },
+  itemCountPillText: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    fontWeight: "600",
   },
 
-  // ── Pending order actions ──────────────────────────────────���──
-  activeCardPending: {
-    borderColor: "#FF9800" + "50",
-    borderWidth: 1.5,
-  },
-  pendingActions: {
-    flexDirection: "row",
-    gap: 8,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderLight,
-  },
-  rejectActionBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    alignItems: "center",
-    backgroundColor: colors.error + "15",
-    borderWidth: 1,
-    borderColor: colors.error + "50",
-  },
-  rejectActionText: {
-    color: colors.error,
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  acceptActionBtn: {
-    flex: 2,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    alignItems: "center",
-    backgroundColor: colors.primary,
-  },
-  actionBtnDisabled: {
-    opacity: 0.5,
-  },
-  acceptActionText: {
-    color: "#fff",
-    fontSize: 13,
-    fontWeight: "700",
-  },
-
-  // ── Empty states ──────────────────────────────────────────────
   emptyWrap: {
     flex: 1,
     alignItems: "center",
@@ -1141,7 +1078,7 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: colors.primary + "18",
+    backgroundColor: colors.primary + "10",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: spacing.md,
@@ -1151,6 +1088,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "700",
     marginTop: spacing.sm,
+    letterSpacing: -0.2,
   },
   emptySub: {
     color: colors.textTertiary,
@@ -1158,22 +1096,20 @@ const styles = StyleSheet.create({
     marginTop: 6,
     textAlign: "center",
     paddingHorizontal: spacing.xl,
+    fontWeight: "400",
   },
 });
 
 const allocStyles = StyleSheet.create({
   card: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1.5,
-    borderColor: "#FF9800" + "55",
-    marginBottom: spacing.sm,
+    borderRadius: radius.xl,
+    borderWidth: 2,
+    borderColor: "#FF6B00" + "35",
+    marginBottom: spacing.md,
     overflow: "hidden",
-    shadowColor: "#FF9800",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 2,
+    ...shadows.lg,
+    shadowColor: "#FF6B00",
   },
   cardHeader: {
     flexDirection: "row",
@@ -1184,29 +1120,43 @@ const allocStyles = StyleSheet.create({
   cardHeaderLeft: { gap: 3 },
   orderCode: {
     color: colors.textPrimary,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: "800",
+    letterSpacing: -0.2,
+  },
+  distanceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
   },
   distance: {
     color: colors.textTertiary,
     fontSize: 12,
+    fontWeight: "500",
   },
   badge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: radius.full,
+    backgroundColor: "#FF9800" + "14",
     borderWidth: 1,
+    borderColor: "#FF9800" + "40",
   },
-  badgePending: {
-    backgroundColor: "#FF9800" + "20",
-    borderColor: "#FF9800" + "60",
+  badgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#FF9800",
   },
   badgeText: {
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 0.5,
+    color: "#FF9800",
   },
-  badgeTextPending: { color: "#FF9800" },
   cardBody: {
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.md,
@@ -1231,7 +1181,7 @@ const allocStyles = StyleSheet.create({
   itemBtn: {
     width: 28,
     height: 28,
-    borderRadius: 8,
+    borderRadius: radius.sm,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1.5,
@@ -1267,12 +1217,15 @@ const allocStyles = StyleSheet.create({
   },
   rejectBtn: {
     flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
     paddingVertical: 12,
     borderRadius: radius.md,
-    alignItems: "center",
-    backgroundColor: colors.error + "15",
+    backgroundColor: colors.error + "10",
     borderWidth: 1,
-    borderColor: colors.error + "50",
+    borderColor: colors.error + "35",
   },
   rejectBtnText: {
     color: colors.error,
@@ -1281,13 +1234,20 @@ const allocStyles = StyleSheet.create({
   },
   acceptBtn: {
     flex: 2,
-    paddingVertical: 12,
-    borderRadius: radius.md,
+    flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FF9800",
+    justifyContent: "center",
+    gap: 5,
+    paddingVertical: 14,
+    borderRadius: radius.md,
+    backgroundColor: "#FF6B00",
+    ...shadows.lg,
+    shadowColor: "#FF6B00",
   },
   acceptBtnDisabled: {
-    backgroundColor: "#FF9800" + "60",
+    backgroundColor: "#FF9800" + "50",
+    shadowOpacity: 0,
+    elevation: 0,
   },
   acceptBtnText: {
     color: "#fff",
@@ -1307,5 +1267,6 @@ const allocStyles = StyleSheet.create({
     color: colors.textTertiary,
     fontSize: 11,
     flex: 1,
+    fontWeight: "500",
   },
 });

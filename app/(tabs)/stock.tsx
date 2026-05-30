@@ -17,7 +17,7 @@ import { router } from "expo-router";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { colors, radius, spacing } from "../../lib/theme";
+import { colors, radius, spacing, shadows } from "../../lib/theme";
 import {
   addCustomMasterProduct,
   formatMasterProductUnit,
@@ -864,7 +864,7 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
-  container: { padding: spacing.lg },
+  container: { padding: spacing.lg, paddingBottom: spacing.xxxl },
 
   header: {
     flexDirection: "row",
@@ -894,11 +894,13 @@ const styles = StyleSheet.create({
 
   toggleContainer: {
     flexDirection: "row",
-    gap: spacing.sm,
+    gap: spacing.xs,
     marginBottom: spacing.lg,
     backgroundColor: colors.surfaceVariant,
-    padding: 4,
+    padding: 3,
     borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   toggleBtn: {
     flex: 1,
@@ -906,12 +908,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.xs,
-    paddingVertical: spacing.sm,
+    paddingVertical: 10,
     borderRadius: radius.md,
     backgroundColor: "transparent",
   },
   toggleBtnActive: {
     backgroundColor: colors.primary,
+    ...shadows.sm,
   },
   toggleBtnText: {
     color: colors.textSecondary,
@@ -920,36 +923,41 @@ const styles = StyleSheet.create({
   },
   toggleBtnTextActive: {
     color: colors.surface,
+    fontWeight: "700",
   },
 
   catalogCard: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.border,
     marginBottom: spacing.lg,
     gap: spacing.sm,
+    ...shadows.sm,
   },
   catalogTitle: {
     color: colors.textPrimary,
-    fontSize: 16,
-    fontWeight: "700",
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: -0.2,
   },
   catalogSubtitle: {
     color: colors.textTertiary,
     fontSize: 12,
     marginBottom: spacing.sm,
+    fontWeight: "400",
   },
   catalogSearch: {
     backgroundColor: colors.surfaceVariant,
     borderRadius: radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderWidth: 1,
     borderColor: colors.border,
     color: colors.textPrimary,
-    fontSize: 13,
+    fontSize: 14,
+    fontWeight: "500",
   },
   catalogCategoryRow: {
     flexDirection: "row",
@@ -959,12 +967,12 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   catalogCategoryChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: radius.full,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.surfaceVariant,
+    backgroundColor: colors.surface,
   },
   catalogCategoryChipActive: {
     backgroundColor: colors.primary,
@@ -972,12 +980,12 @@ const styles = StyleSheet.create({
   },
   catalogCategoryText: {
     color: colors.textSecondary,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "500",
   },
   catalogCategoryTextActive: {
     color: colors.surface,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   catalogLoading: {
     paddingVertical: spacing.lg,
@@ -989,12 +997,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     marginTop: spacing.sm,
-    backgroundColor: colors.surfaceVariant,
+    backgroundColor: colors.surface,
   },
   loadMoreBtnText: {
     color: colors.primary,
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   skeletonContainer: {
     gap: spacing.sm,
@@ -1004,7 +1012,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    padding: spacing.sm,
+    padding: spacing.md,
     borderRadius: radius.md,
     backgroundColor: colors.surfaceVariant,
     borderWidth: 1,
@@ -1032,20 +1040,22 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
   },
   catalogEmpty: {
-    paddingVertical: spacing.lg,
+    paddingVertical: spacing.xxl,
     alignItems: "center",
-    gap: spacing.xs,
+    gap: spacing.sm,
   },
   catalogEmptyTitle: {
     color: colors.textPrimary,
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "700",
+    letterSpacing: -0.2,
   },
   catalogEmptyText: {
     color: colors.textTertiary,
-    fontSize: 12,
+    fontSize: 13,
     textAlign: "center",
     paddingHorizontal: spacing.lg,
+    fontWeight: "400",
   },
   catalogList: {
     marginTop: spacing.sm,
@@ -1054,18 +1064,19 @@ const styles = StyleSheet.create({
   catalogItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
-    padding: spacing.sm,
-    borderRadius: radius.md,
-    backgroundColor: colors.surfaceVariant,
+    gap: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.borderLight,
+    borderColor: colors.border,
+    ...shadows.sm,
   },
   catalogItemImage: {
     width: 52,
     height: 52,
     borderRadius: radius.md,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceVariant,
   },
   catalogItemInfo: {
     flex: 1,
@@ -1073,12 +1084,13 @@ const styles = StyleSheet.create({
   },
   catalogItemName: {
     color: colors.textPrimary,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: "600",
   },
   catalogItemMeta: {
     color: colors.textTertiary,
     fontSize: 11,
+    fontWeight: "500",
   },
   catalogItemDesc: {
     color: colors.textSecondary,
@@ -1087,7 +1099,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   catalogAddBtn: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: radius.full,
     backgroundColor: colors.primary,
@@ -1100,12 +1112,13 @@ const styles = StyleSheet.create({
 
   addCustomCard: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.border,
     marginBottom: spacing.lg,
-    gap: spacing.sm,
+    gap: spacing.md,
+    ...shadows.sm,
   },
   addCustomHeader: {
     flexDirection: "row",
@@ -1117,7 +1130,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: radius.md,
-    backgroundColor: colors.primary + "12",
+    backgroundColor: colors.primary + "0C",
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
@@ -1133,11 +1146,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
     lineHeight: 17,
+    fontWeight: "400",
   },
   addCustomSection: {
     backgroundColor: colors.surfaceVariant,
-    borderRadius: radius.md,
-    padding: spacing.md,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
     gap: spacing.xs,
   },
   addCustomSectionLabel: {
@@ -1172,7 +1186,8 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     fontSize: 11,
     marginTop: 4,
-    lineHeight: 15,
+    lineHeight: 16,
+    fontWeight: "400",
   },
   addCustomInputMultiline: {
     minHeight: 68,
@@ -1187,13 +1202,14 @@ const styles = StyleSheet.create({
   },
   addCustomInput: {
     backgroundColor: colors.surface,
-    borderRadius: radius.sm,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     color: colors.textPrimary,
     borderWidth: 1,
     borderColor: colors.border,
     fontSize: 14,
+    fontWeight: "500",
   },
   addCustomChipsRow: {
     flexDirection: "row",
@@ -1202,8 +1218,8 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   addCustomChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: radius.full,
     borderWidth: 1.5,
     borderColor: colors.border,
@@ -1223,14 +1239,14 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   addCustomImageBlock: {
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     overflow: "hidden",
     position: "relative",
   },
   addCustomImage: {
     width: "100%",
     height: 180,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
   },
   addCustomImageOverlay: {
     position: "absolute",
@@ -1263,7 +1279,7 @@ const styles = StyleSheet.create({
   addCustomImagePicker: {
     borderWidth: 1.5,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderStyle: "dashed",
     overflow: "hidden",
     backgroundColor: colors.surface,
@@ -1278,12 +1294,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.sm,
-    paddingVertical: spacing.lg,
+    paddingVertical: spacing.xl,
   },
   addCustomImgPickBtnText: {
     color: colors.primary,
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   addCustomImgPickDivider: {
     width: 1,
@@ -1295,6 +1311,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textAlign: "center",
     paddingBottom: spacing.md,
+    fontWeight: "500",
   },
   addCustomAmountHint: {
     color: colors.textTertiary,
@@ -1305,6 +1322,7 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     fontSize: 12,
     marginTop: spacing.xs,
+    fontWeight: "500",
   },
   addCustomUnitPreviewValue: {
     color: colors.primary,
@@ -1316,19 +1334,15 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   addCustomSubmit: {
-    marginTop: spacing.xs,
+    marginTop: spacing.sm,
     backgroundColor: colors.primary,
-    borderRadius: radius.md,
-    paddingVertical: 15,
+    borderRadius: radius.lg,
+    paddingVertical: 16,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.sm,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 4,
+    ...shadows.md,
   },
   addCustomSubmitDisabled: {
     opacity: 0.6,

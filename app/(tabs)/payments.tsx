@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Animated,
+  Easing,
   FlatList,
   RefreshControl,
   StyleSheet,
@@ -16,9 +17,8 @@ import { useFocusEffect } from "@react-navigation/native";
 import { getSession } from "../../session";
 import { getOrdersFromDb, type OrderForStore } from "../../lib/orders-db";
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
-import { colors, radius, spacing } from "../../lib/theme";
+import { colors, radius, spacing, shadows } from "../../lib/theme";
 
-/** Normalise Postgres timestamps: `2024-01-15 10:30:00+05:30` → ISO with T. */
 function safeDate(str: string | null | undefined): Date | null {
   if (!str) return null;
   const s = str.trim().replace(/^(\d{4}-\d{2}-\d{2})\s/, "$1T");
@@ -32,11 +32,9 @@ function formatDateTime(dateStr: string | null | undefined): string {
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
-  // Use toLocaleString for time-only extraction (reliable across RN engines)
   const time = d.toLocaleString("en-IN", { hour: "2-digit", minute: "2-digit" });
   if (d.toDateString() === today.toDateString()) return `Today, ${time}`;
   if (d.toDateString() === yesterday.toDateString()) return `Yesterday, ${time}`;
-  // Single combined call — same pattern as rider app, proven reliable on Hermes
   return d.toLocaleDateString("en-IN", {
     day: "numeric", month: "short", year: "numeric",
     hour: "2-digit", minute: "2-digit",
@@ -49,11 +47,6 @@ function formatINR(value: number): string {
   return `₹${n.toFixed(2).replace(/\.00$/, "")}`;
 }
 
-/**
- * Payout amount = product subtotal only (no delivery/handling).
- * Primary: sum of unit_price × quantity from order_items.
- * Fallback: store_orders.subtotal_amount (already computed server-side).
- */
 function computeSubtotal(order: OrderForStore): number {
   const items = Array.isArray(order.order_items) ? order.order_items : [];
   const fromItems = items.reduce((sum, it: any) => {
@@ -62,19 +55,12 @@ function computeSubtotal(order: OrderForStore): number {
     return sum + (Number.isFinite(price) && price > 0 ? price * qty : 0);
   }, 0);
   if (fromItems > 0) return fromItems;
-  // Fall back to subtotal_amount stored on the store_orders row (spread via ...so).
   const stored = Number((order as any).subtotal_amount ?? 0);
   if (Number.isFinite(stored) && stored > 0) return stored;
-  // Last resort: total_amount from customer_orders (may include delivery fee but beats showing ₹0).
   const total = Number(order.total_amount ?? 0);
   return Number.isFinite(total) ? total : 0;
 }
 
-const DELIVERED = new Set(["delivered", "order_delivered", "completed"]);
-type Period = "today" | "week" | "all";
-type PayoutRow = { order: OrderForStore; amount: number };
-
-/** Parse date from order code like NN20260429-0012 → Apr 29 2026 */
 function dateFromOrderCode(code: string | null | undefined): string {
   if (!code) return "";
   const m = code.match(/(\d{4})(\d{2})(\d{2})/);
@@ -89,6 +75,10 @@ function dateFromOrderCode(code: string | null | undefined): string {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
+const DELIVERED = new Set(["delivered", "order_delivered", "completed"]);
+type Period = "today" | "week" | "all";
+type PayoutRow = { order: OrderForStore; amount: number };
+
 const PayoutCard = React.memo(function PayoutCard({
   item,
   onPress,
@@ -100,14 +90,14 @@ const PayoutCard = React.memo(function PayoutCard({
   const dateLabel = formatDateTime(order.placed_at ?? order.created_at) || dateFromOrderCode(order.order_code);
 
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>
+    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.72}>
       <View style={styles.cardAccent} />
       <View style={styles.cardInner}>
-        <View style={{ flex: 1, gap: 5 }}>
+        <View style={{ flex: 1, gap: 4 }}>
           <Text style={styles.cardCode}>#{order.order_code ?? "—"}</Text>
           {dateLabel ? (
             <View style={styles.cardMetaRow}>
-              <Ionicons name="calendar-outline" size={12} color={colors.primary} />
+              <Ionicons name="calendar-outline" size={11} color={colors.primary} />
               <Text style={styles.cardMetaText}>{dateLabel}</Text>
             </View>
           ) : null}
@@ -130,15 +120,13 @@ export default function PaymentsTab() {
   const storeIdRef = useRef<string | null>(null);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(20)).current;
+  const slideAnim = useRef(new Animated.Value(16)).current;
 
   useEffect(() => {
-    const anim = Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
-    ]);
-    anim.start();
-    return () => anim.stop();
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
+    ]).start();
   }, []);
 
   const load = useCallback(async (showLoader = false) => {
@@ -148,7 +136,6 @@ export default function PaymentsTab() {
       if (!s?.token) { router.replace("/landing"); return; }
       sessionRef.current = s;
 
-      // Use same store-resolution path as other tabs
       let sid = storeIdRef.current;
       if (!sid) {
         const cached = peekStores();
@@ -186,7 +173,6 @@ export default function PaymentsTab() {
   useEffect(() => { load(true); }, [load]);
   useFocusEffect(useCallback(() => { load(false); }, [load]));
 
-  // Period filtering — memoized so these don't recompute on every render
   const { todayPayouts, weekPayouts, todayTotal, weekTotal, allTotal } = useMemo(() => {
     const now = new Date();
     const todayStr = now.toDateString();
@@ -209,7 +195,6 @@ export default function PaymentsTab() {
   return (
     <SafeAreaView style={styles.safe}>
       <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
-        {/* Header */}
         <View style={styles.headerRow}>
           <Text style={styles.header}>Payouts</Text>
           {payouts.length > 0 && (
@@ -226,6 +211,7 @@ export default function PaymentsTab() {
               key={p}
               style={[styles.periodTab, period === p && styles.periodTabActive]}
               onPress={() => setPeriod(p)}
+              activeOpacity={0.8}
             >
               <Text style={[styles.periodTabText, period === p && styles.periodTabTextActive]}>
                 {p === "today" ? "Today" : p === "week" ? "This Week" : "All Time"}
@@ -240,7 +226,7 @@ export default function PaymentsTab() {
             <View style={styles.summaryIconWrap}>
               <Ionicons name="wallet-outline" size={24} color={colors.primary} />
             </View>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.summaryLabel}>{periodLabel}</Text>
               <Text style={styles.summaryValue}>{formatINR(filteredTotal)}</Text>
             </View>
@@ -264,15 +250,15 @@ export default function PaymentsTab() {
 
         {/* Quick stats */}
         <View style={styles.quickStatsRow}>
-          <View style={[styles.quickStat, { backgroundColor: colors.primary + "14" }]}>
+          <View style={[styles.quickStat, { backgroundColor: colors.primary + "0A" }]}>
             <Text style={[styles.quickStatValue, { color: colors.primary }]}>{formatINR(todayTotal)}</Text>
             <Text style={styles.quickStatLabel}>Today</Text>
           </View>
-          <View style={[styles.quickStat, { backgroundColor: colors.warning + "18" }]}>
+          <View style={[styles.quickStat, { backgroundColor: colors.warning + "0C" }]}>
             <Text style={[styles.quickStatValue, { color: colors.warning }]}>{formatINR(weekTotal)}</Text>
             <Text style={styles.quickStatLabel}>This Week</Text>
           </View>
-          <View style={[styles.quickStat, { backgroundColor: colors.success + "14" }]}>
+          <View style={[styles.quickStat, { backgroundColor: colors.success + "0A" }]}>
             <Text style={[styles.quickStatValue, { color: colors.success }]}>{formatINR(allTotal)}</Text>
             <Text style={styles.quickStatLabel}>All Time</Text>
           </View>
@@ -306,7 +292,7 @@ export default function PaymentsTab() {
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <View style={styles.emptyIconWrap}>
-                <Ionicons name="wallet-outline" size={40} color={colors.primary} />
+                <Ionicons name="wallet-outline" size={36} color={colors.primary} />
               </View>
               <Text style={styles.emptyText}>
                 {period === "today" ? "No earnings today" : period === "week" ? "No earnings this week" : "No payouts yet"}
@@ -340,15 +326,14 @@ const styles = StyleSheet.create({
   countBadge: {
     backgroundColor: colors.primary,
     borderRadius: radius.full,
-    minWidth: 26,
-    height: 26,
+    minWidth: 24,
+    height: 24,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 8,
+    paddingHorizontal: 7,
   },
-  countBadgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  countBadgeText: { color: "#fff", fontSize: 11, fontWeight: "800" },
 
-  // ── Period tabs ────────────────────────────────────────────────
   periodRow: {
     flexDirection: "row",
     paddingHorizontal: spacing.lg,
@@ -361,42 +346,32 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.background,
+    backgroundColor: colors.surface,
     alignItems: "center",
   },
   periodTabActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
-    elevation: 4,
   },
   periodTabText: { color: colors.textTertiary, fontSize: 13, fontWeight: "600" },
   periodTabTextActive: { color: "#fff" },
 
-  // ── Summary card ───────────────────────────────────────────────
   summaryCard: {
     marginHorizontal: spacing.lg,
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
-    padding: spacing.lg,
+    padding: spacing.xl,
     borderWidth: 1,
-    borderColor: colors.primary + "25",
+    borderColor: colors.primary + "18",
     marginBottom: spacing.md,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 3,
+    ...shadows.md,
   },
   summaryTop: { flexDirection: "row", alignItems: "center", gap: spacing.md },
   summaryIconWrap: {
     width: 48,
     height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.primary + "14",
+    borderRadius: radius.md,
+    backgroundColor: colors.primaryBg,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -414,7 +389,6 @@ const styles = StyleSheet.create({
   summaryMeta: { flexDirection: "row", alignItems: "center", gap: 6 },
   summaryMetaText: { color: colors.textTertiary, fontSize: 13, fontWeight: "500" },
 
-  // ── Quick stats ────────────────────────────────────────────────
   quickStatsRow: {
     flexDirection: "row",
     paddingHorizontal: spacing.lg,
@@ -441,9 +415,8 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
 
-  list: { padding: spacing.lg, paddingTop: 0, paddingBottom: spacing.xl, gap: spacing.sm },
+  list: { padding: spacing.lg, paddingTop: 0, paddingBottom: spacing.xxxl, gap: spacing.sm },
 
-  // ── Payout card ────────────────────────────────────────────────
   card: {
     flexDirection: "row",
     backgroundColor: colors.surface,
@@ -451,11 +424,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     overflow: "hidden",
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
+    ...shadows.md,
   },
   cardAccent: {
     width: 4,
@@ -471,16 +440,14 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   cardCode: { color: colors.textPrimary, fontSize: 15, fontWeight: "700" },
-  cardMetaRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  cardMetaRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   cardMetaText: { color: colors.primary, fontSize: 12, fontWeight: "600" },
   earningWrap: {
     alignItems: "flex-end",
-    backgroundColor: colors.success + "12",
+    backgroundColor: colors.success + "0D",
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.success + "35",
     minWidth: 90,
   },
   earningLabel: {
@@ -490,24 +457,25 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginBottom: 2,
   },
-  earningText: { color: colors.success, fontSize: 16, fontWeight: "900" },
-  // ── Empty state ────────────────────────────────────────────────
+  earningText: { color: colors.success, fontSize: 16, fontWeight: "800" },
+
   emptyContainer: { alignItems: "center", justifyContent: "center", paddingTop: 60 },
   emptyIconWrap: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: colors.primary + "18",
+    backgroundColor: colors.primary + "0C",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: spacing.md,
   },
-  emptyText: { color: colors.textPrimary, fontSize: 17, fontWeight: "700" },
+  emptyText: { color: colors.textPrimary, fontSize: 17, fontWeight: "700", letterSpacing: -0.2 },
   emptySub: {
     color: colors.textTertiary,
     fontSize: 13,
     marginTop: 4,
     textAlign: "center",
     paddingHorizontal: spacing.xl,
+    fontWeight: "400",
   },
 });

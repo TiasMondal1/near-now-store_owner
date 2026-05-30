@@ -52,3 +52,6 @@ android/keystore.properties
 android/gradle.properties
 android/app/release.keystore
 android/.kotlin/
+
+# Claude Code
+.claude/

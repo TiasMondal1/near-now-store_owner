@@ -5,14 +5,14 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Switch,
   FlatList,
   ScrollView,
   Modal,
-  Image,
   Alert,
   Animated,
   TextInput,
+  Easing,
+  Dimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
@@ -22,7 +22,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { config } from "../../lib/config";
-import { colors, radius, spacing } from "../../lib/theme";
+import { colors, radius, spacing, shadows } from "../../lib/theme";
 import { supabase } from "../../lib/supabase";
 import {
   getStockListFromDb,
@@ -40,25 +40,29 @@ import {
 } from "../../lib/appCache";
 
 const API_BASE = config.API_BASE;
-const BRAND_LOGO = require("../../near_now_shopkeeper.png");
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
 const CACHE_KEYS = [INVENTORY_PERSISTED_KEY, INVENTORY_CACHE_KEY];
-
-// Stable object — avoids new allocation on every render of the Switch
-const SWITCH_TRACK_COLOR = { false: colors.error + "55", true: colors.primaryLight };
+const TILE_GAP = 10;
+const TILE_WIDTH = (Dimensions.get("window").width - spacing.lg * 2 - TILE_GAP) / 2;
 
 type StoreRow = CachedStore;
 
-
-
+/* ─── Quick-action tile data ─────────────────────────────────────────────── */
+const TILES = [
+  { key: "orders", label: "Orders", desc: "View & manage", icon: "receipt-outline" as const, route: "/(tabs)/previous-orders" },
+  { key: "payouts", label: "Payouts", desc: "Earnings & history", icon: "wallet-outline" as const, route: "/(tabs)/payments" },
+  { key: "inventory", label: "Inventory", desc: "Add products", icon: "cube-outline" as const, route: "/(tabs)/stock" },
+  { key: "settings", label: "Settings", desc: "Store config", icon: "settings-outline" as const, route: "/settings" },
+] as const;
 
 export default function HomeTab() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(16)).current;
 
   const [session, setSession] = useState<any | null>(null);
   const [stores, setStores] = useState<StoreRow[]>([]);
-
   const [loading, setLoading] = useState(true);
 
   const [storeProducts, setStoreProducts] = useState<
@@ -66,12 +70,10 @@ export default function HomeTab() {
   >([]);
   const [storeProductsLoading, setStoreProductsLoading] = useState(true);
   const [togglingProductId, setTogglingProductId] = useState<string | null>(null);
-  const [stockExpanded, setStockExpanded] = useState(false);
   const [stockSearchOpen, setStockSearchOpen] = useState(false);
   const [stockSearchQuery, setStockSearchQuery] = useState("");
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // True when at least one Supabase channel reaches SUBSCRIBED — used to slow down polling
 
   const [confirmModal, setConfirmModal] = useState<{
     title: string;
@@ -98,7 +100,16 @@ export default function HomeTab() {
     return storeProducts.filter((p) => (p.name || "").toLowerCase().includes(q));
   }, [storeProducts, debouncedSearchQuery]);
 
+  const activeProductCount = useMemo(() => storeProducts.filter((p) => p.is_active !== false).length, [storeProducts]);
   const activeOrderCount = 0;
+
+  // Entrance animation
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 450, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 450, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
+    ]).start();
+  }, []);
 
   useEffect(() => {
     if (!isStoreOnline) return;
@@ -114,1169 +125,428 @@ export default function HomeTab() {
 
   useEffect(() => {
     let cancelled = false;
-
     (async () => {
       try {
         const s: any = await getSession();
-        if (!s?.token) {
-          if (!cancelled) router.replace("/landing");
-          return;
-        }
+        if (!s?.token) { if (!cancelled) router.replace("/landing"); return; }
         if (cancelled) return;
         setSession(s);
-
-        // Use cached stores immediately — no loading spinner on warm starts
         const cached = peekStores();
         if (cached && cached.length > 0) {
           setStores(cached);
           setLoading(false);
-          // Refresh in background without blocking UI
-          fetchStoresCached(s.token, s.user?.id).then((fresh) => {
-            if (!cancelled && fresh.length > 0) setStores(fresh);
-          });
+          fetchStoresCached(s.token, s.user?.id).then((fresh) => { if (!cancelled && fresh.length > 0) setStores(fresh); });
           return;
         }
-
-        // Cold start: fetch and wait
         const currentStores = await fetchStoresCached(s.token, s.user?.id);
         if (cancelled) return;
         if (currentStores.length > 0) {
           setStores(currentStores);
           if (!currentStores[0].is_active) await invalidateAllCaches();
         }
-      } catch (error) {
-        if (__DEV__) console.warn("[home] Bootstrap failed", error);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      } catch (error) { if (__DEV__) console.warn("[home] Bootstrap failed", error); }
+      finally { if (!cancelled) setLoading(false); }
     })();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   const invalidateAllCaches = useCallback(async () => {
-    try {
-      await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
-      await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
-    } catch { /* non-fatal */ }
+    try { await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY); await AsyncStorage.removeItem(INVENTORY_CACHE_KEY); } catch {}
   }, []);
 
-  // Initial data load when session + store are ready
   useEffect(() => {
     if (!session?.token || !selectedStore?.id) return;
     fetchStoreProducts();
-    // fetchStoreProducts is memoized on the same [session?.token, selectedStore?.id] deps
-    // so it's always current when these primitives change — no need to include it here
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.token, selectedStore?.id]);
 
-  // Ref is declared here so the channel callback below can reference it safely.
-  // The sync effect that writes to it is placed after fetchStoreProducts is declared.
   const fetchStoreProductsRef = useRef<((silent?: boolean) => Promise<void>) | null>(null);
 
   useEffect(() => {
     if (!selectedStore?.id || !supabase) return;
-
-    const channel = supabase
-      .channel(`products-${selectedStore.id}-${Date.now()}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "products", filter: `store_id=eq.${selectedStore.id}` }, () => {
-        fetchStoreProductsRef.current?.(true);
-      })
-      .subscribe();
-
+    const channel = supabase.channel(`products-${selectedStore.id}-${Date.now()}`).on("postgres_changes", { event: "*", schema: "public", table: "products", filter: `store_id=eq.${selectedStore.id}` }, () => { fetchStoreProductsRef.current?.(true); }).subscribe();
     return () => { supabase?.removeChannel(channel); };
   }, [selectedStore?.id]);
 
   useEffect(() => {
     if (!selectedStore?.id || !session?.token || !supabase) return;
-
-    const token = session.token;
-    const userId = session.user?.id;
-    const channel = supabase
-      .channel(`store-${selectedStore.id}-${Date.now()}`)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${selectedStore.id}` }, () => {
-        fetchStores(token, userId);
-      })
-      .subscribe();
-
+    const token = session.token; const userId = session.user?.id;
+    const channel = supabase.channel(`store-${selectedStore.id}-${Date.now()}`).on("postgres_changes", { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${selectedStore.id}` }, () => { fetchStores(token, userId); }).subscribe();
     return () => { supabase?.removeChannel(channel); };
   }, [selectedStore?.id, session?.token]);
 
   const firstFocusRef = useRef(true);
-  useFocusEffect(
-    React.useCallback(() => {
-      // Skip the very first focus (initial mount) — the useEffect above already
-      // calls fetchStoreProducts on mount. Only refresh on subsequent focuses.
-      if (firstFocusRef.current) {
-        firstFocusRef.current = false;
-        return;
-      }
-      if (session?.token && selectedStore?.id) {
-        fetchStoreProducts(true);
-      }
-    }, [session?.token, selectedStore?.id])
-  );
-
+  useFocusEffect(React.useCallback(() => {
+    if (firstFocusRef.current) { firstFocusRef.current = false; return; }
+    if (session?.token && selectedStore?.id) fetchStoreProducts(true);
+  }, [session?.token, selectedStore?.id]));
 
   const fetchStoreProducts = useCallback(async (silent = false) => {
     if (!session?.token || !selectedStore?.id) return;
     if (!silent) setStoreProductsLoading(true);
-
     try {
       const fromDb = await getStockListFromDb(selectedStore.id);
       if (Array.isArray(fromDb) && fromDb.length > 0) {
-        const mapped = fromDb.map((item: any) => ({
-          id: item.id,
-          name: (item.name || item.product_name || "").trim() || "Product",
-          unit: item.unit || "",
-          storeProductId: item.storeProductId,
-          is_active: item.is_active !== false,
-        }));
-        setStoreProducts(mapped);
+        setStoreProducts(fromDb.map((item: any) => ({ id: item.id, name: (item.name || item.product_name || "").trim() || "Product", unit: item.unit || "", storeProductId: item.storeProductId, is_active: item.is_active !== false })));
         return;
       }
       setStoreProducts([]);
-    } catch {
-      setStoreProducts([]);
-    } finally {
-      if (!silent) setStoreProductsLoading(false);
-    }
+    } catch { setStoreProducts([]); }
+    finally { if (!silent) setStoreProductsLoading(false); }
   }, [session?.token, selectedStore?.id]);
-  // Keep ref current so the Supabase channel callback always calls the latest version
   useEffect(() => { fetchStoreProductsRef.current = fetchStoreProducts; }, [fetchStoreProducts]);
 
   const fetchStores = useCallback(async (token: string, userId?: string): Promise<StoreRow[]> => {
-    try {
-      const fetched = await fetchStoresCached(token, userId);
-      if (fetched.length > 0) setStores(fetched);
-      return fetched;
-    } catch {
-      return [];
-    }
+    try { const fetched = await fetchStoresCached(token, userId); if (fetched.length > 0) setStores(fetched); return fetched; } catch { return []; }
   }, []);
 
   const toggleOnline = (value: boolean) => {
     if (!session || !selectedStore) return;
     if (selectedStore.is_active === value) return;
-
     if (value) {
-      setConfirmModal({
-        title: "Go Online?",
-        message: "Your store will become visible to customers. All active products will be available.",
-        confirmText: "Go Online",
-        confirmColor: colors.success,
-        iconName: "storefront",
-        onConfirm: async () => {
-          const response = await fetch(`${API_BASE}/api/store-owner/stores/${selectedStore.id}/online`, {
-            method: "PATCH",
-            headers: {
-              Authorization: `Bearer ${session.token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ is_active: true }),
-          });
-          if (!response.ok) throw new Error(`Failed: ${response.status}`);
-          await restoreActiveProductsOnline(selectedStore.id);
-          patchStoreActive(selectedStore.id, true);
-          clearStoreCache();
-          await fetchStores(session.token, session.user?.id);
-          await fetchStoreProducts(true);
-        },
-      });
+      setConfirmModal({ title: "Go Online?", message: "Your store will become visible to customers.", confirmText: "Go Online", confirmColor: colors.success, iconName: "storefront", onConfirm: async () => {
+        const response = await fetch(`${API_BASE}/api/store-owner/stores/${selectedStore.id}/online`, { method: "PATCH", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ is_active: true }) });
+        if (!response.ok) throw new Error(`Failed: ${response.status}`);
+        await restoreActiveProductsOnline(selectedStore.id); patchStoreActive(selectedStore.id, true); clearStoreCache();
+        await fetchStores(session.token, session.user?.id); await fetchStoreProducts(true);
+      }});
     } else {
-      setConfirmModal({
-        title: "Go Offline?",
-        message: "Your store will be hidden from customers. Your product list is preserved.",
-        confirmText: "Go Offline",
-        confirmColor: colors.error,
-        iconName: "power",
-        onConfirm: async () => {
-          setStoreProductsLoading(true);
-          try {
-            await setAllProductsOffline(selectedStore.id);
-            const response = await fetch(`${API_BASE}/api/store-owner/stores/${selectedStore.id}/online`, {
-              method: "PATCH",
-              headers: {
-                Authorization: `Bearer ${session.token}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ is_active: false }),
-            });
-            if (!response.ok) throw new Error(`Failed: ${response.status}`);
-            patchStoreActive(selectedStore.id, false);
-            clearStoreCache();
-            await invalidateAllCaches();
-            await fetchStores(session.token, session.user?.id);
-            fetchStoreProducts(true).catch(() => {});
-          } finally {
-            setStoreProductsLoading(false);
-          }
-        },
-      });
+      setConfirmModal({ title: "Go Offline?", message: "Your store will be hidden from customers.", confirmText: "Go Offline", confirmColor: colors.error, iconName: "power", onConfirm: async () => {
+        setStoreProductsLoading(true);
+        try {
+          await setAllProductsOffline(selectedStore.id);
+          const response = await fetch(`${API_BASE}/api/store-owner/stores/${selectedStore.id}/online`, { method: "PATCH", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ is_active: false }) });
+          if (!response.ok) throw new Error(`Failed: ${response.status}`);
+          patchStoreActive(selectedStore.id, false); clearStoreCache(); await invalidateAllCaches();
+          await fetchStores(session.token, session.user?.id); fetchStoreProducts(true).catch(() => {});
+        } finally { setStoreProductsLoading(false); }
+      }});
     }
   };
 
-  const handleStatusToggle = async (value: boolean) => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    toggleOnline(value);
-  };
+  const handleStatusToggle = async (value: boolean) => { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); toggleOnline(value); };
 
   const toggleProductActive = useCallback(async (product: any) => {
     if (!product.storeProductId) return;
-
-    const wasActive = product.is_active !== false;
-    const nowActive = !wasActive;
-
+    const wasActive = product.is_active !== false; const nowActive = !wasActive;
     setTogglingProductId(product.id);
-    setStoreProducts((prev) =>
-      prev.map((p) =>
-        p.id === product.id ? { ...p, is_active: nowActive } : p
-      )
-    );
-
+    setStoreProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, is_active: nowActive } : p));
     try {
-      const success = await updateProductActiveState(
-        product.storeProductId,
-        nowActive,
-        session?.token ?? null
-      );
-      if (!success) {
-        setStoreProducts((prev) =>
-          prev.map((p) =>
-            p.id === product.id ? { ...p, is_active: wasActive } : p
-          )
-        );
-      } else {
-        await AsyncStorage.multiRemove(CACHE_KEYS);
-        fetchStoreProducts(true);
-      }
-    } catch {
-      setStoreProducts((prev) =>
-        prev.map((p) =>
-          p.id === product.id ? { ...p, is_active: wasActive } : p
-        )
-      );
-    } finally {
-      setTogglingProductId(null);
-    }
+      const success = await updateProductActiveState(product.storeProductId, nowActive, session?.token ?? null);
+      if (!success) { setStoreProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, is_active: wasActive } : p)); }
+      else { await AsyncStorage.multiRemove(CACHE_KEYS); fetchStoreProducts(true); }
+    } catch { setStoreProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, is_active: wasActive } : p)); }
+    finally { setTogglingProductId(null); }
   }, [session?.token, fetchStoreProducts]);
 
   const deleteProduct = useCallback(async (product: any) => {
     if (!product.storeProductId || !supabase) return;
-
-    // Soft delete: set deleted_at so the row stays in DB for order history,
-    // but is filtered out of all active-product queries.
-    const { error } = await supabase
-      .from("products")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", product.storeProductId);
-
-    if (error) {
-      Alert.alert("Error", "Failed to remove product. Please try again.");
-      return;
-    }
-
+    const { error } = await supabase.from("products").update({ deleted_at: new Date().toISOString() }).eq("id", product.storeProductId);
+    if (error) { Alert.alert("Error", "Failed to remove product."); return; }
     setStoreProducts((prev) => prev.filter((p) => p.id !== product.id));
     await AsyncStorage.multiRemove(CACHE_KEYS);
   }, []);
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <ActivityIndicator color={colors.primary} />
+      <SafeAreaView style={s.safe}>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator color={colors.primary} size="large" />
+        </View>
       </SafeAreaView>
     );
   }
 
+  const ownerName = session?.user?.name || "Shopkeeper";
+  const firstName = ownerName.split(" ")[0];
+
   return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container}>
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Image source={BRAND_LOGO} style={styles.brandLogo} />
+    <SafeAreaView style={s.safe}>
+      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+        <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
+
+          {/* ── Header ────────────────────────────────────────────── */}
+          <View style={s.header}>
             <View>
-              <Text style={styles.brand}>Near&Now</Text>
-              <Text style={styles.subtitle}>Store Owner</Text>
+              <Text style={s.greeting}>Hello, {firstName}</Text>
+              <Text style={s.storeName}>{selectedStore?.name || "My Store"}</Text>
             </View>
-          </View>
-          <View style={styles.headerActions}>
-            <View style={styles.statusChip}>
-              <Animated.View
-                style={[
-                  styles.statusDot,
-                  {
-                    backgroundColor: isStoreOnline ? colors.success : colors.error,
-                    transform: [{ scale: isStoreOnline ? pulseAnim : 1 }],
-                  },
-                ]}
-              />
-              <Text
-                style={[
-                  styles.statusLabel,
-                  { color: isStoreOnline ? colors.success : colors.error },
-                ]}
-              >
-                {isStoreOnline ? "Online" : "Offline"}
-              </Text>
-            </View>
-            <Switch
-              value={isStoreOnline}
-              onValueChange={handleStatusToggle}
-              trackColor={SWITCH_TRACK_COLOR}
-              thumbColor={isStoreOnline ? colors.primary : colors.error}
-              ios_backgroundColor={colors.border}
-            />
-            <TouchableOpacity onPress={() => router.push("/profile")} style={styles.iconBtn}>
-              <Ionicons name="person-circle-outline" size={24} color={colors.textSecondary} />
+            <TouchableOpacity onPress={() => router.push("/profile")} style={s.avatarBtn}>
+              <Text style={s.avatarText}>{firstName.charAt(0).toUpperCase()}</Text>
             </TouchableOpacity>
           </View>
-        </View>
 
-        {selectedStore && (
-          <StoreStatusCard
-            store={selectedStore}
-            isOnline={isStoreOnline}
-            activeOrderCount={activeOrderCount}
-            onToggle={handleStatusToggle}
-          />
-        )}
+          {/* ── Store Status ──────────────────────────────────────── */}
+          {selectedStore && (
+            <StoreStatusCard store={selectedStore} isOnline={isStoreOnline} activeOrderCount={activeOrderCount} onToggle={handleStatusToggle} />
+          )}
 
-        {/* Store status confirm modal */}
-        <Modal visible={!!confirmModal} transparent animationType="fade">
-          <View style={styles.confirmOverlay}>
-            <View style={styles.confirmSheet}>
-              {confirmModal && (
-                <>
-                  <View style={[styles.confirmIconWrap, { backgroundColor: confirmModal.confirmColor + "18" }]}>
-                    <Ionicons name={confirmModal.iconName} size={32} color={confirmModal.confirmColor} />
-                  </View>
-                  <Text style={styles.confirmTitle}>{confirmModal.title}</Text>
-                  <Text style={styles.confirmMsg}>{confirmModal.message}</Text>
-                  <TouchableOpacity
-                    style={[styles.confirmActionBtn, { backgroundColor: confirmModal.confirmColor }]}
-                    activeOpacity={0.85}
-                    disabled={confirmLoading}
-                    onPress={async () => {
-                      setConfirmLoading(true);
-                      try {
-                        await confirmModal.onConfirm();
-                      } catch {
-                        Alert.alert("Error", "Failed to update store status. Please try again.");
-                      } finally {
-                        setConfirmLoading(false);
-                        setConfirmModal(null);
-                      }
-                    }}
-                  >
-                    {confirmLoading ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <Text style={styles.confirmActionBtnText}>{confirmModal.confirmText}</Text>
-                    )}
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.confirmCancelBtn}
-                    activeOpacity={0.75}
-                    disabled={confirmLoading}
-                    onPress={() => setConfirmModal(null)}
-                  >
-                    <Text style={styles.confirmCancelBtnText}>Cancel</Text>
-                  </TouchableOpacity>
-                </>
-              )}
+          {/* ── Quick Stats Row ───────────────────────────────────── */}
+          <View style={s.statsRow}>
+            <View style={s.statCard}>
+              <Text style={s.statValue}>{storeProducts.length}</Text>
+              <Text style={s.statLabel}>Products</Text>
+            </View>
+            <View style={[s.statCard, { borderColor: colors.success + "30" }]}>
+              <Text style={[s.statValue, { color: colors.success }]}>{activeProductCount}</Text>
+              <Text style={s.statLabel}>Active</Text>
+            </View>
+            <View style={[s.statCard, { borderColor: colors.primary + "30" }]}>
+              <Text style={[s.statValue, { color: colors.primary }]}>{isStoreOnline ? "ON" : "OFF"}</Text>
+              <Text style={s.statLabel}>Status</Text>
             </View>
           </View>
-        </Modal>
 
-
-
-        <View>
-          <View style={styles.stockSection}>
-            <View
-              style={[
-                styles.stockHeader,
-                stockSearchOpen ? { marginBottom: spacing.xs } : { marginBottom: spacing.lg },
-              ]}
-            >
+          {/* ── Quick Actions (Tiles) ─────────────────────────────── */}
+          <Text style={s.sectionLabel}>Quick Actions</Text>
+          <View style={s.tilesGrid}>
+            {TILES.map((tile) => (
               <TouchableOpacity
-                style={styles.stockHeaderTitleArea}
-                onPress={() => setStockExpanded(!stockExpanded)}
-                activeOpacity={0.7}
+                key={tile.key}
+                style={s.tile}
+                onPress={() => router.push(tile.route as any)}
+                activeOpacity={0.6}
               >
-                <View style={styles.stockTitleRow}>
-                  <Text style={styles.stockTitle}>Your Stock</Text>
-                  {storeProducts.length > 0 && (
-                    <View style={styles.stockCountBadge}>
-                      <Text style={styles.stockCountBadgeText}>
-                        {storeProducts.filter((p) => p.is_active !== false).length} active
-                      </Text>
-                    </View>
-                  )}
+                <View style={s.tileTop}>
+                  <Ionicons name={tile.icon} size={20} color={colors.textSecondary} />
+                  <Ionicons name="chevron-forward" size={14} color={colors.textTertiary} />
                 </View>
-                <Text style={styles.stockSubtitle}>
-                  {stockSearchQuery.trim()
-                    ? filteredStoreProducts.length === storeProducts.length
-                      ? `${storeProducts.length} product${storeProducts.length !== 1 ? "s" : ""} in store`
-                      : `${filteredStoreProducts.length} of ${storeProducts.length} match`
-                    : `${storeProducts.length} product${storeProducts.length !== 1 ? "s" : ""} in store`}
-                </Text>
+                <Text style={s.tileLabel}>{tile.label}</Text>
+                <Text style={s.tileDesc}>{tile.desc}</Text>
               </TouchableOpacity>
-              <View style={styles.stockHeaderRight}>
-                <TouchableOpacity
-                  onPress={() => {
-                    if (stockSearchOpen) {
-                      setStockSearchOpen(false);
-                      setStockSearchQuery("");
-                    } else {
-                      setStockSearchOpen(true);
-                    }
-                  }}
-                  style={styles.stockSearchIconBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel={stockSearchOpen ? "Close stock search" : "Search stock"}
-                >
-                  <Ionicons
-                    name={stockSearchOpen ? "close-outline" : "search-outline"}
-                    size={22}
-                    color={colors.textSecondary}
-                  />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => setStockExpanded(!stockExpanded)}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel={stockExpanded ? "Collapse stock list" : "Expand stock list"}
-                >
-                  <Ionicons
-                    name={stockExpanded ? "chevron-up" : "chevron-down"}
-                    size={24}
-                    color={colors.textTertiary}
-                  />
-                </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* ── Your Stock ────────────────────────────────────────── */}
+          <View style={s.stockCard}>
+            <View style={s.stockHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={s.stockTitle}>Your Stock</Text>
+                <Text style={s.stockSub}>
+                  {storeProducts.length} product{storeProducts.length !== 1 ? "s" : ""} in store
+                </Text>
               </View>
+              <TouchableOpacity
+                onPress={() => { setStockSearchOpen(!stockSearchOpen); if (stockSearchOpen) setStockSearchQuery(""); }}
+                style={s.stockIconBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name={stockSearchOpen ? "close" : "search"} size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
             </View>
 
             {stockSearchOpen && (
-              <View style={styles.stockSearchBar}>
-                <Ionicons name="search" size={18} color={colors.textTertiary} style={styles.stockSearchIcon} />
+              <View style={s.searchBar}>
+                <Ionicons name="search" size={16} color={colors.textTertiary} />
                 <TextInput
                   value={stockSearchQuery}
                   onChangeText={handleStockSearchChange}
-                  placeholder="Search products by name…"
+                  placeholder="Search products..."
                   placeholderTextColor={colors.textTertiary}
-                  style={styles.stockSearchInput}
+                  style={s.searchInput}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  clearButtonMode="while-editing"
                 />
-                {stockSearchQuery.length > 0 ? (
-                  <TouchableOpacity
-                    onPress={() => setStockSearchQuery("")}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    accessibilityLabel="Clear search"
-                  >
-                    <Ionicons name="close-circle" size={20} color={colors.textTertiary} />
+                {stockSearchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setStockSearchQuery("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
                   </TouchableOpacity>
-                ) : null}
+                )}
               </View>
             )}
 
-            {!stockExpanded && storeProducts.length > 0 && (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.chipScroll}
-              >
-                {filteredStoreProducts.length === 0 ? (
-                  <View style={styles.stockNoMatchesChip}>
-                    <Text style={styles.stockNoMatchesChipText}>No products match “{stockSearchQuery.trim()}”</Text>
-                  </View>
-                ) : (
-                  <>
-                    {filteredStoreProducts.slice(0, 15).map((p) => {
-                      const isActive = p.is_active !== false;
-                      const qty = p.quantity ?? 0;
-                      return (
-                        <View
-                          key={p.id}
-                          style={[styles.productChip, isActive ? styles.productChipActive : styles.productChipInactive]}
-                        >
-                          <View style={[styles.productChipDot, { backgroundColor: isActive ? colors.success : colors.textTertiary }]} />
-                          <Text
-                            style={[styles.productChipText, isActive ? styles.productChipTextActive : styles.productChipTextInactive]}
-                            numberOfLines={1}
-                          >
-                            {p.name || "Product"}
-                          </Text>
-                          <Text style={[styles.productChipQty, isActive ? styles.productChipQtyActive : styles.productChipQtyInactive]}>
-                            {qty}
-                          </Text>
-                        </View>
-                      );
-                    })}
-                    {filteredStoreProducts.length > 15 && (
-                      <TouchableOpacity
-                        style={styles.moreChip}
-                        onPress={() => setStockExpanded(true)}
-                      >
-                        <Text style={styles.moreChipText}>+{filteredStoreProducts.length - 15} more</Text>
-                      </TouchableOpacity>
-                    )}
-                  </>
-                )}
-              </ScrollView>
-            )}
-
-            {!stockExpanded && storeProducts.length === 0 && !storeProductsLoading && (
-              <View style={styles.emptyStockCompact}>
-                <Text style={styles.emptyStockCompactText}>
-                  {selectedStore?.is_active ? "No products yet. Go to Stock tab to add some." : "Go online to manage your stock."}
+            {storeProductsLoading ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.xl }} />
+            ) : storeProducts.length === 0 ? (
+              <View style={s.emptyStock}>
+                <Ionicons name="cube-outline" size={32} color={colors.textTertiary} />
+                <Text style={s.emptyStockTitle}>{selectedStore?.is_active ? "No products yet" : "Store is Offline"}</Text>
+                <Text style={s.emptyStockText}>
+                  {selectedStore?.is_active ? "Go to Inventory tab to add products" : "Go online to manage your stock"}
                 </Text>
               </View>
+            ) : (
+              <FlatList
+                data={filteredStoreProducts}
+                keyExtractor={(p) => p.id}
+                scrollEnabled={false}
+                contentContainerStyle={{ gap: spacing.sm }}
+                ListEmptyComponent={
+                  <Text style={s.noMatchText}>No products match "{stockSearchQuery.trim()}"</Text>
+                }
+                renderItem={({ item: p }) => {
+                  const isActive = p.is_active !== false;
+                  return (
+                    <View style={s.productRow}>
+                      <View style={[s.productDot, { backgroundColor: isActive ? colors.success : colors.border }]} />
+                      <Text style={s.productName} numberOfLines={1}>{p.name}</Text>
+                      {p.unit ? <Text style={s.productUnit}>{p.unit}</Text> : null}
+                      <TouchableOpacity
+                        style={[s.toggleBtn, isActive ? s.toggleBtnOn : s.toggleBtnOff]}
+                        onPress={() => toggleProductActive(p)}
+                        disabled={togglingProductId === p.id || !selectedStore?.is_active}
+                        activeOpacity={0.75}
+                      >
+                        {togglingProductId === p.id ? (
+                          <ActivityIndicator size="small" color={isActive ? "#fff" : colors.textTertiary} />
+                        ) : (
+                          <Text style={isActive ? s.toggleTextOn : s.toggleTextOff}>{isActive ? "Active" : "Off"}</Text>
+                        )}
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => deleteProduct(p)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Ionicons name="trash-outline" size={15} color={colors.error + "80"} />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                }}
+              />
             )}
+          </View>
 
-            {stockExpanded && (
-              storeProductsLoading ? (
-                <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.lg }} />
-              ) : storeProducts.length === 0 ? (
-                <View style={styles.emptyStock}>
-                  <Ionicons name="cube-outline" size={40} color={colors.textTertiary} />
-                  <Text style={styles.emptyStockTitle}>
-                    {selectedStore?.is_active ? "No products yet" : "Store is Offline"}
-                  </Text>
-                  <Text style={styles.emptyStockText}>
-                    {selectedStore?.is_active
-                      ? "Add products from Stock tab to start tracking inventory"
-                      : "Go online to set product quantities and accept orders"}
-                  </Text>
+        </Animated.View>
+      </ScrollView>
+
+      {/* ── Confirm Modal ──────────────────────────────────────── */}
+      <Modal visible={!!confirmModal} transparent animationType="fade">
+        <View style={s.modalOverlay}>
+          <View style={s.modalSheet}>
+            {confirmModal && (
+              <>
+                <View style={s.modalHandle} />
+                <View style={[s.modalIconWrap, { backgroundColor: confirmModal.confirmColor + "12" }]}>
+                  <Ionicons name={confirmModal.iconName} size={28} color={confirmModal.confirmColor} />
                 </View>
-              ) : filteredStoreProducts.length === 0 ? (
-                <View style={styles.emptyStock}>
-                  <Ionicons name="search-outline" size={40} color={colors.textTertiary} />
-                  <Text style={styles.emptyStockTitle}>No matches</Text>
-                  <Text style={styles.emptyStockText}>
-                    Nothing in your stock matches “{stockSearchQuery.trim()}”. Try a different name or clear the search.
-                  </Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={filteredStoreProducts}
-                  keyExtractor={(p) => p.id}
-                  scrollEnabled={false}
-                  initialNumToRender={10}
-                  maxToRenderPerBatch={10}
-                  windowSize={5}
-                  removeClippedSubviews={false}
-                  contentContainerStyle={styles.stockList}
-                  renderItem={({ item: p, index }) => {
-                    const isActive = p.is_active !== false;
-                    return (
-                      <View style={[styles.stockItemCard, index === filteredStoreProducts.length - 1 && { marginBottom: 0 }]}>
-                        <View style={[styles.stockItemAccent, { backgroundColor: isActive ? colors.success : colors.border }]} />
-                        <View style={styles.stockItemInfo}>
-                          <Text style={styles.stockItemName} numberOfLines={1}>{p.name || "Product"}</Text>
-                          {p.unit ? (
-                            <Text style={styles.stockItemUnit}>{p.unit}</Text>
-                          ) : null}
-                        </View>
-                        <View style={styles.stockItemActions}>
-                          <TouchableOpacity
-                            style={[styles.activeToggleBtn, isActive ? styles.activeToggleBtnOn : styles.activeToggleBtnOff]}
-                            onPress={() => toggleProductActive(p)}
-                            disabled={togglingProductId === p.id || !selectedStore?.is_active}
-                            activeOpacity={0.75}
-                          >
-                            {togglingProductId === p.id ? (
-                              <ActivityIndicator size="small" color={isActive ? colors.surface : colors.textSecondary} />
-                            ) : (
-                              <Text style={isActive ? styles.activeToggleTextOn : styles.activeToggleTextOff}>
-                                {isActive ? "Active" : "Inactive"}
-                              </Text>
-                            )}
-                          </TouchableOpacity>
-                          <TouchableOpacity style={styles.deleteBtn} onPress={() => deleteProduct(p)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                            <Ionicons name="trash-outline" size={17} color={colors.error} />
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    );
+                <Text style={s.modalTitle}>{confirmModal.title}</Text>
+                <Text style={s.modalMsg}>{confirmModal.message}</Text>
+                <TouchableOpacity
+                  style={[s.modalConfirmBtn, { backgroundColor: confirmModal.confirmColor }]}
+                  activeOpacity={0.85}
+                  disabled={confirmLoading}
+                  onPress={async () => {
+                    setConfirmLoading(true);
+                    try { await confirmModal.onConfirm(); }
+                    catch { Alert.alert("Error", "Failed to update store status."); }
+                    finally { setConfirmLoading(false); setConfirmModal(null); }
                   }}
-                />
-              )
+                >
+                  {confirmLoading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.modalConfirmText}>{confirmModal.confirmText}</Text>}
+                </TouchableOpacity>
+                <TouchableOpacity style={s.modalCancelBtn} activeOpacity={0.75} disabled={confirmLoading} onPress={() => setConfirmModal(null)}>
+                  <Text style={s.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+              </>
             )}
           </View>
         </View>
-      </ScrollView>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
-  container: { padding: spacing.lg },
+  scroll: { padding: spacing.lg, paddingBottom: 100 },
 
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: spacing.xl,
-    alignItems: "center",
-    paddingBottom: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
+  // Header
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.xl },
+  greeting: { fontSize: 14, color: colors.textSecondary },
+  storeName: { fontSize: 22, fontWeight: "700", color: colors.textPrimary, marginTop: 2 },
+  avatarBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: colors.primaryBg,
+    alignItems: "center", justifyContent: "center",
+    borderWidth: 1.5, borderColor: colors.primary + "25",
   },
-  headerLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  brandLogo: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-  },
-  headerActions: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    alignItems: "center",
-  },
-  statusChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: colors.surfaceVariant,
-    borderRadius: radius.full,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  statusLabel: { fontSize: 12, fontWeight: "600" },
-  brand: {
-    color: colors.textPrimary,
-    fontSize: 18,
-    fontWeight: "800",
-    letterSpacing: -0.5,
-  },
-  subtitle: {
-    color: colors.textTertiary,
-    fontSize: 11,
-    marginTop: -2,
-  },
-  iconBtn: {
-    width: 40,
-    height: 40,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.surfaceVariant,
-    borderRadius: radius.full,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
+  avatarText: { fontSize: 18, fontWeight: "700", color: colors.primary },
 
-
-  overlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "center",
-    alignItems: "center",
+  // Stats
+  statsRow: { flexDirection: "row", gap: TILE_GAP, marginBottom: spacing.xl },
+  statCard: {
+    flex: 1, alignItems: "center",
+    backgroundColor: colors.surface, borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    borderWidth: 1, borderColor: colors.border,
+    ...shadows.sm,
   },
-  popup: {
-    width: "92%",
-    backgroundColor: colors.surface,
-    borderRadius: 26,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
+  statValue: { fontSize: 20, fontWeight: "800", color: colors.textPrimary },
+  statLabel: { fontSize: 11, fontWeight: "500", color: colors.textTertiary, marginTop: 2 },
+
+  // Section label
+  sectionLabel: { fontSize: 14, fontWeight: "600", color: colors.textSecondary, marginBottom: spacing.md },
+
+  // Tiles
+  tilesGrid: { flexDirection: "row", flexWrap: "wrap", gap: TILE_GAP, marginBottom: spacing.xl },
+  tile: {
+    width: TILE_WIDTH, backgroundColor: colors.surface,
+    borderRadius: radius.md, padding: spacing.lg,
+    borderWidth: 1, borderColor: colors.border,
+    ...shadows.sm,
   },
-  popupTitle: { color: colors.textPrimary, fontSize: 18, fontWeight: "800", textAlign: "center" },
-  orderCodeBig: { color: colors.textPrimary, fontSize: 24, fontWeight: "800", textAlign: "center" },
-
-  itemRow: { flexDirection: "row", gap: spacing.md, marginBottom: 10, alignItems: "center" },
-  itemImg: { width: 48, height: 48, borderRadius: radius.sm },
-  itemName: { color: colors.textPrimary, fontWeight: "600" },
-  itemQty: { color: colors.textTertiary, fontSize: 12 },
-
-  actions: { flexDirection: "row", gap: spacing.md, marginTop: 14 },
-  btn: { flex: 1, paddingVertical: 14, borderRadius: radius.md, alignItems: "center" },
-  btnText: { color: colors.surface, fontWeight: "800" },
-
-  ordersSection: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: spacing.lg,
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-  },
-  ordersSectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
+  tileTop: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
     marginBottom: spacing.md,
   },
-  ordersSectionTitle: {
-    color: colors.textPrimary,
-    fontSize: 18,
-    fontWeight: "700",
-    letterSpacing: -0.3,
+  tileLabel: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
+  tileDesc: { fontSize: 12, color: colors.textTertiary, marginTop: 2 },
+
+  // Stock card
+  stockCard: {
+    backgroundColor: colors.surface, borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1, borderColor: colors.border,
+    ...shadows.sm,
   },
-  ordersSectionSubtitle: {
-    color: colors.textTertiary,
-    fontSize: 12,
-    marginTop: 2,
-  },
-  refreshBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: radius.md,
-    backgroundColor: colors.surfaceVariant,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  waitingCard: {
-    alignItems: "center",
-    paddingVertical: spacing.xl,
-    gap: spacing.sm,
-  },
-  waitingTitle: {
-    color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: "700",
-    marginTop: spacing.xs,
-  },
-  waitingText: {
-    color: colors.textTertiary,
-    fontSize: 12,
-    textAlign: "center",
-  },
-  orderCard: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: spacing.md,
-    backgroundColor: colors.surfaceVariant,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    borderLeftWidth: 4,
-    marginBottom: spacing.sm,
-  },
-  orderCardLeft: {
-    gap: 3,
-  },
-  orderCardCode: {
-    color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  orderCardTime: {
-    color: colors.textTertiary,
-    fontSize: 11,
-  },
-  orderCardRight: {
-    alignItems: "flex-end",
-    gap: 4,
-  },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: radius.full,
-  },
-  statusBadgeText: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 0.3,
-  },
-  orderCardAmount: {
-    color: colors.textPrimary,
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  orderCardContainer: {
-    marginBottom: spacing.sm,
-  },
-  orderItemsList: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.xs,
-    marginTop: spacing.xs,
-    paddingLeft: 12,
-  },
-  orderItemChip: {
-    backgroundColor: colors.surfaceVariant,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: radius.full,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  orderItemText: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    fontWeight: "500",
+  stockHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.md },
+  stockTitle: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
+  stockSub: { fontSize: 12, color: colors.textTertiary, marginTop: 2 },
+  stockIconBtn: {
+    width: 34, height: 34, borderRadius: radius.sm,
+    backgroundColor: colors.background,
+    alignItems: "center", justifyContent: "center",
   },
 
-  stockSection: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: spacing.lg,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
+  // Search
+  searchBar: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    backgroundColor: colors.background, borderRadius: radius.sm,
+    paddingHorizontal: spacing.md, marginBottom: spacing.md,
   },
-  stockHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: spacing.sm,
-  },
-  stockHeaderTitleArea: {
-    flex: 1,
-    marginRight: spacing.sm,
-  },
-  stockSearchIconBtn: {
-    padding: spacing.xs,
-    marginRight: spacing.xs,
-  },
-  stockSearchBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.surfaceVariant,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    paddingHorizontal: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  stockSearchIcon: {
-    marginRight: spacing.xs,
-  },
-  stockSearchInput: {
-    flex: 1,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: colors.textPrimary,
-  },
-  stockNoMatchesChip: {
+  searchInput: { flex: 1, paddingVertical: 10, fontSize: 14, color: colors.textPrimary },
+
+  // Product list
+  productRow: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    maxWidth: 280,
+    borderBottomWidth: 1, borderBottomColor: colors.borderLight,
   },
-  stockNoMatchesChipText: {
-    color: colors.textTertiary,
-    fontSize: 13,
-  },
-  stockTitleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  stockTitle: {
-    color: colors.textPrimary,
-    fontSize: 18,
-    fontWeight: "700",
-    letterSpacing: -0.3,
-  },
-  stockCountBadge: {
-    backgroundColor: colors.success + "18",
-    borderRadius: radius.full,
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderWidth: 1,
-    borderColor: colors.success + "40",
-  },
-  stockCountBadgeText: {
-    color: colors.success,
-    fontSize: 11,
-    fontWeight: "700",
-  },
-  stockSubtitle: {
-    color: colors.textTertiary,
-    fontSize: 12,
-    marginTop: 3,
-  },
-  stockHeaderRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  emptyStock: {
-    alignItems: "center",
-    paddingVertical: spacing.xl,
-  },
-  emptyStockTitle: {
-    color: colors.textPrimary,
-    fontSize: 16,
-    fontWeight: "700",
-    marginTop: spacing.md,
-  },
-  emptyStockText: {
-    color: colors.textTertiary,
-    fontSize: 13,
-    textAlign: "center",
-    marginTop: spacing.xs,
-    marginBottom: spacing.lg,
-    paddingHorizontal: spacing.lg,
-  },
-  stockList: {
-    gap: spacing.sm,
-  },
-  stockItemCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    overflow: "hidden",
-  },
-  stockItemAccent: {
-    width: 4,
-    alignSelf: "stretch",
-  },
-  deleteBtn: {
-    padding: spacing.xs,
-  },
-  stockItemInfo: {
-    flex: 1,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-  },
-  stockItemName: {
-    color: colors.textPrimary,
-    fontSize: 14,
-    fontWeight: "600",
-    marginBottom: 2,
-  },
-  stockItemUnit: {
-    color: colors.textTertiary,
-    fontSize: 11,
-    fontWeight: "500",
-    marginTop: 2,
-  },
-  stockItemActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    paddingRight: spacing.md,
-  },
-  activeToggleBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: radius.full,
-    borderWidth: 1.5,
-    minWidth: 80,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  activeToggleBtnOn: {
-    backgroundColor: colors.success,
-    borderColor: colors.success,
-  },
-  activeToggleBtnOff: {
-    backgroundColor: colors.surfaceVariant,
-    borderColor: colors.border,
-  },
-  activeToggleTextOn: {
-    color: colors.surface,
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  activeToggleTextOff: {
-    color: colors.textTertiary,
-    fontSize: 13,
-    fontWeight: "600",
-  },
+  productDot: { width: 6, height: 6, borderRadius: 3 },
+  productName: { flex: 1, fontSize: 14, fontWeight: "500", color: colors.textPrimary },
+  productUnit: { fontSize: 11, color: colors.textTertiary },
+  toggleBtn: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: radius.full, minWidth: 56, alignItems: "center" },
+  toggleBtnOn: { backgroundColor: colors.success },
+  toggleBtnOff: { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border },
+  toggleTextOn: { color: "#fff", fontSize: 11, fontWeight: "700" },
+  toggleTextOff: { color: colors.textTertiary, fontSize: 11, fontWeight: "600" },
 
-  chipScroll: {
-    paddingBottom: spacing.sm,
-    gap: spacing.xs,
-    flexDirection: "row",
-  },
-  productChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    borderRadius: radius.full,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderWidth: 1,
-    maxWidth: 150,
-  },
-  productChipActive: {
-    backgroundColor: colors.success + "15",
-    borderColor: colors.success + "50",
-  },
-  productChipInactive: {
-    backgroundColor: colors.surfaceVariant,
-    borderColor: colors.border,
-  },
-  productChipDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    flexShrink: 0,
-  },
-  productChipText: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  productChipTextActive: {
-    color: colors.success,
-    fontWeight: "600",
-  },
-  productChipTextInactive: {
-    color: colors.textSecondary,
-    fontWeight: "500",
-  },
-  productChipQty: {
-    fontSize: 11,
-    fontWeight: "700",
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 8,
-    overflow: "hidden",
-    minWidth: 18,
-    textAlign: "center",
-  },
-  productChipQtyActive: {
-    backgroundColor: colors.success + "30",
-    color: colors.success,
-  },
-  productChipQtyInactive: {
-    backgroundColor: colors.surfaceVariant,
-    color: colors.textTertiary,
-  },
+  // Empty
+  emptyStock: { alignItems: "center", paddingVertical: spacing.xxl, gap: spacing.sm },
+  emptyStockTitle: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
+  emptyStockText: { fontSize: 13, color: colors.textTertiary, textAlign: "center" },
+  noMatchText: { fontSize: 13, color: colors.textTertiary, textAlign: "center", paddingVertical: spacing.lg },
 
-  quantityStepper: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.surfaceVariant,
-    borderRadius: radius.full,
-    borderWidth: 1,
-    borderColor: colors.border,
-    overflow: "hidden",
+  // Modal
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
+  modalSheet: {
+    backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: spacing.xl, paddingTop: spacing.md, paddingBottom: 40,
+    alignItems: "center", gap: spacing.md,
   },
-  stepperBtn: {
-    width: 30,
-    height: 30,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  stepperValue: {
-    minWidth: 28,
-    textAlign: "center",
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.textPrimary,
-  },
-  stepperValueZero: {
-    color: colors.textTertiary,
-  },
-  moreChip: {
-    backgroundColor: colors.primary + "18",
-    borderRadius: radius.full,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderWidth: 1,
-    borderColor: colors.primary + "40",
-  },
-  moreChipText: {
-    color: colors.primary,
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  emptyStockCompact: {
-    paddingVertical: spacing.md,
-  },
-  emptyStockCompactText: {
-    color: colors.textTertiary,
-    fontSize: 13,
-    textAlign: "center",
-  },
-
-  // Store status confirm modal
-
-  confirmOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    justifyContent: "flex-end",
-  },
-  confirmSheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xl,
-    paddingBottom: 36,
-    alignItems: "center",
-    gap: spacing.md,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 20,
-  },
-  confirmIconWrap: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: spacing.sm,
-  },
-  confirmTitle: {
-    color: colors.textPrimary,
-    fontSize: 20,
-    fontWeight: "800",
-    letterSpacing: -0.3,
-    textAlign: "center",
-  },
-  confirmMsg: {
-    color: colors.textSecondary,
-    fontSize: 14,
-    textAlign: "center",
-    lineHeight: 20,
-    marginBottom: spacing.sm,
-  },
-  confirmActionBtn: {
-    width: "100%",
-    paddingVertical: 15,
-    borderRadius: radius.lg,
-    alignItems: "center",
-    marginTop: spacing.sm,
-  },
-  confirmActionBtnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
-    letterSpacing: 0.1,
-  },
-  confirmCancelBtn: {
-    width: "100%",
-    paddingVertical: 14,
-    borderRadius: radius.lg,
-    alignItems: "center",
-    backgroundColor: colors.surfaceVariant,
-  },
-  confirmCancelBtnText: {
-    color: colors.textSecondary,
-    fontSize: 15,
-    fontWeight: "600",
-  },
+  modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: spacing.sm },
+  modalIconWrap: { width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center" },
+  modalTitle: { fontSize: 20, fontWeight: "700", color: colors.textPrimary, textAlign: "center" },
+  modalMsg: { fontSize: 14, color: colors.textSecondary, textAlign: "center", lineHeight: 20, marginBottom: spacing.sm },
+  modalConfirmBtn: { width: "100%", paddingVertical: 15, borderRadius: radius.md, alignItems: "center" },
+  modalConfirmText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  modalCancelBtn: { width: "100%", paddingVertical: 14, borderRadius: radius.md, alignItems: "center", backgroundColor: colors.background },
+  modalCancelText: { color: colors.textSecondary, fontSize: 15, fontWeight: "500" },
 });
-
