@@ -3,9 +3,7 @@
  * Handles store settings, business hours, delivery configuration
  */
 
-import { apiClient } from './api-client';
-import { apiUrl } from './apiUrl';
-import { fetchJson } from './fetchJson';
+import { config } from './config';
 
 export interface Store {
   id: string;
@@ -76,42 +74,36 @@ class StoreService {
   }
 
   /**
-   * Get store details
-   */
-  async getStore(storeId: string, token: string): Promise<Store | null> {
-    const response = await apiClient.get(
-      `/store-owner/stores/${storeId}`,
-      { Authorization: `Bearer ${token}` }
-    );
-
-    if (response.success && response.data?.store) {
-      this.storeCache = response.data.store;
-      return response.data.store;
-    }
-
-    return null;
-  }
-
-  /**
-   * Update store settings
+   * Update store settings.
+   * Uses /store-owner/stores/:id (not /api/store-owner/...) — Vercel routes
+   * /store-owner/* directly to the Express app without the /api prefix.
    */
   async updateStore(
     storeId: string,
     settings: Partial<StoreSettings>,
     token: string
   ): Promise<boolean> {
-    const response = await apiClient.patch(
-      `/store-owner/stores/${storeId}`,
-      settings,
-      { Authorization: `Bearer ${token}` }
-    );
-
-    if (response.success) {
-      this.invalidateCache();
-      return true;
+    try {
+      const res = await fetch(
+        `${config.API_BASE}/store-owner/stores/${storeId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(settings),
+        }
+      );
+      const json = res.ok ? await res.json().catch(() => null) : null;
+      if (res.ok && json?.success) {
+        this.invalidateCache();
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
     }
-
-    return false;
   }
 
   /**
@@ -148,6 +140,38 @@ class StoreService {
   }
 
   /**
+   * Toggle store online/offline status.
+   * Uses /store-owner/stores/:id/online directly (no /api prefix).
+   */
+  async toggleStoreStatus(
+    storeId: string,
+    isActive: boolean,
+    token: string
+  ): Promise<boolean> {
+    try {
+      const res = await fetch(
+        `${config.API_BASE}/store-owner/stores/${storeId}/online`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ is_active: isActive }),
+        }
+      );
+      const json = res.ok ? await res.json().catch(() => null) : null;
+      if (res.ok && json?.success) {
+        this.invalidateCache();
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Check if store is open now
    */
   isStoreOpenNow(businessHours?: BusinessHours): boolean {
@@ -160,7 +184,7 @@ class StoreService {
     if (!dayHours || dayHours.closed) return false;
 
     const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    
+
     return currentTime >= dayHours.open && currentTime <= dayHours.close;
   }
 
@@ -172,11 +196,11 @@ class StoreService {
 
     const now = new Date();
     const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-    
+
     for (let i = 0; i < 7; i++) {
       const checkDate = new Date(now);
       checkDate.setDate(checkDate.getDate() + i);
-      
+
       const dayName = daysOfWeek[checkDate.getDay()];
       const dayHours = businessHours[dayName as keyof BusinessHours];
 
@@ -227,83 +251,14 @@ class StoreService {
     };
   }
 
-  /**
-   * Upload store image
-   */
-  async uploadStoreImage(
-    storeId: string,
-    imageUri: string,
-    token: string
-  ): Promise<string | null> {
-    try {
-      // Create form data
-      const formData = new FormData();
-      formData.append('image', {
-        uri: imageUri,
-        type: 'image/jpeg',
-        name: 'store-image.jpg',
-      } as any);
-
-      const url = apiUrl(apiClient.getBaseUrl(), `/store-owner/stores/${storeId}/image`);
-      const { res, json } = await fetchJson<{ image_url?: string }>(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: formData,
-      });
-
-      if (res.ok && json?.image_url) {
-        this.invalidateCache();
-        return json.image_url;
-      }
-
-      return null;
-    } catch (error) {
-      console.error('Failed to upload store image:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Toggle store online/offline status
-   */
-  async toggleStoreStatus(
-    storeId: string,
-    isActive: boolean,
-    token: string
-  ): Promise<boolean> {
-    const response = await apiClient.patch(
-      `/store-owner/stores/${storeId}/online`,
-      { is_active: isActive },
-      { Authorization: `Bearer ${token}` }
-    );
-
-    if (response.success) {
-      this.invalidateCache();
-      return true;
-    }
-
-    return false;
-  }
-
-  /**
-   * Get cached store
-   */
   getCachedStore(): Store | null {
     return this.storeCache;
   }
 
-  /**
-   * Invalidate cache
-   */
   invalidateCache(): void {
     this.storeCache = null;
   }
 
-  /**
-   * Clear cache
-   */
   clearCache(): void {
     this.invalidateCache();
   }
