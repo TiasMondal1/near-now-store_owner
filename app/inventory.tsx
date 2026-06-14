@@ -18,7 +18,7 @@ import { getSession } from "../session";
 import { config } from "../lib/config";
 import { colors, radius, spacing } from "../lib/theme";
 import { Ionicons } from "@expo/vector-icons";
-import { getMergedInventoryFromDb, upsertStoreProduct, getMasterProductCategories } from "../lib/storeProducts";
+import { getMergedInventoryFromDb, upsertStoreProduct, getMasterProductCategories, getStoreProductsFromDb } from "../lib/storeProducts";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
@@ -136,21 +136,13 @@ export default function InventoryScreen() {
   }, [search]);
 
   const fetchInventory = async (authToken: string, storeIdVal: string) => {
-    const [masterRes, storeProductsRes] = await Promise.all([
+    const [masterRes, storeList] = await Promise.all([
       fetch(`${API_BASE}/api/products/master-products?isActive=true`),
-      fetch(`${API_BASE}/api/store-owner/stores/${storeIdVal}/products`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      }),
+      getStoreProductsFromDb(storeIdVal),
     ]);
     const masterRaw = await masterRes.text();
-    const storeRaw = await storeProductsRes.text();
     let masterList: any[] = [];
-    let storeList: any[] = [];
     try { masterList = masterRaw ? JSON.parse(masterRaw) : []; } catch { masterList = []; }
-    try {
-      const storeJson = storeRaw ? JSON.parse(storeRaw) : null;
-      storeList = storeJson?.products || [];
-    } catch { storeList = []; }
     if (!Array.isArray(masterList)) masterList = [];
     const byMasterId: Record<string, { id: string; is_active: boolean; quantity: number }> = {};
     storeList.forEach((sp: any) => {
@@ -248,7 +240,7 @@ export default function InventoryScreen() {
         const auth = { Authorization: `Bearer ${session.token}` };
         const userId = session.user?.id;
         const [storeRes, masterRes] = await Promise.all([
-          fetch(`${API_BASE}/api/store-owner/stores${userId ? `?userId=${userId}` : ''}`, { headers: auth }),
+          fetch(`${API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`, { headers: auth }),
           fetch(`${API_BASE}/api/products/master-products?isActive=true`),
         ]);
         const [storeRaw, masterRaw] = await Promise.all([storeRes.text(), masterRes.text()]);
@@ -282,16 +274,7 @@ export default function InventoryScreen() {
           return;
         }
 
-        const storeProductsRes = await fetch(
-          `${API_BASE}/api/store-owner/stores/${id}/products`,
-          { headers: auth },
-        );
-        const storeRaw2 = await storeProductsRes.text();
-        let storeList: any[] = [];
-        try {
-          const storeJson2 = storeRaw2 ? JSON.parse(storeRaw2) : null;
-          storeList = storeJson2?.products || [];
-        } catch { storeList = []; }
+        const storeList = await getStoreProductsFromDb(id);
         const merged = mergeMasterWithStoreProducts(masterList, storeList);
         setProducts(merged);
         await AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(merged));

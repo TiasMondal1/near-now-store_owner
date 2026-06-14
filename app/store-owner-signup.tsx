@@ -262,7 +262,7 @@ export default function StoreOwnerSignupScreen() {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/store-owner/signup/complete`, {
+      const res = await fetch(`${API_BASE}/store-owner/signup/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

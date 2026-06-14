@@ -69,17 +69,8 @@ export function useProducts(token: string | null, storeId: string | null) {
         return;
       }
 
-      const res = await fetch(
-        `${API_BASE}/api/store-owner/stores/${storeIdVal}/products`,
-        { headers: { Authorization: `Bearer ${authToken}` } }
-      );
-
-      const raw = await res.text();
-      const json = raw ? JSON.parse(raw) : null;
-      const productList = json?.products || [];
-
-      setProducts(productList);
-      await AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(productList));
+      setProducts([]);
+      await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
     } catch { /* non-fatal */ }
   }, []);
 

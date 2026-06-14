@@ -6,7 +6,8 @@
       "Bash(vercel --version)",
       "Bash(npx vercel *)",
       "Bash(./gradlew clean *)",
-      "Bash(java *)"
+      "Bash(java *)",
+      "Bash(grep -rn \"fetch\\(\\\\`\\\\${API_BASE}\\\\|fetch\\(\\\\`\\\\${config\\\\|fetch\\(\\\\`https://\" /Users/tiasmondal166/projects/near-now-store_owner --include=\"*.ts\" --include=\"*.tsx\")"
     ]
   }
 }

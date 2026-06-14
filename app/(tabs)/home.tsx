@@ -205,7 +205,7 @@ export default function HomeTab() {
     if (selectedStore.is_active === value) return;
     if (value) {
       setConfirmModal({ title: "Go Online?", message: "Your store will become visible to customers.", confirmText: "Go Online", confirmColor: colors.success, iconName: "storefront", onConfirm: async () => {
-        const response = await fetch(`${API_BASE}/api/store-owner/stores/${selectedStore.id}/online`, { method: "PATCH", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ is_active: true }) });
+        const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, { method: "PATCH", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ is_active: true }) });
         if (!response.ok) throw new Error(`Failed: ${response.status}`);
         await restoreActiveProductsOnline(selectedStore.id); patchStoreActive(selectedStore.id, true); clearStoreCache();
         await fetchStores(session.token, session.user?.id); await fetchStoreProducts(true);
@@ -215,7 +215,7 @@ export default function HomeTab() {
         setStoreProductsLoading(true);
         try {
           await setAllProductsOffline(selectedStore.id);
-          const response = await fetch(`${API_BASE}/api/store-owner/stores/${selectedStore.id}/online`, { method: "PATCH", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ is_active: false }) });
+          const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, { method: "PATCH", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ is_active: false }) });
           if (!response.ok) throw new Error(`Failed: ${response.status}`);
           patchStoreActive(selectedStore.id, false); clearStoreCache(); await invalidateAllCaches();
           await fetchStores(session.token, session.user?.id); fetchStoreProducts(true).catch(() => {});
