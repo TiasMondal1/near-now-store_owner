@@ -13,11 +13,6 @@ buildscript {
 }
 
 allprojects {
-  // Make hermesEnabled available to all subprojects (incl. expo-modules-core)
-  // before any of them are configured. In Gradle 8.x, cross-project bare
-  // property access requires the property to be in project.ext.
-  ext.hermesEnabled = (findProperty('hermesEnabled') ?: 'true').toBoolean()
-
   repositories {
     google()
     mavenCentral()
