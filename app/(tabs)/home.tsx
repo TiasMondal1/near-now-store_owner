@@ -40,6 +40,7 @@ import {
 } from "../../lib/appCache";
 
 const API_BASE = config.API_BASE;
+const SELECTED_STORE_KEY = "selected_store_id";
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
 const CACHE_KEYS = [INVENTORY_PERSISTED_KEY, INVENTORY_CACHE_KEY];
@@ -63,6 +64,7 @@ export default function HomeTab() {
 
   const [session, setSession] = useState<any | null>(null);
   const [stores, setStores] = useState<StoreRow[]>([]);
+  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [storeProducts, setStoreProducts] = useState<
@@ -91,7 +93,7 @@ export default function HomeTab() {
     searchDebounceRef.current = setTimeout(() => setDebouncedSearchQuery(text), 200);
   }, []);
 
-  const selectedStore = stores[0];
+  const selectedStore = (selectedStoreId ? stores.find(s => s.id === selectedStoreId) : undefined) ?? stores[0] ?? null;
   const isStoreOnline = !!selectedStore?.is_active;
 
   const filteredStoreProducts = useMemo(() => {
@@ -149,6 +151,20 @@ export default function HomeTab() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // Resolve & persist the selected store whenever the store list changes.
+  useEffect(() => {
+    if (stores.length === 0) return;
+    AsyncStorage.getItem(SELECTED_STORE_KEY).then((id) => {
+      const picked = (id && stores.find(s => s.id === id)) || stores[0];
+      if (picked) {
+        setSelectedStoreId(picked.id);
+        if (!id) AsyncStorage.setItem(SELECTED_STORE_KEY, picked.id).catch(() => {});
+      }
+    }).catch(() => {
+      if (stores[0]) setSelectedStoreId(stores[0].id);
+    });
+  }, [stores]);
 
   const invalidateAllCaches = useCallback(async () => {
     try { await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY); await AsyncStorage.removeItem(INVENTORY_CACHE_KEY); } catch {}

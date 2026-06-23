@@ -14,6 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../../session";
 import { getOrdersFromDb, type OrderForStore } from "../../lib/orders-db";
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
@@ -138,12 +139,15 @@ export default function PaymentsTab() {
 
       let sid = storeIdRef.current;
       if (!sid) {
+        const selId = await AsyncStorage.getItem('selected_store_id');
         const cached = peekStores();
         if (cached?.length) {
-          sid = cached[0].id;
+          const picked = (selId && cached.find(s => s.id === selId)) || cached[0];
+          sid = picked?.id ?? null;
         } else {
           const stores = await fetchStoresCached(s.token, s.user?.id);
-          sid = stores[0]?.id ?? null;
+          const picked = (selId && stores.find(s => s.id === selId)) || stores[0];
+          sid = picked?.id ?? null;
         }
         storeIdRef.current = sid;
       }

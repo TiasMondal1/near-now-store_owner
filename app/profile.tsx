@@ -83,15 +83,23 @@ export default function ProfileScreen() {
       const savedOwnerImg = await AsyncStorage.getItem(OWNER_IMAGE_KEY);
       if (!cancelled && savedOwnerImg) setOwnerImageUri(savedOwnerImg);
 
+      const selId = await AsyncStorage.getItem('selected_store_id');
       const cached = peekStores();
       if (cached?.length) {
-        hydrate(cached[0]);
+        const picked = (selId && cached.find((s: any) => s.id === selId)) || cached[0];
+        hydrate(picked);
         fetchStoresCached(s.token, s.user?.id).then((fresh) => {
-          if (!cancelled && fresh.length) hydrate(fresh[0]);
+          if (!cancelled && fresh.length) {
+            const freshPicked = (selId && fresh.find(s => s.id === selId)) || fresh[0];
+            hydrate(freshPicked);
+          }
         });
       } else {
         const stores = await fetchStoresCached(s.token, s.user?.id);
-        if (!cancelled && stores.length) hydrate(stores[0]);
+        if (!cancelled && stores.length) {
+          const picked = (selId && stores.find(s => s.id === selId)) || stores[0];
+          hydrate(picked);
+        }
       }
       if (!cancelled) setLoading(false);
     })();
@@ -391,7 +399,7 @@ export default function ProfileScreen() {
           <SectionCard title="Verification Documents" icon="shield-checkmark-outline">
             <View style={styles.docTypeRow}>
               <Text style={styles.fieldLabel}>Document Type</Text>
-              <TouchableOpacity style={styles.docTypeBtn} onPress={() => setDocPickerVisible(true)} activeOpacity={0.8}>
+              <TouchableOpacity style={styles.docTypeBtn} onPress={() => setDocPickerVisible(true)} activeOpacity={0.8} disabled={!editing}>
                 <Text style={styles.docTypeBtnText}>{selectedDocLabel}</Text>
                 <Ionicons name="chevron-down" size={14} color={colors.textSecondary} />
               </TouchableOpacity>
@@ -400,7 +408,7 @@ export default function ProfileScreen() {
             <Field
               label="Document Number"
               value={docNumber}
-              editing
+              editing={editing}
               onChangeText={setDocNumber}
               placeholder="e.g. XXXXXXXXXX"
               icon="card"
@@ -413,7 +421,7 @@ export default function ProfileScreen() {
                 style={[styles.docUploadArea, docImageUri && styles.docUploadAreaFilled]}
                 activeOpacity={0.8}
                 onPress={pickDocImage}
-                disabled={uploadingDoc}
+                disabled={!editing || uploadingDoc}
               >
                 {uploadingDoc ? (
                   <ActivityIndicator color={colors.primary} />

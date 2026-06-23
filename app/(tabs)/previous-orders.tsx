@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, radius, spacing, shadows } from "../../lib/theme";
@@ -236,9 +237,11 @@ export default function OrdersTab() {
         if (cancelled) return;
         setSession(s);
 
+        const selId = await AsyncStorage.getItem('selected_store_id');
         const cached = peekStores();
         if (cached && cached.length > 0) {
-          setStoreId(cached[0].id);
+          const picked = (selId && cached.find(s => s.id === selId)) || cached[0];
+          if (picked) setStoreId(picked.id);
           setAllocLoading(false);
           setPrevLoading(false);
           return;
@@ -246,7 +249,8 @@ export default function OrdersTab() {
 
         const stores = await fetchStoresCached(s.token, s.user?.id);
         if (cancelled) return;
-        if (stores[0]) setStoreId(stores[0].id);
+        const picked = (selId && stores.find(s => s.id === selId)) || stores[0];
+        if (picked) setStoreId(picked.id);
       } catch (e) {
         if (__DEV__) console.warn("[orders-tab] Bootstrap error:", e);
       } finally {

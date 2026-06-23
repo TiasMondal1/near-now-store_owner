@@ -263,7 +263,10 @@ export default function InventoryScreen() {
           return;
         }
 
-        const id = storeJson.stores[0].id;
+        const selId = await AsyncStorage.getItem('selected_store_id');
+        const storeList: any[] = storeJson.stores;
+        const pickedStore = (selId && storeList.find((s: any) => s.id === selId)) || storeList[0];
+        const id: string = pickedStore.id;
         setStoreId(id);
 
         const fromDb = await getMergedInventoryFromDb(id);

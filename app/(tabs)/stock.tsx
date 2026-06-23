@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
@@ -62,16 +63,19 @@ export default function StockTab() {
         setSession(s);
 
         // Use cached storeId first — avoids network call on tab switch
+        const selId = await AsyncStorage.getItem('selected_store_id');
         const cached = peekStores();
         if (cached && cached.length > 0) {
-          setStoreId(cached[0].id);
+          const picked = (selId && cached.find(s => s.id === selId)) || cached[0];
+          if (picked) setStoreId(picked.id);
           setLoading(false);
           return;
         }
 
         const stores = await fetchStoresCached(s.token, s.user?.id);
         if (cancelled) return;
-        if (stores[0]) setStoreId(stores[0].id);
+        const picked = (selId && stores.find(s => s.id === selId)) || stores[0];
+        if (picked) setStoreId(picked.id);
       } catch (e) {
         if (__DEV__) console.warn("[stock] Bootstrap error:", e);
       } finally {
