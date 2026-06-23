@@ -66,6 +66,9 @@ export default function HomeTab() {
   const [stores, setStores] = useState<StoreRow[]>([]);
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [approvedBanner, setApprovedBanner] = useState(false);
+  const approvedBannerAnim = useRef(new Animated.Value(0)).current;
+  const approvalPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [storeProducts, setStoreProducts] = useState<
     Array<{ id: string; name: string; unit?: string; storeProductId?: string; is_active?: boolean; quantity?: number }>
@@ -152,6 +155,36 @@ export default function HomeTab() {
     return () => { cancelled = true; };
   }, []);
 
+  // Poll every 30s while the selected store is pending approval; show banner on approval.
+  useEffect(() => {
+    const isApproved = (selectedStore as any)?.is_approved;
+    if (isApproved !== false || !session?.token) {
+      if (approvalPollRef.current) { clearInterval(approvalPollRef.current); approvalPollRef.current = null; }
+      return;
+    }
+    const checkApproval = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/store-owner/stores`, { headers: { Authorization: `Bearer ${session.token}` } });
+        if (!res.ok) return;
+        const json = await res.json();
+        const fresh: StoreRow[] = json?.stores ?? [];
+        if (!fresh.length) return;
+        setStores(fresh);
+        const updated = fresh.find(s => s.id === selectedStore?.id);
+        if (updated && (updated as any).is_approved) {
+          setApprovedBanner(true);
+          Animated.sequence([
+            Animated.timing(approvedBannerAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
+            Animated.delay(4000),
+            Animated.timing(approvedBannerAnim, { toValue: 0, duration: 350, useNativeDriver: true }),
+          ]).start(() => setApprovedBanner(false));
+        }
+      } catch {}
+    };
+    approvalPollRef.current = setInterval(checkApproval, 30_000);
+    return () => { if (approvalPollRef.current) { clearInterval(approvalPollRef.current); approvalPollRef.current = null; } };
+  }, [(selectedStore as any)?.is_approved, selectedStore?.id, session?.token]);
+
   // Resolve & persist the selected store whenever the store list changes.
   useEffect(() => {
     if (stores.length === 0) return;
@@ -218,6 +251,7 @@ export default function HomeTab() {
 
   const toggleOnline = (value: boolean) => {
     if (!session || !selectedStore) return;
+    if (!(selectedStore as any).is_approved) return;
     if (selectedStore.is_active === value) return;
     if (value) {
       setConfirmModal({ title: "Go Online?", message: "Your store will become visible to customers.", confirmText: "Go Online", confirmColor: colors.success, iconName: "storefront", onConfirm: async () => {
@@ -292,9 +326,17 @@ export default function HomeTab() {
             </TouchableOpacity>
           </View>
 
+          {/* ── Approval success banner ───────────────────────────── */}
+          {approvedBanner && (
+            <Animated.View style={[s.approvedBanner, { opacity: approvedBannerAnim, transform: [{ translateY: approvedBannerAnim.interpolate({ inputRange: [0, 1], outputRange: [-8, 0] }) }] }]}>
+              <Ionicons name="checkmark-circle" size={16} color="#065F46" />
+              <Text style={s.approvedBannerText}>Your store has been approved! You can now go online.</Text>
+            </Animated.View>
+          )}
+
           {/* ── Store Status ──────────────────────────────────────── */}
           {selectedStore && (
-            <StoreStatusCard store={selectedStore} isOnline={isStoreOnline} activeOrderCount={activeOrderCount} onToggle={handleStatusToggle} />
+            <StoreStatusCard store={selectedStore} isOnline={isStoreOnline} activeOrderCount={activeOrderCount} onToggle={handleStatusToggle} pendingApproval={!(selectedStore as any).is_approved} />
           )}
 
           {/* ── Quick Stats Row ───────────────────────────────────── */}
@@ -462,6 +504,8 @@ export default function HomeTab() {
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   scroll: { padding: spacing.lg, paddingBottom: 100 },
+  approvedBanner: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#D1FAE5", borderRadius: 10, paddingHorizontal: spacing.md, paddingVertical: 10, marginBottom: spacing.md, borderWidth: 1, borderColor: "#6EE7B7" },
+  approvedBannerText: { color: "#065F46", fontSize: 13, fontWeight: "600", flex: 1 },
 
   // Header
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.xl },
