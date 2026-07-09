@@ -23,7 +23,12 @@ if (fs.existsSync(envPath)) {
         let val = trimmed.slice(idx + 1).trim();
         if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))
           val = val.slice(1, -1);
-        if (key.startsWith("EXPO_PUBLIC_") || key.startsWith("VITE_") || key === "NODE_ENV") {
+        if (
+          key.startsWith("EXPO_PUBLIC_") ||
+          key.startsWith("VITE_") ||
+          key.startsWith("SENTRY_") ||
+          key === "NODE_ENV"
+        ) {
           process.env[key] = val;
         }
       }
@@ -53,6 +58,27 @@ if (fs.existsSync(envPath)) {
 }
 
 process.env.NODE_ENV = process.env.NODE_ENV || "production";
+
+// Sentry source map upload runs automatically after JS bundling (see
+// node_modules/@sentry/react-native/sentry.gradle). Without an org/project/auth
+// token, sentry-cli fails with "An organization ID or slug is required" and the
+// whole release build aborts. Only keep the upload enabled when Sentry is fully
+// configured; otherwise disable it so the APK/AAB still builds. Users can force
+// uploads by setting SENTRY_DISABLE_AUTO_UPLOAD=false themselves.
+const hasSentryAuth = !!process.env.SENTRY_AUTH_TOKEN;
+const hasSentryOrg = !!process.env.SENTRY_ORG;
+const hasSentryProject = !!process.env.SENTRY_PROJECT;
+const sentryFullyConfigured = hasSentryAuth && hasSentryOrg && hasSentryProject;
+if (process.env.SENTRY_DISABLE_AUTO_UPLOAD == null) {
+  if (sentryFullyConfigured) {
+    console.log("Sentry: credentials detected — source maps will be uploaded.");
+  } else {
+    process.env.SENTRY_DISABLE_AUTO_UPLOAD = "true";
+    console.log(
+      "Sentry: SENTRY_AUTH_TOKEN/SENTRY_ORG/SENTRY_PROJECT not all set — skipping source map upload for this build."
+    );
+  }
+}
 
 const androidDir = path.join(rootDir, "android");
 const isWin = process.platform === "win32";

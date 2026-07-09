@@ -103,6 +103,12 @@ android/app/build/outputs/apk/release/app-universal-release.apk     # runs on an
 npm run build:apk -- --arch=arm64-v8a
 ```
 
+> **Prebuild-safe:** ABI splits, per-ABI versionCodes, release signing, R8/resource
+> shrinking, and the Proguard keep rules are all injected by the Expo config plugin
+> `plugins/withAbiSplits.js` (registered in `app.config.js`). This means they are
+> re-applied automatically on every `expo prebuild --clean`, so editing the
+> generated `android/` files by hand is not required.
+
 ### Release signing
 
 Release builds are signed with your release keystore when these are provided
@@ -122,6 +128,22 @@ Generate a release keystore once (keep it safe and out of git):
 keytool -genkeypair -v -keystore near-now-release.keystore -alias near-now \
   -keyalg RSA -keysize 2048 -validity 10000
 ```
+
+### Sentry source maps
+
+Release builds run Sentry's source-map upload automatically after JS bundling.
+The local build script **auto-skips** this upload unless all three of these are
+set (in `.env`, or your shell environment), so builds don't fail without Sentry:
+
+```properties
+SENTRY_AUTH_TOKEN=****
+SENTRY_ORG=your-org-slug
+SENTRY_PROJECT=your-project-slug
+```
+
+- If they're all set, source maps upload automatically.
+- If any is missing, the build prints "skipping source map upload" and continues.
+- Force either behavior with `SENTRY_DISABLE_AUTO_UPLOAD=true|false`.
 
 ### APK size optimization
 
