@@ -7,7 +7,11 @@
       "Bash(npx vercel *)",
       "Bash(./gradlew clean *)",
       "Bash(java *)",
-      "Bash(grep -rn \"fetch\\(\\\\`\\\\${API_BASE}\\\\|fetch\\(\\\\`\\\\${config\\\\|fetch\\(\\\\`https://\" /Users/tiasmondal166/projects/near-now-store_owner --include=\"*.ts\" --include=\"*.tsx\")"
+      "Bash(grep -rn \"fetch\\(\\\\`\\\\${API_BASE}\\\\|fetch\\(\\\\`\\\\${config\\\\|fetch\\(\\\\`https://\" /Users/tiasmondal166/projects/near-now-store_owner --include=\"*.ts\" --include=\"*.tsx\")",
+      "Bash(npm install *)",
+      "Bash(echo \"---TSC EXIT $?---\")",
+      "Bash(npx jest *)",
+      "Bash(npm run *)"
     ]
   }
 }
