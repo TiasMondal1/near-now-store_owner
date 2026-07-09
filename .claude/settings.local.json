@@ -11,7 +11,18 @@
       "Bash(npm install *)",
       "Bash(echo \"---TSC EXIT $?---\")",
       "Bash(npx jest *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(keytool -list -v -keystore \"./android/app/debug.keystore\" -storepass android -alias androiddebugkey)",
+      "Bash(keytool -list -v -keystore \"./@near-and-now-organization__shopkeeperapp.jks\")",
+      "Bash(keytool -list -v -keystore \"./@near-and-now-organization__shopkeeperapp.jks\" -storepass \"f185298080a500a6b4d343cea7bf3436\")",
+      "Bash(./gradlew.bat -q :app:properties)",
+      "Bash(./gradlew.bat bundleRelease --console=plain)",
+      "Bash(git stash *)",
+      "Bash(./gradlew.bat :app:dependencies --configuration releaseRuntimeClasspath --console=plain)",
+      "Bash(unzip -l app-release.aab)",
+      "Bash(jarsigner -verify -verbose -certs app-release.aab)",
+      "Bash(mkdir -p /tmp_extract)",
+      "Bash(unzip -p app-release.aab \"META-INF/*.RSA\")"
     ]
   }
 }
