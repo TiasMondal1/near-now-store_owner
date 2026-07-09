@@ -84,10 +84,53 @@ cd android
 - That script:
   - Loads `.env` so `EXPO_PUBLIC_API_BASE_URL` is baked into the bundle.
   - Runs `gradlew assembleRelease` under `android/`.
-- Output APK:
+- Output APKs (ABI splits are enabled, so `assembleRelease` emits one APK per
+  architecture **plus** a universal APK):
 
 ```text
-android/app/build/outputs/apk/release/app-release.apk
+android/app/build/outputs/apk/release/app-arm64-v8a-release.apk     # most modern phones
+android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk   # older 32-bit phones
+android/app/build/outputs/apk/release/app-x86_64-release.apk        # emulators / x86 devices
+android/app/build/outputs/apk/release/app-universal-release.apk     # runs on any device (largest)
+```
+
+- Each per-ABI APK gets a distinct `versionCode` (prefixed by ABI) so upgrades
+  install the correct build; the universal APK keeps the plain `versionCode`.
+- To share a single APK that installs anywhere, distribute `app-universal-release.apk`.
+- To build only one architecture (smaller/faster), pass the arch through:
+
+```bash
+npm run build:apk -- --arch=arm64-v8a
+```
+
+### Release signing
+
+Release builds are signed with your release keystore when these are provided
+(via `~/.gradle/gradle.properties`, `-P` flags, or environment variables);
+otherwise they fall back to the debug keystore so local builds still succeed:
+
+```properties
+NEARNOW_RELEASE_STORE_FILE=/absolute/path/to/near-now-release.keystore
+NEARNOW_RELEASE_STORE_PASSWORD=********
+NEARNOW_RELEASE_KEY_ALIAS=near-now
+NEARNOW_RELEASE_KEY_PASSWORD=********
+```
+
+Generate a release keystore once (keep it safe and out of git):
+
+```bash
+keytool -genkeypair -v -keystore near-now-release.keystore -alias near-now \
+  -keyalg RSA -keysize 2048 -validity 10000
+```
+
+### APK size optimization
+
+Release builds enable R8/Proguard (`minifyEnabled`) and resource shrinking by
+default. To temporarily disable for debugging a release build:
+
+```bash
+npm run build:apk -- --arch=arm64-v8a
+cd android && ./gradlew assembleRelease -Pandroid.enableMinifyInReleaseBuilds=false
 ```
 
 Requirements on the machine:

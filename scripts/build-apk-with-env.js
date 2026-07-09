@@ -201,7 +201,10 @@ for (let i = 0; i < argv.length; i++) {
 
 const outputHint = isAab
   ? "android/app/build/outputs/bundle/release/app-release.aab"
-  : "android/app/build/outputs/apk/release/app-release.apk";
+  // ABI splits are enabled, so assembleRelease emits per-ABI APKs plus a
+  // universal one. The universal APK installs on any device, so treat it as
+  // the primary artifact for the "Done"/alias-copy message below.
+  : "android/app/build/outputs/apk/release/app-universal-release.apk";
 
 const gradleArgs = [gradleTask];
 if (reactNativeArchitectures) {
