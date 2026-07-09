@@ -23,10 +23,9 @@ import { supabase } from "../../lib/supabase";
 import { getStatusColor, formatStatus, isDelivered } from "../../lib/order-utils";
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
 import { useSmartPoll } from "../../lib/useSmartPoll";
-import { config } from "../../lib/config";
+import { apiClient } from "../../lib/api-client";
 import { useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
 
-const API_BASE = config.API_BASE;
 const AUTO_COMPLETE_MS = 2 * 60 * 1000;
 
 type AllocationItem = {
@@ -268,14 +267,14 @@ export default function OrdersTab() {
   const fetchActiveOrders = useCallback(async () => {
     if (!session?.token) return;
     try {
-      const res = await fetch(`${API_BASE}/shopkeeper/orders`, {
-        headers: { Authorization: `Bearer ${session.token}` },
+      const response = await apiClient.get("/shopkeeper/orders", {
+        Authorization: `Bearer ${session.token}`,
       });
-      if (!res.ok) {
-        if (__DEV__) console.warn("[orders] fetchActiveOrders failed:", res.status, await res.text());
+      if (!response.success) {
+        if (__DEV__) console.warn("[orders] fetchActiveOrders failed:", response.error_code, response.error);
         return;
       }
-      const json = await res.json();
+      const json: any = response.data;
       if (json?.success) {
         const active = (json.orders || []).filter(
           (a: Allocation) => a.alloc_status === "accepted" || a.alloc_status === "pending_acceptance"
@@ -291,10 +290,13 @@ export default function OrdersTab() {
         if (toComplete.length > 0) {
           await Promise.allSettled(
             toComplete.map((a: Allocation) =>
-              fetch(`${API_BASE}/shopkeeper/allocations/${a.allocation_id}/complete`, {
-                method: "POST",
-                headers: { Authorization: `Bearer ${session.token}` },
-              }).catch(() => {})
+              apiClient
+                .post(
+                  `/shopkeeper/allocations/${a.allocation_id}/complete`,
+                  undefined,
+                  { Authorization: `Bearer ${session.token}` }
+                )
+                .catch(() => {})
             )
           );
           fetchPreviousOrdersRef.current?.();
@@ -376,13 +378,13 @@ export default function OrdersTab() {
     try {
       const alloc = allocations.find((a) => a.allocation_id === allocId);
       const ids = itemIds ?? alloc?.items.map((i) => i.id) ?? [];
-      const res = await fetch(`${API_BASE}/shopkeeper/allocations/${allocId}/accept`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ accepted_item_ids: ids }),
-      });
-      const json = await res.json();
-      if (json?.success) {
+      const response = await apiClient.post(
+        `/shopkeeper/allocations/${allocId}/accept`,
+        { accepted_item_ids: ids },
+        { Authorization: `Bearer ${session.token}` }
+      );
+      const json: any = response.data;
+      if (response.success && json?.success) {
         setAllocations((prev) =>
           prev.map((a) =>
             a.allocation_id === allocId
@@ -391,7 +393,7 @@ export default function OrdersTab() {
           )
         );
       } else {
-        Alert.alert("Error", json?.error || "Failed to accept order");
+        Alert.alert("Error", json?.error || response.error || "Failed to accept order");
       }
     } catch {
       Alert.alert("Error", "Failed to accept order. Please try again.");
@@ -409,10 +411,15 @@ export default function OrdersTab() {
           if (!session?.token) return;
           setRespondingId(allocId);
           try {
-            await fetch(`${API_BASE}/shopkeeper/allocations/${allocId}/reject`, {
-              method: "POST",
-              headers: { Authorization: `Bearer ${session.token}` },
-            });
+            const response = await apiClient.post(
+              `/shopkeeper/allocations/${allocId}/reject`,
+              undefined,
+              { Authorization: `Bearer ${session.token}` }
+            );
+            if (!response.success) {
+              Alert.alert("Error", "Failed to reject. Please try again.");
+              return;
+            }
             setAllocations((prev) => prev.filter((a) => a.allocation_id !== allocId));
           } catch {
             Alert.alert("Error", "Failed to reject. Please try again.");

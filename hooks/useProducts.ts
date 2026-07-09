@@ -5,10 +5,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { config } from '../lib/config';
 import { getMergedInventoryFromDb } from '../lib/storeProducts';
 
-const API_BASE = config.API_BASE;
 const INVENTORY_CACHE_KEY = 'inventory_products_cache';
 const INVENTORY_PERSISTED_KEY = 'inventory_persisted_state';
 
@@ -60,7 +58,7 @@ export function useProducts(token: string | null, storeId: string | null) {
     }
   }, [token, storeId]);
 
-  const fetchProductsFromAPI = useCallback(async (authToken: string, storeIdVal: string) => {
+  const fetchProductsFromAPI = useCallback(async (_authToken: string, storeIdVal: string) => {
     try {
       const fromDb = await getMergedInventoryFromDb(storeIdVal);
       if (Array.isArray(fromDb) && fromDb.length > 0) {

@@ -4,7 +4,6 @@
 
 import { config } from './config';
 import { errorHandler, ErrorSeverity } from './error-handler';
-import { apiUrl } from './apiUrl';
 
 interface RequestConfig {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -35,6 +34,19 @@ class ApiClient {
   }
 
   /**
+   * Build a full request URL.
+   *
+   * IMPORTANT: this backend mounts routes at the ORIGIN (e.g. `/shopkeeper/...`,
+   * `/store-owner/...`) — it does NOT have a global `/api` mount. Callers must
+   * pass the exact path they need (including `/api` for the few routes that use
+   * it, e.g. `/api/auth/...`). We only normalise the leading slash here.
+   */
+  private buildUrl(endpoint: string): string {
+    const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    return `${this.baseUrl}${path}`;
+  }
+
+  /**
    * Make API request with error handling and retry logic
    */
   async request<T = any>(
@@ -49,7 +61,7 @@ class ApiClient {
       retries = this.defaultRetries,
     } = config;
 
-    const url = apiUrl(this.baseUrl, endpoint);
+    const url = this.buildUrl(endpoint);
     let lastError: any;
 
     for (let attempt = 0; attempt <= retries; attempt++) {

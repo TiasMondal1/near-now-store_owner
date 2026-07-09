@@ -4,6 +4,22 @@
  */
 
 import { Alert } from 'react-native';
+import { config } from './config';
+
+// Sentry is loaded lazily/defensively so the app still runs if the native
+// module is missing (e.g. Expo Go) or no DSN is configured.
+type SentryModule = typeof import('@sentry/react-native');
+let Sentry: SentryModule | null = null;
+
+function loadSentry(): SentryModule | null {
+  if (Sentry) return Sentry;
+  try {
+    Sentry = require('@sentry/react-native') as SentryModule;
+  } catch {
+    Sentry = null;
+  }
+  return Sentry;
+}
 
 export enum ErrorSeverity {
   LOW = 'low',
@@ -38,15 +54,36 @@ class ErrorHandler {
   /**
    * Initialize error monitoring service (Sentry, Bugsnag, etc.)
    */
-  initializeErrorMonitoring(_config?: any): void {
-    // TODO: Initialize Sentry or other error monitoring service
-    // Example:
-    // Sentry.init({
-    //   dsn: config.dsn,
-    //   environment: config.environment,
-    // });
-    this.errorMonitoringEnabled = true;
-    console.log('📊 Error monitoring initialized');
+  initializeErrorMonitoring(): void {
+    if (this.errorMonitoringEnabled) return;
+
+    const dsn = config.SENTRY_DSN;
+    if (!dsn) {
+      // No DSN configured — run without remote monitoring (local console only).
+      if (__DEV__) console.log('📊 Error monitoring disabled (no SENTRY_DSN set)');
+      return;
+    }
+
+    const sentry = loadSentry();
+    if (!sentry) {
+      console.warn('📊 @sentry/react-native unavailable — remote monitoring disabled');
+      return;
+    }
+
+    try {
+      sentry.init({
+        dsn,
+        environment: config.ENVIRONMENT,
+        // Capture unhandled JS errors and native crashes; sample light in prod.
+        tracesSampleRate: config.ENVIRONMENT === 'production' ? 0.2 : 1.0,
+        enableAutoSessionTracking: true,
+        debug: false,
+      });
+      this.errorMonitoringEnabled = true;
+      console.log('📊 Error monitoring initialized (Sentry)');
+    } catch (e) {
+      console.warn('📊 Failed to initialize Sentry:', e);
+    }
   }
 
   /**
@@ -101,14 +138,31 @@ class ErrorHandler {
   /**
    * Send error to monitoring service
    */
-  private sendToMonitoring(_error: AppError): void {
-    // TODO: Send to Sentry or other service
-    // Example:
-    // Sentry.captureException(error.originalError || new Error(error.message), {
-    //   level: this.mapSeverityToSentryLevel(error.severity),
-    //   tags: { code: error.code },
-    //   extra: error.context,
-    // });
+  private sendToMonitoring(error: AppError): void {
+    const sentry = loadSentry();
+    if (!sentry) return;
+    try {
+      sentry.captureException(error.originalError || new Error(error.message), {
+        level: this.mapSeverityToSentryLevel(error.severity),
+        tags: error.code ? { code: error.code } : undefined,
+        extra: error.context,
+      });
+    } catch {
+      // Never let error reporting throw.
+    }
+  }
+
+  private mapSeverityToSentryLevel(severity: ErrorSeverity): 'fatal' | 'error' | 'warning' | 'info' {
+    switch (severity) {
+      case ErrorSeverity.CRITICAL:
+        return 'fatal';
+      case ErrorSeverity.HIGH:
+        return 'error';
+      case ErrorSeverity.MEDIUM:
+        return 'warning';
+      default:
+        return 'info';
+    }
   }
 
   /**
@@ -193,6 +247,22 @@ class ErrorHandler {
 }
 
 export const errorHandler = ErrorHandler.getInstance();
+
+/**
+ * Wrap the root React component with Sentry's error boundary / touch tracking.
+ * Returns the component unchanged when Sentry is unavailable or no DSN is set,
+ * so it is always safe to call.
+ */
+export function wrapRootComponent<T>(component: T): T {
+  if (!config.SENTRY_DSN) return component;
+  const sentry = loadSentry();
+  if (!sentry?.wrap) return component;
+  try {
+    return sentry.wrap(component as any) as unknown as T;
+  } catch {
+    return component;
+  }
+}
 
 /**
  * Utility function to wrap async functions with error handling

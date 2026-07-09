@@ -135,7 +135,7 @@ export default function InventoryScreen() {
     persistedSearch = search;
   }, [search]);
 
-  const fetchInventory = async (authToken: string, storeIdVal: string) => {
+  const fetchInventory = async (_authToken: string, storeIdVal: string) => {
     const [masterRes, storeList] = await Promise.all([
       fetch(`${API_BASE}/api/products/master-products?isActive=true`),
       getStoreProductsFromDb(storeIdVal),
@@ -277,8 +277,8 @@ export default function InventoryScreen() {
           return;
         }
 
-        const storeList = await getStoreProductsFromDb(id);
-        const merged = mergeMasterWithStoreProducts(masterList, storeList);
+        const storeProductsList = await getStoreProductsFromDb(id);
+        const merged = mergeMasterWithStoreProducts(masterList, storeProductsList);
         setProducts(merged);
         await AsyncStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(merged));
       } catch {

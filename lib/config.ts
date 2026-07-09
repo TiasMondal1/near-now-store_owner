@@ -55,6 +55,14 @@ export const config = {
   /** Optional real JWT for dev bypass API calls. Falls back to placeholder. */
   DEV_TOKEN:
     process.env.EXPO_PUBLIC_DEV_TOKEN || extra.devToken || "",
+
+  /** Sentry DSN for crash/error reporting. Empty string disables Sentry. */
+  SENTRY_DSN:
+    process.env.EXPO_PUBLIC_SENTRY_DSN || extra.sentryDsn || "",
+
+  /** Deploy environment tag reported to Sentry (development | preview | production). */
+  ENVIRONMENT:
+    process.env.EXPO_PUBLIC_ENV || extra.environment || (__DEV__ ? "development" : "production"),
 } as const;
 
 export default config;

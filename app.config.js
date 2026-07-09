@@ -59,7 +59,13 @@ module.exports = () => {
       url: "https://u.expo.dev/f0f709ec-f013-416a-b543-729b80cbd4b0",
     },
     runtimeVersion: "1.0.0",
-    plugins: ["expo-router", "expo-font", withAbiSplits, withTabletSupport],
+    plugins: [
+      "expo-router",
+      "expo-font",
+      "@sentry/react-native",
+      withAbiSplits,
+      withTabletSupport,
+    ],
     extra: {
       apiBaseUrl:
         process.env.EXPO_PUBLIC_API_BASE_URL ||
@@ -73,6 +79,10 @@ module.exports = () => {
         process.env.VITE_SUPABASE_ANON_KEY ||
         "",
       googleMapsApiKey,
+      sentryDsn: process.env.EXPO_PUBLIC_SENTRY_DSN || "",
+      environment:
+        process.env.EXPO_PUBLIC_ENV ||
+        (process.env.NODE_ENV === "production" ? "production" : "development"),
       eas: {
         projectId: "f0f709ec-f013-416a-b543-729b80cbd4b0",
       },

@@ -2,8 +2,15 @@ import React from "react";
 import { Text, View, TouchableOpacity, StyleSheet } from "react-native";
 import { Stack } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { errorHandler, wrapRootComponent } from "../lib/error-handler";
+
+// ─── Crash/error monitoring (Sentry) ──────────────────────────────────────────
+// Safe no-op when EXPO_PUBLIC_SENTRY_DSN is not configured.
+errorHandler.initializeErrorMonitoring();
 
 // ─── Global unhandled rejection / error handler ───────────────────────────────
+// Note: errorHandler (imported above) already installs a global handler that
+// reports to Sentry via logError(); this one only adds a dev console log.
 if (typeof ErrorUtils !== "undefined") {
   const prevHandler = ErrorUtils.getGlobalHandler();
   ErrorUtils.setGlobalHandler((error: any, isFatal?: boolean) => {
@@ -89,7 +96,7 @@ const styles = StyleSheet.create({
   },
 });
 
-export default function RootLayout() {
+function RootLayout() {
   return (
     <SafeAreaProvider>
       <ErrorBoundary>
@@ -105,3 +112,6 @@ export default function RootLayout() {
     </SafeAreaProvider>
   );
 }
+
+// Wrapped with Sentry (no-op when no DSN configured).
+export default wrapRootComponent(RootLayout);

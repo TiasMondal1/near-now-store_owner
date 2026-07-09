@@ -1,10 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Alert } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { config } from '../lib/config';
+import { apiClient } from '../lib/api-client';
 import { useSmartPoll } from '../lib/useSmartPoll';
 
-const API_BASE = config.API_BASE;
 const ORDER_TIMEOUT_SECONDS = 60;
 
 export interface AllocationItem {
@@ -68,10 +67,11 @@ export function useOrders(token: string | null, _storeId?: string | null) {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
-      await fetch(`${API_BASE}/shopkeeper/allocations/${alloc.allocation_id}/reject`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      await apiClient.post(
+        `/shopkeeper/allocations/${alloc.allocation_id}/reject`,
+        undefined,
+        { Authorization: `Bearer ${token}` }
+      );
     } catch {
       // non-fatal — server will auto-expire
     }
@@ -114,14 +114,12 @@ export function useOrders(token: string | null, _storeId?: string | null) {
 
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/shopkeeper/orders`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const response = await apiClient.get('/shopkeeper/orders', {
+        Authorization: `Bearer ${token}`,
       });
+      const json: any = response.data;
 
-      const raw = await res.text();
-      const json = raw ? JSON.parse(raw) : null;
-
-      if (!json?.success) {
+      if (!response.success || !json?.success) {
         setAllocations([]);
         return;
       }
@@ -156,16 +154,15 @@ export function useOrders(token: string | null, _storeId?: string | null) {
     const itemIds = acceptedItemIds ?? alloc.items.map((i) => i.id);
 
     try {
-      const res = await fetch(
-        `${API_BASE}/shopkeeper/allocations/${alloc.allocation_id}/accept`,
-        {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accepted_item_ids: itemIds }),
-        }
+      const response = await apiClient.post(
+        `/shopkeeper/allocations/${alloc.allocation_id}/accept`,
+        { accepted_item_ids: itemIds },
+        { Authorization: `Bearer ${token}` }
       );
-      const json = await res.json();
-      if (!json?.success) throw new Error(json?.error || 'Accept failed');
+      const json: any = response.data;
+      if (!response.success || !json?.success) {
+        throw new Error(json?.error || response.error || 'Accept failed');
+      }
       if (json?.pickup_code) setPickupCode(json.pickup_code);
       closeIncomingOrder();
       fetchOrders();

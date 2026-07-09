@@ -8,6 +8,7 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { apiClient } from './api-client';
+import { getSession } from '../session';
 
 const PUSH_TOKEN_KEY = 'push_notification_token';
 const NOTIFICATION_PREFERENCES_KEY = 'notification_preferences';
@@ -310,11 +311,8 @@ class NotificationService {
    */
   private async getAuthToken(): Promise<string | null> {
     try {
-      const session = await AsyncStorage.getItem('session');
-      if (session) {
-        const parsed = JSON.parse(session);
-        return parsed.token || null;
-      }
+      const session = await getSession();
+      return session?.token ?? null;
     } catch (error) {
       console.error('Failed to get auth token:', error);
     }
