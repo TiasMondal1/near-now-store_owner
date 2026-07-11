@@ -26,7 +26,11 @@ const path = require("path");
 const SPLITS_BLOCK = `
     splits {
         abi {
-            enable true
+            // ABI splits apply to APK (assemble*) builds only. For App Bundle
+            // (bundle* / AAB) builds they must be disabled — the bundle handles
+            // per-ABI delivery itself, and combining splits with resource
+            // shrinking breaks bundleRelease. https://issuetracker.google.com/402800800
+            enable !gradle.startParameter.taskNames.any { it.toLowerCase().contains("bundle") }
             reset()
             include "arm64-v8a", "armeabi-v7a", "x86_64"
             universalApk true

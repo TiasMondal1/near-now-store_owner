@@ -109,6 +109,14 @@ npm run build:apk -- --arch=arm64-v8a
 > re-applied automatically on every `expo prebuild --clean`, so editing the
 > generated `android/` files by hand is not required.
 
+> **APK vs AAB:** ABI splits apply to APK (`assembleRelease`) builds only. For the
+> Play Store **AAB** (`bundleRelease`) the splits are auto-disabled — the App
+> Bundle already delivers per-ABI slices itself, and combining splits with
+> resource shrinking makes `bundleRelease` fail
+> ([issuetracker 402800800](https://issuetracker.google.com/402800800)). So
+> `npm run build:aab` produces a single optimized `app-release.aab` and
+> `npm run build:apk` produces the four APKs — no config change needed between them.
+
 ### Release signing
 
 Release builds are signed with your release keystore when these are provided
