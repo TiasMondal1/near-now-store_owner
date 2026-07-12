@@ -86,36 +86,58 @@ const gradleWrapper = isWin ? "gradlew.bat" : "gradlew";
 const gradle = path.join(androidDir, gradleWrapper);
 const localPropertiesPath = path.join(androidDir, "local.properties");
 
+const isJava17Home = (home) => {
+  if (!home) return false;
+  const javaBin = path.join(home, "bin", isWin ? "java.exe" : "java");
+  if (!fs.existsSync(javaBin)) return false;
+  const versionCheck = spawnSync(javaBin, ["-version"], { encoding: "utf8" });
+  const versionText = `${versionCheck.stdout || ""}\n${versionCheck.stderr || ""}`;
+  const majorMatch = versionText.match(/version "(?:1\.)?(\d+)/);
+  return (majorMatch ? Number(majorMatch[1]) : NaN) === 17;
+};
+
 const resolveJava17Home = () => {
-  if (process.platform !== "darwin") return "";
   const candidates = [];
-  const javaHomeResult = spawnSync("/usr/libexec/java_home", ["-v", "17"], { encoding: "utf8" });
-  const javaHomeCandidate = (javaHomeResult.stdout || "").trim();
-  if (javaHomeResult.status === 0 && javaHomeCandidate) {
-    candidates.push(javaHomeCandidate);
+
+  // Respect an explicit JAVA_HOME if it already points at a JDK 17.
+  if (process.env.JAVA_HOME) candidates.push(process.env.JAVA_HOME);
+
+  if (process.platform === "darwin") {
+    const javaHomeResult = spawnSync("/usr/libexec/java_home", ["-v", "17"], { encoding: "utf8" });
+    const javaHomeCandidate = (javaHomeResult.stdout || "").trim();
+    if (javaHomeResult.status === 0 && javaHomeCandidate) candidates.push(javaHomeCandidate);
+    // Homebrew openjdk@17 is keg-only by default and may not be visible to /usr/libexec/java_home.
+    candidates.push("/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home");
+    candidates.push("/usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home");
+  } else if (isWin) {
+    // Common Windows JDK 17 install roots (Adoptium/Temurin, Oracle, Microsoft, Zulu).
+    const roots = [
+      "C:\\Program Files\\Eclipse Adoptium",
+      "C:\\Program Files\\Java",
+      "C:\\Program Files\\Microsoft",
+      "C:\\Program Files\\Zulu",
+    ];
+    for (const root of roots) {
+      if (!fs.existsSync(root)) continue;
+      for (const dir of fs.readdirSync(root)) {
+        if (/jdk-?17/i.test(dir)) candidates.push(path.join(root, dir));
+      }
+    }
   }
-  // Homebrew openjdk@17 is keg-only by default and may not be visible to /usr/libexec/java_home.
-  candidates.push("/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home");
-  candidates.push("/usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home");
 
   for (const candidate of candidates) {
-    const versionCheck = spawnSync(path.join(candidate, "bin", "java"), ["-version"], { encoding: "utf8" });
-    const versionText = `${versionCheck.stdout || ""}\n${versionCheck.stderr || ""}`;
-    const majorMatch = versionText.match(/version "(?:1\.)?(\d+)/);
-    const major = majorMatch ? Number(majorMatch[1]) : NaN;
-    if (major === 17) return candidate;
+    if (isJava17Home(candidate)) return candidate;
   }
   return "";
 };
 
 const java17Home = resolveJava17Home();
 if (java17Home) {
-  console.log("Using Java home:", java17Home);
-} else if (process.platform === "darwin") {
-  // This script runs on both Windows and macOS. The macOS-only lookup is
-  // intentionally skipped on Windows, so don't warn there.
+  console.log("Using Java home (JDK 17):", java17Home);
+} else {
   console.warn(
-    "JDK 17 not found on macOS. Install it (e.g. brew install openjdk@17) and/or set JAVA_HOME to JDK 17."
+    "JDK 17 not found. Install it (macOS: brew install openjdk@17; Windows: Adoptium Temurin 17) " +
+      "and/or set JAVA_HOME to a JDK 17. The release build requires Java 17."
   );
 }
 
@@ -157,7 +179,7 @@ if (sdkDir) {
 const env = {
   ...process.env,
   ...(java17Home ? { JAVA_HOME: java17Home } : {}),
-  ...(java17Home ? { PATH: `${path.join(java17Home, "bin")}:${process.env.PATH || ""}` } : {}),
+  ...(java17Home ? { PATH: `${path.join(java17Home, "bin")}${path.delimiter}${process.env.PATH || ""}` } : {}),
   ...(sdkDir ? { ANDROID_HOME: sdkDir, ANDROID_SDK_ROOT: sdkDir } : {}),
   JAVA_TOOL_OPTIONS:
     "--enable-native-access=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED",

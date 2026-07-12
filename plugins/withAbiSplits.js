@@ -56,16 +56,20 @@ const VERSION_CODE_BLOCK = `
 
 const SIGNING_MARKER = "NEARNOW_RELEASE_STORE_FILE";
 const RELEASE_SIGNING_CONFIG = `
-        // ${SIGNING_MARKER}: real release keystore when NEARNOW_RELEASE_* are
-        // provided (Gradle props or env vars); otherwise the release build falls
-        // back to the debug keystore below.
+        // ${SIGNING_MARKER}: real release keystore. Credentials come from
+        // android/keystore.properties (preferred) or NEARNOW_RELEASE_* Gradle
+        // props / env vars; otherwise the release build falls back to the debug
+        // keystore below.
         release {
-            def nnStoreFile = System.getenv('NEARNOW_RELEASE_STORE_FILE') ?: findProperty('NEARNOW_RELEASE_STORE_FILE')
+            def nnKsProps = new Properties()
+            def nnKsFile = rootProject.file('keystore.properties')
+            if (nnKsFile.exists()) { nnKsFile.withInputStream { nnKsProps.load(it) } }
+            def nnStoreFile = nnKsProps.getProperty('storeFile') ?: System.getenv('NEARNOW_RELEASE_STORE_FILE') ?: findProperty('NEARNOW_RELEASE_STORE_FILE')
             if (nnStoreFile != null && !nnStoreFile.toString().isEmpty()) {
                 storeFile file(nnStoreFile)
-                storePassword System.getenv('NEARNOW_RELEASE_STORE_PASSWORD') ?: findProperty('NEARNOW_RELEASE_STORE_PASSWORD')
-                keyAlias System.getenv('NEARNOW_RELEASE_KEY_ALIAS') ?: findProperty('NEARNOW_RELEASE_KEY_ALIAS')
-                keyPassword System.getenv('NEARNOW_RELEASE_KEY_PASSWORD') ?: findProperty('NEARNOW_RELEASE_KEY_PASSWORD')
+                storePassword nnKsProps.getProperty('storePassword') ?: System.getenv('NEARNOW_RELEASE_STORE_PASSWORD') ?: findProperty('NEARNOW_RELEASE_STORE_PASSWORD')
+                keyAlias nnKsProps.getProperty('keyAlias') ?: System.getenv('NEARNOW_RELEASE_KEY_ALIAS') ?: findProperty('NEARNOW_RELEASE_KEY_ALIAS')
+                keyPassword nnKsProps.getProperty('keyPassword') ?: System.getenv('NEARNOW_RELEASE_KEY_PASSWORD') ?: findProperty('NEARNOW_RELEASE_KEY_PASSWORD')
                 enableV1Signing true
                 enableV2Signing true
             }
@@ -185,8 +189,10 @@ function patchAppBuildGradle(contents) {
     contents = contents.replace(
       releaseSignAnchor,
       `        release {
-            // Signing: use NEARNOW_RELEASE_* keystore when provided, else debug.
-            signingConfig (System.getenv('NEARNOW_RELEASE_STORE_FILE') ?: findProperty('NEARNOW_RELEASE_STORE_FILE')) ? signingConfigs.release : signingConfigs.debug`
+            // Signing: use the release keystore when android/keystore.properties
+            // exists or NEARNOW_RELEASE_* is provided, else fall back to debug.
+            def nnHasRelease = rootProject.file('keystore.properties').exists() || System.getenv('NEARNOW_RELEASE_STORE_FILE') || findProperty('NEARNOW_RELEASE_STORE_FILE')
+            signingConfig nnHasRelease ? signingConfigs.release : signingConfigs.debug`
     );
   }
 
