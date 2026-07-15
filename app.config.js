@@ -63,6 +63,15 @@ module.exports = () => {
       "expo-router",
       "expo-font",
       "@sentry/react-native",
+      [
+        "expo-notifications",
+        {
+          icon: "./near_now_shopkeeper_foreground.png",
+          color: "#000000",
+          defaultChannel: "orders",
+          sounds: ["./assets/sounds/order_chime.wav"],
+        },
+      ],
       withAbiSplits,
       withTabletSupport,
     ],
