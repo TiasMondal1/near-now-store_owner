@@ -110,6 +110,15 @@ class NotificationService {
     }
 
     try {
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync('orders', {
+          name: 'Order Alerts',
+          importance: Notifications.AndroidImportance.MAX,
+          vibrationPattern: [0, 250, 250, 250],
+          sound: 'order_chime.wav',
+        });
+      }
+
       const { status: existingStatus } = await Notifications.getPermissionsAsync();
       let finalStatus = existingStatus;
 
