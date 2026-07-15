@@ -25,6 +25,7 @@ import { fetchStoresCached, peekStores } from "../../lib/appCache";
 import { useSmartPoll } from "../../lib/useSmartPoll";
 import { apiClient } from "../../lib/api-client";
 import { useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
+import { useRequireStoreApproval } from "../../lib/useRequireStoreApproval";
 
 const AUTO_COMPLETE_MS = 2 * 60 * 1000;
 
@@ -189,6 +190,7 @@ const AllocationCard = React.memo(function AllocationCard({
 });
 
 export default function OrdersTab() {
+  useRequireStoreApproval();
   const [tab, setTab] = useState<"incoming" | "active" | "previous">("incoming");
   const { setIncomingCount } = useIncomingOrdersCount();
   const fadeAnim = useRef(new Animated.Value(0)).current;

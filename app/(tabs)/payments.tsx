@@ -19,6 +19,7 @@ import { getSession } from "../../session";
 import { getOrdersFromDb, type OrderForStore } from "../../lib/orders-db";
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
 import { colors, radius, spacing, shadows } from "../../lib/theme";
+import { useRequireStoreApproval } from "../../lib/useRequireStoreApproval";
 
 function safeDate(str: string | null | undefined): Date | null {
   if (!str) return null;
@@ -113,6 +114,7 @@ const PayoutCard = React.memo(function PayoutCard({
 });
 
 export default function PaymentsTab() {
+  useRequireStoreApproval();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [payouts, setPayouts] = useState<PayoutRow[]>([]);

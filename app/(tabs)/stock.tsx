@@ -31,6 +31,7 @@ import {
   type LoosePricingBasis,
 } from "../../lib/storeProducts";
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
+import { useRequireStoreApproval } from "../../lib/useRequireStoreApproval";
 
 const PLACEHOLDER_IMAGE = require("../../assets/icon.png");
 
@@ -44,6 +45,7 @@ function formatCategoryLabel(raw: string): string {
 }
 
 export default function StockTab() {
+  useRequireStoreApproval();
   const [session, setSession] = useState<any | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
