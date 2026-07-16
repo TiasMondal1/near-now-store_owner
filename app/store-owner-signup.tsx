@@ -37,6 +37,7 @@ export default function StoreOwnerSignupScreen() {
   const mapsEnabled = isMapsEnabled();
   const params = useLocalSearchParams();
   const phone = typeof params.phone === "string" ? params.phone : "";
+  const signupTicket = typeof params.signupTicket === "string" ? params.signupTicket : "";
 
   // ── Form fields ──────────────────────────────────────────────────────────────
   const [ownerName, setOwnerName] = useState("");
@@ -267,6 +268,7 @@ export default function StoreOwnerSignupScreen() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           phone,
+          signupTicket,
           role: "shopkeeper",
           ownerName: ownerName.trim(),
           storeName: storeName.trim(),

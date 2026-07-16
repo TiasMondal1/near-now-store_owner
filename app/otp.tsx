@@ -101,7 +101,7 @@ export default function StoreOwnerOtpScreen() {
         await saveSession({ token, user: { id: user?.id ?? json.userId ?? json.data?.userId ?? "", name: user?.name ?? user?.full_name ?? "Shopkeeper", role: normalizeToShopkeeperRole(user?.role), isActivated: user?.isActivated ?? user?.is_activated ?? true, phone: user?.phone ?? phone, email: (() => { const e = coalesceEmail(user?.email, ""); return e || undefined; })() } });
         navigatedAway.current = true; router.replace("/"); return;
       }
-      if (mode === "signup" && !hasToken) { router.replace({ pathname: "/store-owner-signup", params: { phone } }); return; }
+      if (mode === "signup" && !hasToken) { const signupTicket = json.signupTicket ?? json.data?.signupTicket; router.replace({ pathname: "/store-owner-signup", params: { phone, signupTicket } }); return; }
       Alert.alert("Login Error", "Could not log you in as shopkeeper.\n\nYour phone may be registered as customer only.");
     } catch (e: any) {
       clearTimeout(timeoutId);
