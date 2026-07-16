@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Animated, Easing, Image, Dimensions } from "rea
 import { useRouter } from "expo-router";
 import { getSession, isJustLoggedIn, guardFreshInstall } from "../session";
 import { hydrateStoreCache } from "../lib/appCache";
+import { resolveAuthenticatedRoute } from "../lib/storeApproval";
 import { colors, spacing, radius, shadows } from "../lib/theme";
 
 const MIN_SPLASH_MS = 800;
@@ -26,7 +27,14 @@ export default function SplashScreen() {
 
   useEffect(() => {
     if (isJustLoggedIn()) {
-      router.replace("/(tabs)/home");
+      (async () => {
+        const session = await getSession();
+        if (session?.token) {
+          router.replace(await resolveAuthenticatedRoute(session.token, session.user?.id));
+        } else {
+          router.replace("/landing");
+        }
+      })();
       return;
     }
 
@@ -60,7 +68,7 @@ export default function SplashScreen() {
         await new Promise<void>((r) => setTimeout(r, Math.max(0, MIN_SPLASH_MS - elapsed)));
         if (cancelled) return;
         const ok = session?.token && session?.user?.id && session.user.role !== "customer";
-        router.replace(ok ? "/(tabs)/home" : "/landing");
+        router.replace(ok ? await resolveAuthenticatedRoute(session.token, session.user.id) : "/landing");
       } catch {
         if (!cancelled) router.replace("/landing");
       }

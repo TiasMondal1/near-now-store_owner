@@ -26,7 +26,7 @@ export const StoreStatusCard = memo(function StoreStatusCard({ store, isOnline, 
       {pendingApproval && (
         <View style={styles.pendingBanner}>
           <Ionicons name="time-outline" size={14} color="#92400E" />
-          <Text style={styles.pendingBannerText}>Pending admin approval — you'll be notified once approved</Text>
+          <Text style={styles.pendingBannerText}>Pending document verification — your shop is hidden from customers</Text>
         </View>
       )}
 
@@ -57,7 +57,7 @@ export const StoreStatusCard = memo(function StoreStatusCard({ store, isOnline, 
           </View>
           <Text style={styles.statusSub}>
             {pendingApproval
-              ? "Admin is reviewing your store"
+              ? "Upload and verify documents before going online"
               : isOnline
                 ? (activeOrderCount > 0 ? `${activeOrderCount} active order${activeOrderCount > 1 ? "s" : ""}` : "Waiting for orders...")
                 : "Go online to receive orders"}

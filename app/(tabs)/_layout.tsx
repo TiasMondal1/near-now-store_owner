@@ -1,10 +1,11 @@
 import React, { useEffect } from "react";
-import { BackHandler, Platform } from "react-native";
+import { BackHandler, Platform, View, ActivityIndicator } from "react-native";
 import { Tabs, useSegments, useRouter, usePathname } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../../lib/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { IncomingOrdersProvider, useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
+import { useStoreApprovalGate } from "../../lib/useStoreApprovalGate";
 
 function TabsNavigator() {
   const insets = useSafeAreaInsets();
@@ -12,6 +13,7 @@ function TabsNavigator() {
   const router = useRouter();
   const pathname = usePathname();
   const { incomingCount } = useIncomingOrdersCount();
+  const { checking } = useStoreApprovalGate("require-approved");
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -28,6 +30,14 @@ function TabsNavigator() {
     });
     return () => sub.remove();
   }, [segments, pathname]);
+
+  if (checking) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background }}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
 
   return (
     <Tabs

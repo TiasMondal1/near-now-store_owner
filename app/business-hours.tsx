@@ -10,6 +10,7 @@ import { colors, radius, spacing, shadows } from '../lib/theme';
 import { getSession } from '../session';
 import { config } from '../lib/config';
 import { fetchStoresCached, peekStores, clearStoreCache } from '../lib/appCache';
+import { useRequireStoreApproval } from '../lib/useRequireStoreApproval';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 const SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
@@ -22,6 +23,7 @@ const DEFAULT_HOURS: WeekHours = Object.fromEntries(
 );
 
 export default function BusinessHoursScreen() {
+  useRequireStoreApproval();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [hours, setHours] = useState<WeekHours>(DEFAULT_HOURS);

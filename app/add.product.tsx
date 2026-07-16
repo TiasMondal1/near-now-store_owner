@@ -22,9 +22,11 @@ import {
   type LoosePricingBasis,
 } from "../lib/storeProducts";
 import { colors, radius, spacing } from "../lib/theme";
+import { useRequireStoreApproval } from "../lib/useRequireStoreApproval";
 const UNITS = ["kg", "g", "l", "ml", "pcs", "units", "bunch", "pack"];
 
 export default function AddCustomProductScreen() {
+  useRequireStoreApproval();
   const [name, setName] = useState("");
   const [brand, setBrand] = useState("");
   const [category, setCategory] = useState("");

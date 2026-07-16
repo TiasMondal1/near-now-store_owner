@@ -1,37 +1,25 @@
 import { useEffect } from "react";
-import { Alert } from "react-native";
 import { router } from "expo-router";
 import { getSession } from "../session";
-import { config } from "./config";
+import { checkStoreApproval } from "./storeApproval";
 
 /**
- * Redirects away from a screen (back to Home) if the shopkeeper's store isn't
- * yet admin-approved. Call at the top of Orders/Payouts/Inventory screens —
- * those are gated behind approval, unlike Home which is always accessible.
+ * Redirects unapproved shopkeepers to the pending verification screen.
+ * Use on Orders, Payouts, Inventory, and Settings screens.
  */
 export function useRequireStoreApproval() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const s: any = await getSession();
-        if (!s?.token || cancelled) return;
-        const res = await fetch(`${config.API_BASE}/store-owner/stores`, {
-          headers: { Authorization: `Bearer ${s.token}` },
-        });
-        if (!res.ok || cancelled) return;
-        const json = await res.json();
-        const stores = json?.stores ?? [];
-        const approved = stores.length > 0 && !!stores[0]?.is_approved;
+        const session = await getSession();
+        if (!session?.token || cancelled) return;
+        const { approved } = await checkStoreApproval(session.token, session.user?.id);
         if (!approved && !cancelled) {
-          router.replace("/(tabs)/home");
-          Alert.alert(
-            "Pending Approval",
-            "Your store is awaiting admin approval. You'll be able to use this once approved."
-          );
+          router.replace("/pending-verification");
         }
       } catch {
-        // Network failure: fail open rather than lock the owner out on a transient error.
+        // Network failure: fail open so a transient error does not lock the owner out.
       }
     })();
     return () => {

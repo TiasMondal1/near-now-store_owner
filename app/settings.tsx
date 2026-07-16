@@ -23,6 +23,7 @@ import { config } from '../lib/config';
 import { Store } from '../lib/store-service';
 import StoreSettingsModal from '../components/StoreSettingsModal';
 import NotificationSettings from '../components/NotificationSettings';
+import { useRequireStoreApproval } from '../lib/useRequireStoreApproval';
 
 type SettingItem = {
   key: string;
@@ -35,6 +36,7 @@ type SettingItem = {
 };
 
 export default function SettingsScreen() {
+  useRequireStoreApproval();
   const [loading, setLoading] = useState(true);
   const [store, setStore] = useState<Store | null>(null);
   const [token, setToken] = useState<string | null>(null);

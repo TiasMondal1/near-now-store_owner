@@ -10,10 +10,12 @@ import { colors, radius, spacing, shadows } from '../lib/theme';
 import { getSession } from '../session';
 import { config } from '../lib/config';
 import { fetchStoresCached, peekStores, clearStoreCache } from '../lib/appCache';
+import { useRequireStoreApproval } from '../lib/useRequireStoreApproval';
 
 const PRESETS = [3, 5, 10, 15, 20] as const;
 
 export default function LowStockSettingsScreen() {
+  useRequireStoreApproval();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [threshold, setThreshold] = useState('5');

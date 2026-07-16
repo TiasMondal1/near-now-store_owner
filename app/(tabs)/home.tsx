@@ -38,6 +38,7 @@ import {
   clearStoreCache,
   type CachedStore,
 } from "../../lib/appCache";
+import { isStoreApproved } from "../../lib/storeApproval";
 
 const API_BASE = config.API_BASE;
 const SELECTED_STORE_KEY = "selected_store_id";
@@ -139,14 +140,30 @@ export default function HomeTab() {
         const cached = peekStores();
         if (cached && cached.length > 0) {
           setStores(cached);
+          if (!isStoreApproved(cached[0])) {
+            if (!cancelled) router.replace("/pending-verification");
+            return;
+          }
           setLoading(false);
-          fetchStoresCached(s.token, s.user?.id).then((fresh) => { if (!cancelled && fresh.length > 0) setStores(fresh); });
+          fetchStoresCached(s.token, s.user?.id).then((fresh) => {
+            if (!cancelled && fresh.length > 0) {
+              if (!isStoreApproved(fresh[0])) {
+                router.replace("/pending-verification");
+                return;
+              }
+              setStores(fresh);
+            }
+          });
           return;
         }
         const currentStores = await fetchStoresCached(s.token, s.user?.id);
         if (cancelled) return;
         if (currentStores.length > 0) {
           setStores(currentStores);
+          if (!isStoreApproved(currentStores[0])) {
+            if (!cancelled) router.replace("/pending-verification");
+            return;
+          }
           if (!currentStores[0].is_active) await invalidateAllCaches();
         }
       } catch (error) { if (__DEV__) console.warn("[home] Bootstrap failed", error); }
@@ -157,8 +174,8 @@ export default function HomeTab() {
 
   // Poll every 30s while the selected store is pending approval; show banner on approval.
   useEffect(() => {
-    const isApproved = (selectedStore as any)?.is_approved;
-    if (isApproved !== false || !session?.token) {
+    const approved = isStoreApproved(selectedStore);
+    if (approved || !session?.token) {
       if (approvalPollRef.current) { clearInterval(approvalPollRef.current); approvalPollRef.current = null; }
       return;
     }
@@ -171,7 +188,7 @@ export default function HomeTab() {
         if (!fresh.length) return;
         setStores(fresh);
         const updated = fresh.find(s => s.id === selectedStore?.id);
-        if (updated && (updated as any).is_approved) {
+        if (updated && isStoreApproved(updated)) {
           setApprovedBanner(true);
           Animated.sequence([
             Animated.timing(approvedBannerAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
@@ -183,7 +200,7 @@ export default function HomeTab() {
     };
     approvalPollRef.current = setInterval(checkApproval, 30_000);
     return () => { if (approvalPollRef.current) { clearInterval(approvalPollRef.current); approvalPollRef.current = null; } };
-  }, [(selectedStore as any)?.is_approved, selectedStore?.id, session?.token]);
+  }, [selectedStore?.is_approved, selectedStore?.id, session?.token]);
 
   // Resolve & persist the selected store whenever the store list changes.
   useEffect(() => {
@@ -251,7 +268,7 @@ export default function HomeTab() {
 
   const toggleOnline = (value: boolean) => {
     if (!session || !selectedStore) return;
-    if (!(selectedStore as any).is_approved) return;
+    if (!isStoreApproved(selectedStore)) return;
     if (selectedStore.is_active === value) return;
     if (value) {
       setConfirmModal({ title: "Go Online?", message: "Your store will become visible to customers.", confirmText: "Go Online", confirmColor: colors.success, iconName: "storefront", onConfirm: async () => {
@@ -336,7 +353,7 @@ export default function HomeTab() {
 
           {/* ── Store Status ──────────────────────────────────────── */}
           {selectedStore && (
-            <StoreStatusCard store={selectedStore} isOnline={isStoreOnline} activeOrderCount={activeOrderCount} onToggle={handleStatusToggle} pendingApproval={!(selectedStore as any).is_approved} />
+            <StoreStatusCard store={selectedStore} isOnline={isStoreOnline} activeOrderCount={activeOrderCount} onToggle={handleStatusToggle} pendingApproval={!isStoreApproved(selectedStore)} />
           )}
 
           {/* ── Quick Stats Row ───────────────────────────────────── */}

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -11,10 +11,10 @@ import {
   Image,
   Animated,
   Platform,
-  Modal,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
@@ -22,21 +22,25 @@ import { getSession, clearSession } from "../session";
 import { colors, radius, spacing, shadows } from "../lib/theme";
 import { fetchStoresCached, peekStores, clearStoreCache } from "../lib/appCache";
 import { config } from "../lib/config";
-import { uploadStoreImage, uploadOwnerImage, uploadVerificationDoc } from "../lib/storage";
+import { uploadStoreImage, uploadOwnerImage } from "../lib/storage";
+import { useRequireStoreApproval } from "../lib/useRequireStoreApproval";
+import {
+  countUploadedDocsFromRecord,
+  DOCS_STORAGE_KEY,
+  REQUIRED_DOC_KEYS,
+} from "../lib/verificationDocuments";
 
 const API_BASE = config.API_BASE;
 const OWNER_IMAGE_KEY = "owner_profile_image_url";
 
-const DOC_TYPES = [
-  { key: "aadhaar", label: "Aadhaar Card" },
-  { key: "pan", label: "PAN Card" },
-  { key: "fssai", label: "FSSAI License" },
-  { key: "gst", label: "GST Certificate" },
-  { key: "trade", label: "Trade License" },
-  { key: "other", label: "Other" },
-];
+function countUploadedDocs(store: any): number {
+  let count = countUploadedDocsFromRecord(store?.verification_documents);
+  if (store?.verification_document && count === 0) count = 1;
+  return count;
+}
 
 export default function ProfileScreen() {
+  useRequireStoreApproval();
   const [session, setSession] = useState<any>(null);
   const [storeInfo, setStoreInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -53,13 +57,7 @@ export default function ProfileScreen() {
   const [storeImageUri, setStoreImageUri] = useState<string | null>(null);
   const [uploadingOwnerImage, setUploadingOwnerImage] = useState(false);
   const [uploadingStoreImage, setUploadingStoreImage] = useState(false);
-
-  // Verification docs
-  const [docType, setDocType] = useState("aadhaar");
-  const [docNumber, setDocNumber] = useState("");
-  const [docImageUri, setDocImageUri] = useState<string | null>(null);
-  const [uploadingDoc, setUploadingDoc] = useState(false);
-  const [docPickerVisible, setDocPickerVisible] = useState(false);
+  const [uploadedDocCount, setUploadedDocCount] = useState(0);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(24)).current;
@@ -87,18 +85,18 @@ export default function ProfileScreen() {
       const cached = peekStores();
       if (cached?.length) {
         const picked = (selId && cached.find((s: any) => s.id === selId)) || cached[0];
-        hydrate(picked);
-        fetchStoresCached(s.token, s.user?.id).then((fresh) => {
+        await hydrate(picked);
+        fetchStoresCached(s.token, s.user?.id).then(async (fresh) => {
           if (!cancelled && fresh.length) {
             const freshPicked = (selId && fresh.find(s => s.id === selId)) || fresh[0];
-            hydrate(freshPicked);
+            await hydrate(freshPicked);
           }
         });
       } else {
         const stores = await fetchStoresCached(s.token, s.user?.id);
         if (!cancelled && stores.length) {
           const picked = (selId && stores.find(s => s.id === selId)) || stores[0];
-          hydrate(picked);
+          await hydrate(picked);
         }
       }
       if (!cancelled) setLoading(false);
@@ -106,14 +104,45 @@ export default function ProfileScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  const hydrate = (store: any) => {
+  useFocusEffect(
+    useCallback(() => {
+      if (!storeInfo?.id) return;
+      void (async () => {
+        try {
+          const localRaw = await AsyncStorage.getItem(DOCS_STORAGE_KEY(storeInfo.id));
+          if (localRaw) {
+            const local = JSON.parse(localRaw);
+            setUploadedDocCount(REQUIRED_DOC_KEYS.filter((key) => local?.[key]?.url).length);
+            return;
+          }
+        } catch {
+          /* ignore */
+        }
+        setUploadedDocCount(countUploadedDocs(storeInfo));
+      })();
+    }, [storeInfo])
+  );
+
+  const hydrate = async (store: any) => {
     setStoreInfo(store);
     setStoreName(store.name ?? "");
     setStoreAddress(store.address ?? "");
     setStorePhone(store.phone ?? "");
     if (store.image_url) setStoreImageUri(store.image_url);
-    if (store.verification_document) setDocType(store.verification_document);
-    if (store.verification_number) setDocNumber(store.verification_number);
+
+    let count = countUploadedDocs(store);
+    if (store?.id) {
+      try {
+        const localRaw = await AsyncStorage.getItem(DOCS_STORAGE_KEY(store.id));
+        if (localRaw) {
+          const local = JSON.parse(localRaw);
+          count = REQUIRED_DOC_KEYS.filter((key) => local?.[key]?.url).length;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    setUploadedDocCount(count);
   };
 
   const requestPermission = async () => {
@@ -179,30 +208,6 @@ export default function ProfileScreen() {
     }
   };
 
-  const pickDocImage = async () => {
-    if (!(await requestPermission())) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    const uri = result.assets[0].uri;
-    setDocImageUri(uri);
-    setUploadingDoc(true);
-    try {
-      const res = await uploadVerificationDoc(storeInfo?.id ?? "unknown", docType, uri);
-      if (res.ok) setDocImageUri(res.url);
-      // Save doc type and number to store record
-      await patchStore({
-        verification_document: docType,
-        ...(docNumber.trim() ? { verification_number: docNumber.trim() } : {}),
-      });
-    } finally {
-      setUploadingDoc(false);
-    }
-  };
-
   const patchStore = async (fields: Record<string, string>) => {
     if (!session?.token || !storeInfo?.id) return;
     try {
@@ -226,12 +231,10 @@ export default function ProfileScreen() {
       if (storeName.trim()) patch.name = storeName.trim();
       if (storeAddress.trim()) patch.address = storeAddress.trim();
       if (storePhone.trim()) patch.phone = storePhone.trim();
-      if (docNumber.trim()) patch.verification_number = docNumber.trim();
-      if (docType) patch.verification_document = docType;
 
       await patchStore(patch);
       const fresh = await fetchStoresCached(session.token, session.user?.id);
-      if (fresh.length) hydrate(fresh[0]);
+      if (fresh.length) await hydrate(fresh[0]);
       setEditing(false);
     } catch {
       Alert.alert("Error", "Failed to save changes. Please try again.");
@@ -241,7 +244,7 @@ export default function ProfileScreen() {
   };
 
   const handleCancel = () => {
-    if (storeInfo) hydrate(storeInfo);
+    if (storeInfo) void hydrate(storeInfo);
     setEditing(false);
   };
 
@@ -270,7 +273,7 @@ export default function ProfileScreen() {
   }
 
   const ownerInitial = (session?.user?.name || "?").charAt(0).toUpperCase();
-  const selectedDocLabel = DOC_TYPES.find((d) => d.key === docType)?.label ?? "Select type";
+  const docsComplete = uploadedDocCount >= REQUIRED_DOC_KEYS.length;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -397,53 +400,31 @@ export default function ProfileScreen() {
 
           {/* Verification Documents */}
           <SectionCard title="Verification Documents" icon="shield-checkmark-outline">
-            <View style={styles.docTypeRow}>
-              <Text style={styles.fieldLabel}>Document Type</Text>
-              <TouchableOpacity style={styles.docTypeBtn} onPress={() => setDocPickerVisible(true)} activeOpacity={0.8} disabled={!editing}>
-                <Text style={styles.docTypeBtnText}>{selectedDocLabel}</Text>
-                <Ionicons name="chevron-down" size={14} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            <Divider />
-            <Field
-              label="Document Number"
-              value={docNumber}
-              editing={editing}
-              onChangeText={setDocNumber}
-              placeholder="e.g. XXXXXXXXXX"
-              icon="card"
-              autoCapitalize="characters"
-            />
-            <Divider />
-            <View style={styles.docUploadSection}>
-              <Text style={styles.fieldLabel}>Document Image</Text>
-              <TouchableOpacity
-                style={[styles.docUploadArea, docImageUri && styles.docUploadAreaFilled]}
-                activeOpacity={0.8}
-                onPress={pickDocImage}
-                disabled={!editing || uploadingDoc}
-              >
-                {uploadingDoc ? (
-                  <ActivityIndicator color={colors.primary} />
-                ) : docImageUri ? (
-                  <>
-                    <Image source={{ uri: docImageUri }} style={styles.docPreview} resizeMode="cover" />
-                    <View style={styles.docReuploadOverlay}>
-                      <Ionicons name="camera" size={22} color="#fff" />
-                      <Text style={styles.docReuploadText}>Change</Text>
-                    </View>
-                  </>
-                ) : (
-                  <>
-                    <View style={styles.docUploadIcon}>
-                      <Ionicons name="cloud-upload-outline" size={28} color={colors.primary} />
-                    </View>
-                    <Text style={styles.docUploadLabel}>Upload {selectedDocLabel}</Text>
-                    <Text style={styles.docUploadSub}>JPG or PNG · max 5 MB</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              style={styles.docNavRow}
+              onPress={() => router.push("/upload-documents")}
+              activeOpacity={0.75}
+            >
+              <View style={styles.docNavLeft}>
+                <View style={styles.docNavIcon}>
+                  <Ionicons name="cloud-upload-outline" size={20} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.docNavTitle}>Upload Shop Documents</Text>
+                  <Text style={styles.docNavDesc}>
+                    Aadhaar, PAN, Trade License, GST & FSSAI
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.docNavRight}>
+                <View style={[styles.docCountBadge, docsComplete && styles.docCountBadgeComplete]}>
+                  <Text style={[styles.docCountText, docsComplete && styles.docCountTextComplete]}>
+                    {uploadedDocCount}/{REQUIRED_DOC_KEYS.length}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+              </View>
+            </TouchableOpacity>
           </SectionCard>
 
           {/* Account meta */}
@@ -493,31 +474,6 @@ export default function ProfileScreen() {
           <Text style={styles.version}>Near &amp; Now · Store Owner v1.0</Text>
         </Animated.View>
       </ScrollView>
-
-      {/* Document type picker */}
-      <Modal
-        visible={docPickerVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setDocPickerVisible(false)}
-      >
-        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setDocPickerVisible(false)} />
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <Text style={styles.modalTitle}>Select Document Type</Text>
-          {DOC_TYPES.map((d) => (
-            <TouchableOpacity
-              key={d.key}
-              style={[styles.modalOption, docType === d.key && styles.modalOptionActive]}
-              onPress={() => { setDocType(d.key); setDocPickerVisible(false); }}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.modalOptionText, docType === d.key && styles.modalOptionTextActive]}>{d.label}</Text>
-              {docType === d.key && <Ionicons name="checkmark" size={18} color={colors.primary} />}
-            </TouchableOpacity>
-          ))}
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -778,55 +734,34 @@ const styles = StyleSheet.create({
   infoRowLabel: { color: colors.textSecondary, fontSize: 14, fontWeight: "500" },
   infoRowValue: { color: colors.textPrimary, fontSize: 14, fontWeight: "600" },
 
-  // Document upload
-  docTypeRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 4 },
-  docTypeBtn: {
+  // Document navigation
+  docNavRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    backgroundColor: colors.surfaceVariant,
+    justifyContent: "space-between",
+    gap: spacing.sm,
+  },
+  docNavLeft: { flexDirection: "row", alignItems: "center", gap: spacing.md, flex: 1 },
+  docNavIcon: {
+    width: 44,
+    height: 44,
     borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 9,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  docTypeBtnText: { color: colors.textPrimary, fontSize: 14, fontWeight: "600" },
-  docUploadSection: { paddingVertical: 4 },
-  docUploadArea: {
-    marginTop: spacing.sm,
-    borderWidth: 2,
-    borderStyle: "dashed",
-    borderColor: colors.primary + "35",
-    borderRadius: radius.lg,
-    height: 140,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.primary + "04",
-    gap: spacing.xs,
-    overflow: "hidden",
-  },
-  docUploadAreaFilled: { borderStyle: "solid", borderColor: colors.primary + "60" },
-  docUploadIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
     backgroundColor: colors.primary + "0C",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 4,
   },
-  docUploadLabel: { color: colors.primary, fontSize: 14, fontWeight: "700" },
-  docUploadSub: { color: colors.textTertiary, fontSize: 11, fontWeight: "500" },
-  docPreview: { ...StyleSheet.absoluteFillObject },
-  docReuploadOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(15,23,42,0.4)",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4,
+  docNavTitle: { color: colors.textPrimary, fontSize: 15, fontWeight: "700" },
+  docNavDesc: { color: colors.textTertiary, fontSize: 12, marginTop: 2, lineHeight: 16 },
+  docNavRight: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  docCountBadge: {
+    backgroundColor: colors.warning + "14",
+    borderRadius: radius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
-  docReuploadText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  docCountBadgeComplete: { backgroundColor: colors.success + "14" },
+  docCountText: { color: colors.warning, fontSize: 12, fontWeight: "700" },
+  docCountTextComplete: { color: colors.success },
 
   // Save / Logout
   saveBtn: {
@@ -857,30 +792,4 @@ const styles = StyleSheet.create({
   },
   logoutBtnText: { color: colors.error, fontSize: 15, fontWeight: "700" },
   version: { color: colors.textTertiary, fontSize: 11, textAlign: "center", marginTop: 4, marginBottom: spacing.lg, fontWeight: "500" },
-
-  // Modal
-  modalBackdrop: { flex: 1, backgroundColor: "rgba(15,23,42,0.45)" },
-  modalSheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl,
-    paddingBottom: 40,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    ...shadows.lg,
-  },
-  modalHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: "center", marginBottom: spacing.md },
-  modalTitle: { color: colors.textPrimary, fontSize: 17, fontWeight: "800", marginBottom: spacing.md, letterSpacing: -0.2 },
-  modalOption: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.md,
-    marginBottom: spacing.xs,
-  },
-  modalOptionActive: { backgroundColor: colors.primary + "08" },
-  modalOptionText: { color: colors.textPrimary, fontSize: 15, fontWeight: "500" },
-  modalOptionTextActive: { color: colors.primary, fontWeight: "700" },
 });

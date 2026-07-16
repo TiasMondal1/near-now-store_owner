@@ -10,7 +10,7 @@ export default function RegistrationSuccessScreen() {
 
   useEffect(() => {
     const t = setTimeout(() => {
-      router.replace("/(tabs)/home");
+      router.replace("/pending-verification");
     }, DELAY_MS);
     return () => clearTimeout(t);
   }, []);
@@ -21,7 +21,7 @@ export default function RegistrationSuccessScreen() {
         <Text style={styles.emoji}>✓</Text>
         <Text style={styles.title}>Thanks for registering with Near and Now</Text>
         <Text style={styles.sub}>
-          Taking you to your dashboard…
+          Upload your shop documents next. Your store will go live after admin verification.
         </Text>
       </View>
     </View>

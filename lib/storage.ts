@@ -25,7 +25,9 @@
  *     ADD COLUMN IF NOT EXISTS image_url             TEXT,
  *     ADD COLUMN IF NOT EXISTS owner_image_url       TEXT,
  *     ADD COLUMN IF NOT EXISTS verification_document TEXT,
- *     ADD COLUMN IF NOT EXISTS verification_number   TEXT;
+ *     ADD COLUMN IF NOT EXISTS verification_number   TEXT,
+ *     ADD COLUMN IF NOT EXISTS verification_documents TEXT,
+ *     ADD COLUMN IF NOT EXISTS is_approved          BOOLEAN DEFAULT false;
  */
 
 import { supabase } from './supabase';

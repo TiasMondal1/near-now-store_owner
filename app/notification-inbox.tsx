@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, shadows } from '../lib/theme';
 import { getSession } from '../session';
 import { config } from '../lib/config';
+import { useRequireStoreApproval } from '../lib/useRequireStoreApproval';
 
 interface AppNotification {
   id: string;
@@ -35,6 +36,7 @@ function timeAgo(iso: string): string {
 }
 
 export default function NotificationInboxScreen() {
+  useRequireStoreApproval();
   const [token, setToken] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
