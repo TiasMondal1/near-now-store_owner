@@ -495,7 +495,12 @@ export default function ProfileScreen() {
       </ScrollView>
 
       {/* Document type picker */}
-      <Modal visible={docPickerVisible} transparent animationType="slide">
+      <Modal
+        visible={docPickerVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDocPickerVisible(false)}
+      >
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setDocPickerVisible(false)} />
         <View style={styles.modalSheet}>
           <View style={styles.modalHandle} />

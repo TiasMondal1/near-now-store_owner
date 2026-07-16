@@ -465,7 +465,12 @@ export default function HomeTab() {
       </ScrollView>
 
       {/* ── Confirm Modal ──────────────────────────────────────── */}
-      <Modal visible={!!confirmModal} transparent animationType="fade">
+      <Modal
+        visible={!!confirmModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!confirmLoading) setConfirmModal(null); }}
+      >
         <View style={s.modalOverlay}>
           <View style={s.modalSheet}>
             {confirmModal && (
