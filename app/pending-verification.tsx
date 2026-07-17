@@ -86,12 +86,17 @@ export default function PendingVerificationScreen() {
     try {
       const result = await refreshStoreApproval(session.token, session.user?.id);
       if (result.approved) {
+        // Navigate only from the button, not immediately here too — the
+        // store cache write above (inside refreshStoreApproval) needs to
+        // actually land before the tabs layout's own approval gate reads it,
+        // and firing router.replace() a second time immediately (this call
+        // is non-blocking, so it ran before the user even saw the alert)
+        // was redundant and could race that write.
         Alert.alert(
           "Store Verified",
           "Your documents have been approved. You can now use the app and go online for customers.",
           [{ text: "Continue", onPress: () => router.replace("/(tabs)/home") }]
         );
-        router.replace("/(tabs)/home");
         return;
       }
       await loadDocuments();

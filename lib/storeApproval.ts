@@ -1,4 +1,4 @@
-import { fetchStoresCached, peekStores, type CachedStore } from "./appCache";
+import { fetchStoresCached, peekStores, persistStores, type CachedStore } from "./appCache";
 import { config } from "./config";
 
 export type ApprovalStore = CachedStore & {
@@ -47,5 +47,12 @@ export async function refreshStoreApproval(
   const json = await res.json();
   const stores: ApprovalStore[] = json?.stores ?? [];
   const store = stores[0] ?? null;
+  // This bypasses the shared store cache (appCache.ts) to force a genuinely
+  // fresh read — but without writing the result back, the cache stays stale
+  // for up to its 10-minute TTL. The very next screen (e.g. the tabs layout,
+  // reached right after this detects approval) reads that stale cache via
+  // useStoreApprovalGate and would immediately bounce the user right back to
+  // pending-verification, even though they were just approved.
+  if (stores.length > 0) await persistStores(stores);
   return { approved: isStoreApproved(store), store };
 }
