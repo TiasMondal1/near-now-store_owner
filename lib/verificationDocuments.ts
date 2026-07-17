@@ -41,6 +41,23 @@ export const DOC_NUMBER_FORMAT_HINTS: Partial<Record<RequiredDocKey, string>> = 
   fssai: "14-digit FSSAI number",
 };
 
+/** Fuller breakdown (format + example) used in the save-time alert — the inline hint above stays compact. */
+export const DOC_NUMBER_FORMATS: Partial<Record<RequiredDocKey, { description: string; example: string }>> = {
+  aadhaar: { description: "12 digits", example: "234567890123" },
+  pan: { description: "5 letters + 4 digits + 1 letter (10 characters)", example: "ABCDE1234F" },
+  gst: {
+    description: "15 characters: 2-digit state code + 10-character PAN + 1 digit + 1 letter + 1 checksum",
+    example: "22AAAAA0000A1Z5",
+  },
+  fssai: { description: "14 digits", example: "12345678901234" },
+};
+
+export function docNumberErrorMessage(docType: RequiredDocKey): string {
+  const format = DOC_NUMBER_FORMATS[docType];
+  if (!format) return "Invalid document number format.";
+  return `Invalid ${docType.toUpperCase()} number.\nFormat: ${format.description}\nExample: ${format.example}`;
+}
+
 /** Exact expected length for the 4 fixed-length documents — no entry for Trade License. */
 export const DOC_NUMBER_LENGTHS: Partial<Record<RequiredDocKey, number>> = {
   aadhaar: 12,

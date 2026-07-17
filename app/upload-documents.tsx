@@ -27,6 +27,7 @@ import {
   DOC_NUMBER_FORMAT_HINTS,
   DOC_NUMBER_LENGTHS,
   deleteVerificationDocument,
+  docNumberErrorMessage,
   fetchVerificationDocuments,
   formatPickedFileSize,
   saveVerificationDocument,
@@ -270,8 +271,7 @@ export default function UploadDocumentsScreen() {
     if (!file && (number ?? "") === (current?.number ?? "")) return current; // nothing changed
 
     if (number && !validateDocNumber(key, number.toUpperCase())) {
-      const hint = DOC_NUMBER_FORMAT_HINTS[key];
-      Alert.alert("Invalid number", hint ? `Enter a valid ${hint}.` : "Invalid document number format.");
+      Alert.alert("Invalid number", docNumberErrorMessage(key));
       return current;
     }
 
