@@ -158,7 +158,7 @@ export default function StoreOwnerOtpScreen() {
                   textContentType="oneTimeCode"
                   autoComplete={idx === 0 ? "sms-otp" : "off"}
                   importantForAutofill={idx === 0 ? "yes" : "no"}
-                  maxLength={idx === 0 ? 6 : 1}
+                  selectTextOnFocus
                   selectionColor={colors.primary}
                 />
               ))}
