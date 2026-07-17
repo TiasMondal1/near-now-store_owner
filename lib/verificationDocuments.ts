@@ -13,9 +13,16 @@ export type VerificationDocument = {
   rejection_reason: string | null;
   uploaded_at: string | null;
   reviewed_at: string | null;
+  file_size_bytes: number | null;
 };
 
-export type PickedDocFile = { uri: string; name: string; type: string };
+export type PickedDocFile = { uri: string; name: string; type: string; size?: number };
+
+export function formatFileSize(bytes: number | null | undefined): string | null {
+  if (!bytes || bytes <= 0) return null;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 const API_BASE = config.API_BASE;
 

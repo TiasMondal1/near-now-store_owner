@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
   Image,
   Animated,
+  Easing,
+  Modal,
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -22,6 +24,7 @@ import { colors, radius, spacing, shadows } from "../lib/theme";
 import { fetchStoresCached, peekStores } from "../lib/appCache";
 import {
   fetchVerificationDocuments,
+  formatFileSize,
   saveVerificationDocument,
   type PickedDocFile,
   type RequiredDocKey,
@@ -36,9 +39,9 @@ const DOCUMENT_SECTIONS = [
   { key: "fssai", label: "FSSAI License", icon: "restaurant-outline" as const, placeholder: "14-digit FSSAI number" },
 ] as const;
 
-const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB
+const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
-const FORMATS_DISCLAIMER = "Accepted formats: JPG, PNG, WEBP, PDF · Max size 2MB";
+const FORMATS_DISCLAIMER = "Accepted formats: JPG, PNG, WEBP, PDF · Max size 5MB";
 
 type DocKey = RequiredDocKey;
 type DocsState = Record<DocKey, VerificationDocument | null>;
@@ -64,9 +67,11 @@ export default function UploadDocumentsScreen() {
   const [pendingFiles, setPendingFiles] = useState<Partial<Record<DocKey, PickedDocFile>>>({});
   const [savingKey, setSavingKey] = useState<DocKey | null>(null);
   const [saving, setSaving] = useState(false);
+  const [pickerSheetKey, setPickerSheetKey] = useState<DocKey | null>(null);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(20)).current;
+  const sheetAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.parallel([
@@ -149,7 +154,12 @@ export default function UploadDocumentsScreen() {
     }
     setPendingFiles((prev) => ({
       ...prev,
-      [key]: { uri: asset.uri, name: asset.fileName || `${key}.${extFromMime(type)}`, type },
+      [key]: {
+        uri: asset.uri,
+        name: asset.fileName || `${key}.${extFromMime(type)}`,
+        type,
+        size: asset.fileSize,
+      },
     }));
   };
 
@@ -189,17 +199,34 @@ export default function UploadDocumentsScreen() {
     }
     setPendingFiles((prev) => ({
       ...prev,
-      [key]: { uri: asset.uri, name: asset.name || "document.pdf", type: "application/pdf" },
+      [key]: { uri: asset.uri, name: asset.name || "document.pdf", type: "application/pdf", size: asset.size },
     }));
   };
 
   const choosePickerFor = (key: DocKey) => {
-    Alert.alert("Upload document", "Choose a source", [
-      { text: "Take Photo", onPress: () => takePhoto(key) },
-      { text: "Choose Image", onPress: () => pickImage(key) },
-      { text: "Upload PDF", onPress: () => pickPdf(key) },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    setPickerSheetKey(key);
+    sheetAnim.setValue(0);
+    Animated.timing(sheetAnim, {
+      toValue: 1,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const closePickerSheet = () => {
+    Animated.timing(sheetAnim, {
+      toValue: 0,
+      duration: 200,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(() => setPickerSheetKey(null));
+  };
+
+  const runPickerAction = (action: (key: DocKey) => void) => {
+    const key = pickerSheetKey;
+    closePickerSheet();
+    if (key) action(key);
   };
 
   const saveOne = async (key: DocKey): Promise<VerificationDocument | null> => {
@@ -392,7 +419,13 @@ export default function UploadDocumentsScreen() {
                     )}
                   </TouchableOpacity>
                   {(pendingFile || doc?.url) && (
-                    <Text style={styles.formatsHint}>{FORMATS_DISCLAIMER}</Text>
+                    <View style={styles.fileMetaRow}>
+                      <Text style={styles.formatsHint}>{FORMATS_DISCLAIMER}</Text>
+                      {(() => {
+                        const sizeLabel = formatFileSize(pendingFile?.size ?? doc?.file_size_bytes);
+                        return sizeLabel ? <Text style={styles.fileSizeText}>{sizeLabel}</Text> : null;
+                      })()}
+                    </View>
                   )}
                 </View>
               </View>
@@ -416,6 +449,75 @@ export default function UploadDocumentsScreen() {
           </TouchableOpacity>
         </Animated.View>
       </ScrollView>
+
+      <Modal
+        visible={pickerSheetKey !== null}
+        transparent
+        animationType="none"
+        onRequestClose={closePickerSheet}
+      >
+        <View style={styles.sheetWrap}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFillObject}
+            activeOpacity={1}
+            onPress={closePickerSheet}
+          >
+            <Animated.View style={[styles.sheetBackdrop, { opacity: sheetAnim }]} />
+          </TouchableOpacity>
+
+          <Animated.View
+            style={[
+              styles.sheet,
+              {
+                transform: [
+                  {
+                    translateY: sheetAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [320, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>Upload document</Text>
+              <TouchableOpacity
+                onPress={closePickerSheet}
+                style={styles.sheetCloseBtn}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="close" size={20} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.sheetOption}
+              activeOpacity={0.7}
+              onPress={() => runPickerAction(takePhoto)}
+            >
+              <Ionicons name="camera-outline" size={20} color={colors.primary} />
+              <Text style={styles.sheetOptionText}>Take Photo</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.sheetOption}
+              activeOpacity={0.7}
+              onPress={() => runPickerAction(pickImage)}
+            >
+              <Ionicons name="image-outline" size={20} color={colors.primary} />
+              <Text style={styles.sheetOptionText}>Choose Image</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.sheetOption}
+              activeOpacity={0.7}
+              onPress={() => runPickerAction(pickPdf)}
+            >
+              <Ionicons name="document-text-outline" size={20} color={colors.primary} />
+              <Text style={styles.sheetOptionText}>Upload PDF</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -564,7 +666,14 @@ const styles = StyleSheet.create({
   },
   uploadLabel: { color: colors.primary, fontSize: 14, fontWeight: "700" },
   uploadSub: { color: colors.textTertiary, fontSize: 11, fontWeight: "500", textAlign: "center", paddingHorizontal: spacing.md },
-  formatsHint: { color: colors.textTertiary, fontSize: 11, fontWeight: "500", marginTop: 6 },
+  fileMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 6,
+  },
+  formatsHint: { color: colors.textTertiary, fontSize: 11, fontWeight: "500", flexShrink: 1 },
+  fileSizeText: { color: colors.textSecondary, fontSize: 11, fontWeight: "700" },
   preview: { ...StyleSheet.absoluteFillObject },
   reuploadOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -589,4 +698,41 @@ const styles = StyleSheet.create({
     ...shadows.md,
   },
   saveBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+
+  sheetWrap: { flex: 1, justifyContent: "flex-end" },
+  sheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(15,23,42,0.45)" },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xl,
+    ...shadows.md,
+  },
+  sheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingBottom: spacing.md,
+    marginBottom: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+  },
+  sheetTitle: { fontSize: 16, fontWeight: "800", color: colors.textPrimary },
+  sheetCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.md,
+    backgroundColor: colors.background,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sheetOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  sheetOptionText: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
 });
