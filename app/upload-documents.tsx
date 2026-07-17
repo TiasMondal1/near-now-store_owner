@@ -468,15 +468,14 @@ export default function UploadDocumentsScreen() {
                   />
                   {(() => {
                     const expectedLength = DOC_NUMBER_LENGTHS[section.key];
+                    const hint = DOC_NUMBER_FORMAT_HINTS[section.key];
                     const currentLength = numbers[section.key]?.length ?? 0;
                     if (!expectedLength || currentLength === 0 || currentLength === expectedLength) {
                       return null;
                     }
                     return (
                       <Text style={styles.lengthWarning}>
-                        {currentLength > expectedLength
-                          ? `Too long — must be exactly ${expectedLength} characters (currently ${currentLength}).`
-                          : `Must be exactly ${expectedLength} characters (currently ${currentLength}).`}
+                        {currentLength > expectedLength ? "Too long" : "Too short"} — expected {hint ?? `${expectedLength} characters`} (currently {currentLength} characters).
                       </Text>
                     );
                   })()}
