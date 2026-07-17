@@ -106,13 +106,13 @@ export default function UploadDocumentsScreen() {
         return;
       }
       setStoreId(store.id);
+      if (!cancelled) setLoading(false); // render the form now — don't block on document status
 
       try {
-        await loadDocuments(session.token, store.id);
+        await loadDocuments(session.token, store.id); // status badges fill in once this resolves
       } catch {
         /* non-fatal — screen still renders with empty state */
       }
-      if (!cancelled) setLoading(false);
     })();
     return () => {
       cancelled = true;
