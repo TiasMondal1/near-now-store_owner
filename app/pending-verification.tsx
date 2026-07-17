@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { clearSession, getSession } from "../session";
 import { colors, radius, spacing, shadows } from "../lib/theme";
@@ -62,9 +63,14 @@ export default function PendingVerificationScreen() {
     }
   }, [store?.id]);
 
-  useEffect(() => {
-    void loadDocuments();
-  }, [loadDocuments]);
+  // Re-fetch on mount and every time this screen regains focus (e.g. coming
+  // back from upload-documents after a re-upload), instead of waiting up to
+  // 30s for the poll — a just-fixed rejection should clear immediately.
+  useFocusEffect(
+    useCallback(() => {
+      void loadDocuments();
+    }, [loadDocuments])
+  );
 
   const uploadedCount = documents.filter((d) => !!d.url).length;
   const rejectedDocs = documents.filter((d) => d.status === "rejected");

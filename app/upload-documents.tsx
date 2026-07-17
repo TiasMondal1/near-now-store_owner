@@ -327,15 +327,23 @@ export default function UploadDocumentsScreen() {
               ? pendingFile.type === "application/pdf"
               : doc?.url?.toLowerCase().includes(".pdf");
 
+            // A freshly picked (not yet saved) file supersedes whatever the
+            // server last said — the shopkeeper has already acted on a
+            // rejection, so keep showing "Needs re-upload" until they save
+            // would be misleading.
+            const effectiveStatus = pendingFile ? null : doc?.status;
+
             let statusBadge: {
               icon: React.ComponentProps<typeof Ionicons>["name"];
               text: string;
               color: string;
             } | null = null;
-            if (doc?.status === "approved") {
+            if (effectiveStatus === "approved") {
               statusBadge = { icon: "checkmark-circle", text: "Verified", color: colors.success };
-            } else if (doc?.status === "rejected") {
+            } else if (effectiveStatus === "rejected") {
               statusBadge = { icon: "close-circle", text: "Needs re-upload", color: colors.error };
+            } else if (pendingFile) {
+              statusBadge = { icon: "checkmark-circle-outline", text: "Ready to save", color: colors.primary };
             } else if (doc?.url) {
               statusBadge = { icon: "time-outline", text: "Pending review", color: colors.warning };
             }
@@ -363,7 +371,7 @@ export default function UploadDocumentsScreen() {
                 </View>
 
                 <View style={styles.sectionBody}>
-                  {doc?.status === "rejected" && doc.rejection_reason ? (
+                  {effectiveStatus === "rejected" && doc?.rejection_reason ? (
                     <View style={styles.rejectionBanner}>
                       <Ionicons name="alert-circle" size={14} color={colors.error} />
                       <Text style={styles.rejectionText}>{doc.rejection_reason}</Text>
