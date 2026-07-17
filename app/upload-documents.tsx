@@ -24,7 +24,7 @@ import { getSession } from "../session";
 import { colors, radius, spacing, shadows } from "../lib/theme";
 import { fetchStoresCached, peekStores } from "../lib/appCache";
 import {
-  DOC_NUMBER_FORMAT_HINTS,
+  DOC_NUMBER_FORMATS,
   DOC_NUMBER_LENGTHS,
   deleteVerificationDocument,
   docNumberErrorMessage,
@@ -467,16 +467,16 @@ export default function UploadDocumentsScreen() {
                     autoCapitalize="characters"
                   />
                   {(() => {
-                    const hint = DOC_NUMBER_FORMAT_HINTS[section.key];
-                    if (!hint) return null; // trade — no fixed format to show
+                    const format = DOC_NUMBER_FORMATS[section.key];
+                    if (!format) return null; // trade — no fixed format to show
                     const expectedLength = DOC_NUMBER_LENGTHS[section.key];
                     const currentLength = numbers[section.key]?.length ?? 0;
                     const mismatch = !!expectedLength && currentLength > 0 && currentLength !== expectedLength;
                     return (
                       <Text style={mismatch ? styles.lengthWarning : styles.formatHintText}>
                         {mismatch
-                          ? `${currentLength > expectedLength! ? "Too long" : "Too short"} — expected ${hint} (currently ${currentLength} characters).`
-                          : `Format: ${hint}`}
+                          ? `${currentLength > expectedLength! ? "Too long" : "Too short"} — expected ${format.description} (currently ${currentLength} characters).`
+                          : `Format: ${format.description}. Example: ${format.example}`}
                       </Text>
                     );
                   })()}

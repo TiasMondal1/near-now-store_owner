@@ -34,14 +34,7 @@ export const DOC_NUMBER_PATTERNS: Partial<Record<RequiredDocKey, RegExp>> = {
   fssai: /^[0-9]{14}$/,
 };
 
-export const DOC_NUMBER_FORMAT_HINTS: Partial<Record<RequiredDocKey, string>> = {
-  aadhaar: "12-digit Aadhaar number",
-  pan: "10-character PAN (e.g. ABCDE1234F)",
-  gst: "15-character GSTIN (e.g. 22AAAAA0000A1Z5)",
-  fssai: "14-digit FSSAI number",
-};
-
-/** Fuller breakdown (format + example) used in the save-time alert — the inline hint above stays compact. */
+/** Format breakdown + example, shown both persistently under the field and in the save-time alert. */
 export const DOC_NUMBER_FORMATS: Partial<Record<RequiredDocKey, { description: string; example: string }>> = {
   aadhaar: { description: "12 digits", example: "234567890123" },
   pan: { description: "5 letters + 4 digits + 1 letter (10 characters)", example: "ABCDE1234F" },
