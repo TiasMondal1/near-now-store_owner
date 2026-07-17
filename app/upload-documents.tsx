@@ -24,7 +24,7 @@ import { colors, radius, spacing, shadows } from "../lib/theme";
 import { fetchStoresCached, peekStores } from "../lib/appCache";
 import {
   fetchVerificationDocuments,
-  formatFileSize,
+  formatPickedFileSize,
   saveVerificationDocument,
   type PickedDocFile,
   type RequiredDocKey,
@@ -430,7 +430,9 @@ export default function UploadDocumentsScreen() {
                     <View style={styles.fileMetaRow}>
                       <Text style={styles.formatsHint}>{FORMATS_DISCLAIMER}</Text>
                       {(() => {
-                        const sizeLabel = formatFileSize(pendingFile?.size ?? doc?.file_size_bytes);
+                        const sizeLabel = pendingFile?.size
+                          ? formatPickedFileSize(pendingFile.size)
+                          : doc?.file_size ?? null;
                         return sizeLabel ? <Text style={styles.fileSizeText}>{sizeLabel}</Text> : null;
                       })()}
                     </View>
