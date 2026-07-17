@@ -19,6 +19,34 @@ export type VerificationDocument = {
 
 export type PickedDocFile = { uri: string; name: string; type: string; size?: number };
 
+/**
+ * Format checks for the 4 centrally-standardized documents. Trade License
+ * deliberately has no entry — unlike Aadhaar/PAN/GST/FSSAI, it's issued by
+ * local municipal corporations with no single national format, so any fixed
+ * pattern would be wrong for shopkeepers in most cities. Mirrors the backend
+ * (backend/src/utils/verificationDocuments.ts) — the backend check is the
+ * authoritative one; this is just for immediate client-side feedback.
+ */
+export const DOC_NUMBER_PATTERNS: Partial<Record<RequiredDocKey, RegExp>> = {
+  aadhaar: /^[2-9][0-9]{11}$/,
+  pan: /^[A-Z]{5}[0-9]{4}[A-Z]$/,
+  gst: /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/,
+  fssai: /^[0-9]{14}$/,
+};
+
+export const DOC_NUMBER_FORMAT_HINTS: Partial<Record<RequiredDocKey, string>> = {
+  aadhaar: "12-digit Aadhaar number",
+  pan: "10-character PAN (e.g. ABCDE1234F)",
+  gst: "15-character GSTIN (e.g. 22AAAAA0000A1Z5)",
+  fssai: "14-digit FSSAI number",
+};
+
+export function validateDocNumber(docType: RequiredDocKey, number: string): boolean {
+  const pattern = DOC_NUMBER_PATTERNS[docType];
+  if (!pattern) return true; // trade — no fixed format to check
+  return pattern.test(number);
+}
+
 /** For a freshly picked (not yet saved) file's raw byte count — server documents already come formatted. */
 export function formatPickedFileSize(bytes: number | null | undefined): string | null {
   if (!bytes || bytes <= 0) return null;

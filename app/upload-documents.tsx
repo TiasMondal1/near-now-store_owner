@@ -24,10 +24,12 @@ import { getSession } from "../session";
 import { colors, radius, spacing, shadows } from "../lib/theme";
 import { fetchStoresCached, peekStores } from "../lib/appCache";
 import {
+  DOC_NUMBER_FORMAT_HINTS,
   deleteVerificationDocument,
   fetchVerificationDocuments,
   formatPickedFileSize,
   saveVerificationDocument,
+  validateDocNumber,
   type PickedDocFile,
   type RequiredDocKey,
   type VerificationDocument,
@@ -265,6 +267,12 @@ export default function UploadDocumentsScreen() {
     const file = pendingFiles[key];
     const current = serverDocs[key];
     if (!file && (number ?? "") === (current?.number ?? "")) return current; // nothing changed
+
+    if (number && !validateDocNumber(key, number.toUpperCase())) {
+      const hint = DOC_NUMBER_FORMAT_HINTS[key];
+      Alert.alert("Invalid number", hint ? `Enter a valid ${hint}.` : "Invalid document number format.");
+      return current;
+    }
 
     setSavingKey(key);
     try {
