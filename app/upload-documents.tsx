@@ -18,6 +18,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 import { Ionicons } from "@expo/vector-icons";
 import { getSession } from "../session";
 import { colors, radius, spacing, shadows } from "../lib/theme";
@@ -143,9 +144,17 @@ export default function UploadDocumentsScreen() {
     return true;
   };
 
-  const applyPickedImage = (key: DocKey, asset: ImagePicker.ImagePickerAsset) => {
-    const type = asset.mimeType || "image/jpeg";
-    if (!ALLOWED_MIME_TYPES.includes(type)) {
+  // Photos straight from a phone camera are often several thousand pixels
+  // wide / several MB — decoding that at full resolution just to render a
+  // ~130px preview box (up to 5 at once on this screen) is what made the
+  // page feel slow whenever documents were already uploaded. Downscaling
+  // before it ever becomes the pending/uploaded file fixes both the upload
+  // size and every future preview load (this app's and the admin panel's).
+  const MAX_IMAGE_DIMENSION = 1600;
+
+  const applyPickedImage = async (key: DocKey, asset: ImagePicker.ImagePickerAsset) => {
+    const originalType = asset.mimeType || "image/jpeg";
+    if (!ALLOWED_MIME_TYPES.includes(originalType)) {
       Alert.alert("Unsupported format", FORMATS_DISCLAIMER);
       return;
     }
@@ -153,13 +162,33 @@ export default function UploadDocumentsScreen() {
       Alert.alert("File too large", FORMATS_DISCLAIMER);
       return;
     }
+
+    let uri = asset.uri;
+    let type = originalType;
+    let size = asset.fileSize;
+
+    if (asset.width && asset.width > MAX_IMAGE_DIMENSION) {
+      try {
+        const resized = await ImageManipulator.manipulateAsync(
+          asset.uri,
+          [{ resize: { width: MAX_IMAGE_DIMENSION } }],
+          { compress: 0.75, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        uri = resized.uri;
+        type = "image/jpeg";
+        size = undefined; // unknown after resize — the saved size shown post-upload comes from the backend
+      } catch {
+        // fall back to the original picked file if resizing fails for any reason
+      }
+    }
+
     setPendingFiles((prev) => ({
       ...prev,
       [key]: {
-        uri: asset.uri,
+        uri,
         name: asset.fileName || `${key}.${extFromMime(type)}`,
         type,
-        size: asset.fileSize,
+        size,
       },
     }));
   };
@@ -172,7 +201,7 @@ export default function UploadDocumentsScreen() {
       quality: 0.9,
     });
     if (result.canceled || !result.assets[0]) return;
-    applyPickedImage(key, result.assets[0]);
+    await applyPickedImage(key, result.assets[0]);
   };
 
   const pickImage = async (key: DocKey) => {
@@ -183,7 +212,7 @@ export default function UploadDocumentsScreen() {
       quality: 0.9,
     });
     if (result.canceled || !result.assets[0]) return;
-    applyPickedImage(key, result.assets[0]);
+    await applyPickedImage(key, result.assets[0]);
   };
 
   const pickPdf = async (key: DocKey) => {
