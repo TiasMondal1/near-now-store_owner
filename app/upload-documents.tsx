@@ -22,7 +22,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { Ionicons } from "@expo/vector-icons";
 import { getSession } from "../session";
 import { colors, radius, spacing, shadows } from "../lib/theme";
-import { fetchStoresCached, peekStores } from "../lib/appCache";
+import { clearStoreCache, fetchStoresCached, peekStores } from "../lib/appCache";
 import {
   DOC_NUMBER_FORMATS,
   DOC_NUMBER_LENGTHS,
@@ -265,6 +265,11 @@ export default function UploadDocumentsScreen() {
   };
 
   const showSuspendedNotice = () => {
+    // The 10-minute store cache (appCache.ts) has no idea is_approved just
+    // flipped server-side — without clearing it, the very next screen's own
+    // approval gate would read the stale cached (still-approved) store and
+    // immediately redirect back into the app, undoing the suspension.
+    clearStoreCache();
     Alert.alert(
       "Store sent back for re-verification",
       "Editing a verification document after approval requires your store to be re-verified before it's visible to customers again. Contact admin if you have questions.",
