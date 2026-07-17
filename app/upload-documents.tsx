@@ -119,7 +119,7 @@ export default function UploadDocumentsScreen() {
     };
   }, []);
 
-  const requestPermission = async () => {
+  const requestLibraryPermission = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       Alert.alert("Permission needed", "Allow photo library access to upload documents.");
@@ -128,16 +128,16 @@ export default function UploadDocumentsScreen() {
     return true;
   };
 
-  const pickImage = async (key: DocKey) => {
-    if (!(await requestPermission())) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (result.canceled || !result.assets[0]) return;
+  const requestCameraPermission = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission needed", "Allow camera access to take a photo.");
+      return false;
+    }
+    return true;
+  };
 
-    const asset = result.assets[0];
+  const applyPickedImage = (key: DocKey, asset: ImagePicker.ImagePickerAsset) => {
     const type = asset.mimeType || "image/jpeg";
     if (!ALLOWED_MIME_TYPES.includes(type)) {
       Alert.alert("Unsupported format", FORMATS_DISCLAIMER);
@@ -151,6 +151,28 @@ export default function UploadDocumentsScreen() {
       ...prev,
       [key]: { uri: asset.uri, name: asset.fileName || `${key}.${extFromMime(type)}`, type },
     }));
+  };
+
+  const takePhoto = async (key: DocKey) => {
+    if (!(await requestCameraPermission())) return;
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      allowsEditing: false,
+      quality: 0.9,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    applyPickedImage(key, result.assets[0]);
+  };
+
+  const pickImage = async (key: DocKey) => {
+    if (!(await requestLibraryPermission())) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: false,
+      quality: 0.9,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    applyPickedImage(key, result.assets[0]);
   };
 
   const pickPdf = async (key: DocKey) => {
@@ -173,7 +195,8 @@ export default function UploadDocumentsScreen() {
 
   const choosePickerFor = (key: DocKey) => {
     Alert.alert("Upload document", "Choose a source", [
-      { text: "Take Photo / Choose Image", onPress: () => pickImage(key) },
+      { text: "Take Photo", onPress: () => takePhoto(key) },
+      { text: "Choose Image", onPress: () => pickImage(key) },
       { text: "Upload PDF", onPress: () => pickPdf(key) },
       { text: "Cancel", style: "cancel" },
     ]);

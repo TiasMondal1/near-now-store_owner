@@ -64,6 +64,13 @@ module.exports = () => {
       "expo-font",
       "@sentry/react-native",
       [
+        "expo-image-picker",
+        {
+          photosPermission: "Allow $(PRODUCT_NAME) to access your photos to upload shop documents.",
+          cameraPermission: "Allow $(PRODUCT_NAME) to access your camera to take photos of shop documents.",
+        },
+      ],
+      [
         "expo-notifications",
         {
           icon: "./near_now_shopkeeper_foreground.png",
