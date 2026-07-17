@@ -285,13 +285,21 @@ export default function UploadDocumentsScreen() {
         Alert.alert("Upload failed", res.error);
         return current;
       }
-      setServerDocs((prev) => ({ ...prev, [key]: res.document }));
+      // res.document is the raw saved DB row — it has storage_path but no
+      // signed `url` (that's only computed by the GET endpoint), so a plain
+      // replace would blank the preview immediately after a successful save.
+      // Keep whatever url was already showing (a number-only edit doesn't
+      // change the file), or fall back to the just-uploaded local file's own
+      // uri so the preview still shows correctly until the next full reload
+      // swaps in a real signed URL.
+      const mergedDoc = { ...res.document, url: res.document.url ?? current?.url ?? file?.uri ?? null };
+      setServerDocs((prev) => ({ ...prev, [key]: mergedDoc }));
       setPendingFiles((prev) => {
         const next = { ...prev };
         delete next[key];
         return next;
       });
-      return res.document;
+      return mergedDoc;
     } finally {
       setSavingKey(null);
     }
