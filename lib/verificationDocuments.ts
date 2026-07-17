@@ -39,7 +39,7 @@ export const DOC_NUMBER_FORMATS: Partial<Record<RequiredDocKey, { description: s
   aadhaar: { description: "12 digits", example: "234567890123" },
   pan: { description: "5 letters + 4 digits + 1 letter (10 characters)", example: "ABCDE1234F" },
   gst: {
-    description: '15 characters: 2-digit state code + 10-character PAN + 1 digit (entity number) + always "Z" + 1 checksum character',
+    description: '15 characters: 2-digit state code + 10-character PAN + 1 digit (entity number) + "Z" + 1 checksum character',
     example: "22AAAAA0000A1Z5",
   },
   fssai: { description: "14 digits", example: "12345678901234" },
