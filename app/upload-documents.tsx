@@ -467,15 +467,16 @@ export default function UploadDocumentsScreen() {
                     autoCapitalize="characters"
                   />
                   {(() => {
-                    const expectedLength = DOC_NUMBER_LENGTHS[section.key];
                     const hint = DOC_NUMBER_FORMAT_HINTS[section.key];
+                    if (!hint) return null; // trade — no fixed format to show
+                    const expectedLength = DOC_NUMBER_LENGTHS[section.key];
                     const currentLength = numbers[section.key]?.length ?? 0;
-                    if (!expectedLength || currentLength === 0 || currentLength === expectedLength) {
-                      return null;
-                    }
+                    const mismatch = !!expectedLength && currentLength > 0 && currentLength !== expectedLength;
                     return (
-                      <Text style={styles.lengthWarning}>
-                        {currentLength > expectedLength ? "Too long" : "Too short"} — expected {hint ?? `${expectedLength} characters`} (currently {currentLength} characters).
+                      <Text style={mismatch ? styles.lengthWarning : styles.formatHintText}>
+                        {mismatch
+                          ? `${currentLength > expectedLength! ? "Too long" : "Too short"} — expected ${hint} (currently ${currentLength} characters).`
+                          : `Format: ${hint}`}
                       </Text>
                     );
                   })()}
@@ -752,6 +753,7 @@ const styles = StyleSheet.create({
     borderColor: colors.primary + "30",
   },
   lengthWarning: { color: colors.error, fontSize: 11, fontWeight: "600", marginTop: 4 },
+  formatHintText: { color: colors.textTertiary, fontSize: 11, fontWeight: "500", marginTop: 4 },
 
   uploadArea: {
     marginTop: spacing.xs,
