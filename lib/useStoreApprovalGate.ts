@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { getSession } from "../session";
-import { checkStoreApproval, isStoreApproved, type ApprovalStore } from "./storeApproval";
+import { isStoreApproved, refreshStoreApproval, type ApprovalStore } from "./storeApproval";
 
 type GateMode = "require-approved" | "require-pending";
+
+const POLL_INTERVAL_MS = 30_000;
 
 /**
  * require-approved  → blocks unapproved shopkeepers (tabs, settings, orders, etc.)
@@ -22,7 +24,20 @@ export function useStoreApprovalGate(mode: GateMode) {
       return null;
     }
 
-    const result = await checkStoreApproval(session.token, session.user?.id);
+    let result;
+    try {
+      // refreshStoreApproval (not checkStoreApproval) deliberately — this
+      // gate wraps every tab screen, and a cache-preferring read here is
+      // exactly what let an admin's revoke of an already-approved store go
+      // undetected while the shopkeeper sat on a tab screen: the stale
+      // cached (still-approved) store kept passing this check indefinitely.
+      result = await refreshStoreApproval(session.token, session.user?.id);
+    } catch {
+      // Network failure: fail open so a transient error does not lock the
+      // owner out or hang this screen on "checking" forever.
+      return null;
+    }
+
     setStore(result.store);
     setApproved(result.approved);
 
@@ -54,6 +69,17 @@ export function useStoreApprovalGate(mode: GateMode) {
       void evaluate();
     }, [evaluate])
   );
+
+  // Periodic re-check so an admin action (approve/revoke) taken while the
+  // shopkeeper is sitting still on a tab screen — not navigating, not
+  // refocusing — is still detected within a bounded time, not only on the
+  // next mount/focus.
+  useEffect(() => {
+    const id = setInterval(() => {
+      void evaluate();
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [evaluate]);
 
   return { checking, store, approved, isApproved: isStoreApproved(store), refresh: evaluate };
 }

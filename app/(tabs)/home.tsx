@@ -172,13 +172,19 @@ export default function HomeTab() {
     return () => { cancelled = true; };
   }, []);
 
-  // Poll every 30s while the selected store is pending approval; show banner on approval.
+  // Poll every 30s in BOTH directions — was pending-only (stopped entirely
+  // once approved), so an admin revoking an already-approved store while the
+  // shopkeeper sat on this screen was never detected at all. This is a
+  // robustness fallback independent of the stores-table realtime
+  // subscription below; the actual redirect decision lives in the single
+  // watcher effect further down so it fires no matter which of these two
+  // mechanisms is the one that actually notices the change.
   useEffect(() => {
-    const approved = isStoreApproved(selectedStore);
-    if (approved || !session?.token) {
+    if (!session?.token || !selectedStore?.id) {
       if (approvalPollRef.current) { clearInterval(approvalPollRef.current); approvalPollRef.current = null; }
       return;
     }
+    const wasApproved = isStoreApproved(selectedStore);
     const checkApproval = async () => {
       try {
         const res = await fetch(`${API_BASE}/store-owner/stores`, { headers: { Authorization: `Bearer ${session.token}` } });
@@ -186,9 +192,9 @@ export default function HomeTab() {
         const json = await res.json();
         const fresh: StoreRow[] = json?.stores ?? [];
         if (!fresh.length) return;
-        setStores(fresh);
         const updated = fresh.find(s => s.id === selectedStore?.id);
-        if (updated && isStoreApproved(updated)) {
+        setStores(fresh);
+        if (updated && !wasApproved && isStoreApproved(updated)) {
           setApprovedBanner(true);
           Animated.sequence([
             Animated.timing(approvedBannerAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
@@ -201,6 +207,18 @@ export default function HomeTab() {
     approvalPollRef.current = setInterval(checkApproval, 30_000);
     return () => { if (approvalPollRef.current) { clearInterval(approvalPollRef.current); approvalPollRef.current = null; } };
   }, [selectedStore?.is_approved, selectedStore?.id, session?.token]);
+
+  // Single source of truth for "should we be here at all" — reacts to
+  // is_approved flipping to false regardless of what caused the refresh
+  // (this poll, the stores realtime subscription, a manual action's own
+  // refetch, etc.), instead of duplicating a redirect check into every
+  // individual place that can update `stores`.
+  useEffect(() => {
+    if (loading || !selectedStore) return;
+    if (!isStoreApproved(selectedStore)) {
+      router.replace("/pending-verification");
+    }
+  }, [selectedStore?.is_approved, selectedStore?.id, loading]);
 
   // Resolve & persist the selected store whenever the store list changes.
   useEffect(() => {
@@ -237,7 +255,14 @@ export default function HomeTab() {
   useEffect(() => {
     if (!selectedStore?.id || !session?.token || !supabase) return;
     const token = session.token; const userId = session.user?.id;
-    const channel = supabase.channel(`store-${selectedStore.id}-${Date.now()}`).on("postgres_changes", { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${selectedStore.id}` }, () => { fetchStores(token, userId); }).subscribe();
+    const channel = supabase.channel(`store-${selectedStore.id}-${Date.now()}`).on("postgres_changes", { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${selectedStore.id}` }, () => {
+      // fetchStores() -> fetchStoresCached() is cache-first (up to a 10min
+      // TTL) — without clearing it here, this event firing because the row
+      // genuinely changed could still just hand back the stale cached data,
+      // defeating the entire point of the realtime nudge.
+      clearStoreCache();
+      fetchStores(token, userId);
+    }).subscribe();
     return () => { supabase?.removeChannel(channel); };
   }, [selectedStore?.id, session?.token]);
 
