@@ -30,9 +30,9 @@ import {
 
 const DOCUMENT_SECTIONS = [
   { key: "aadhaar", label: "Aadhaar Card", icon: "card-outline" as const, placeholder: "12-digit Aadhaar number" },
-  { key: "pan", label: "PAN Card", icon: "id-card-outline" as const, placeholder: "e.g. ABCDE1234F" },
+  { key: "pan", label: "PAN Card", icon: "id-card-outline" as const, placeholder: "10-character PAN, e.g. ABCDE1234F" },
   { key: "trade", label: "Trade License", icon: "document-text-outline" as const, placeholder: "Trade license number" },
-  { key: "gst", label: "GST Certificate", icon: "receipt-outline" as const, placeholder: "15-digit GSTIN" },
+  { key: "gst", label: "GST Certificate", icon: "receipt-outline" as const, placeholder: "15-character GSTIN, e.g. 22AAAAA0000A1Z5" },
   { key: "fssai", label: "FSSAI License", icon: "restaurant-outline" as const, placeholder: "14-digit FSSAI number" },
 ] as const;
 
