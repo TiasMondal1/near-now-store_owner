@@ -24,8 +24,10 @@ import {
 } from "../lib/verificationDocuments";
 
 const DOC_LABELS: Record<(typeof REQUIRED_DOC_KEYS)[number], string> = {
-  aadhaar: "Aadhaar Card",
-  pan: "PAN Card",
+  aadhaar_front: "Aadhaar Card (Front)",
+  aadhaar_back: "Aadhaar Card (Back)",
+  pan_front: "PAN Card (Front)",
+  pan_back: "PAN Card (Back)",
   trade: "Trade License",
   gst: "GST Certificate",
   fssai: "FSSAI License",
@@ -194,7 +196,7 @@ export default function PendingVerificationScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.stepLabel, active && styles.stepLabelActive]}>{step.label}</Text>
                     {active && step.key === "upload" && (
-                      <Text style={styles.stepHint}>Upload all 5 required shop documents</Text>
+                      <Text style={styles.stepHint}>Upload all 7 required shop documents</Text>
                     )}
                     {active && step.key === "review" && (
                       <Text style={styles.stepHint}>Our admins are reviewing your submission</Text>
@@ -215,7 +217,7 @@ export default function PendingVerificationScreen() {
               </View>
             </View>
             <Text style={styles.docsDesc}>
-              Upload Aadhaar, PAN, Trade License, GST Certificate, and FSSAI License to continue verification.
+              Upload Aadhaar (front & back), PAN (front & back), Trade License, GST Certificate, and FSSAI License to continue verification.
             </Text>
 
             {rejectedDocs.map((doc) => (

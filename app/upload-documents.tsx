@@ -38,11 +38,13 @@ import {
 } from "../lib/verificationDocuments";
 
 const DOCUMENT_SECTIONS = [
-  { key: "aadhaar", label: "Aadhaar Card", icon: "card-outline" as const, placeholder: "12-digit Aadhaar number" },
-  { key: "pan", label: "PAN Card", icon: "id-card-outline" as const, placeholder: "10-character PAN, e.g. ABCDE1234F" },
-  { key: "trade", label: "Trade License", icon: "document-text-outline" as const, placeholder: "Trade license number" },
-  { key: "gst", label: "GST Certificate", icon: "receipt-outline" as const, placeholder: "15-character GSTIN, e.g. 22AAAAA0000A1Z5" },
-  { key: "fssai", label: "FSSAI License", icon: "restaurant-outline" as const, placeholder: "14-digit FSSAI number" },
+  { key: "aadhaar_front", label: "Aadhaar Card (Front)", icon: "card-outline" as const, placeholder: "12-digit Aadhaar number", hasNumber: true },
+  { key: "aadhaar_back", label: "Aadhaar Card (Back)", icon: "card-outline" as const, placeholder: "", hasNumber: false },
+  { key: "pan_front", label: "PAN Card (Front)", icon: "id-card-outline" as const, placeholder: "10-character PAN, e.g. ABCDE1234F", hasNumber: true },
+  { key: "pan_back", label: "PAN Card (Back)", icon: "id-card-outline" as const, placeholder: "", hasNumber: false },
+  { key: "trade", label: "Trade License", icon: "document-text-outline" as const, placeholder: "Trade license number", hasNumber: true },
+  { key: "gst", label: "GST Certificate", icon: "receipt-outline" as const, placeholder: "15-character GSTIN, e.g. 22AAAAA0000A1Z5", hasNumber: true },
+  { key: "fssai", label: "FSSAI License", icon: "restaurant-outline" as const, placeholder: "14-digit FSSAI number", hasNumber: true },
 ] as const;
 
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -61,6 +63,32 @@ function extFromMime(mime: string): string {
   if (mime === "application/pdf") return "pdf";
   return "jpg";
 }
+
+const SECTION_BY_KEY = Object.fromEntries(
+  DOCUMENT_SECTIONS.map((s) => [s.key, s])
+) as Record<DocKey, (typeof DOCUMENT_SECTIONS)[number]>;
+
+/**
+ * Aadhaar and PAN each have 2 underlying document rows (front/back), but are
+ * shown as one card — a single header + document number (taken from the
+ * front, which is where the number is printed), then a front box and a back
+ * box underneath. Trade/GST/FSSAI are still single-document cards.
+ */
+type DocGroup = {
+  groupKey: string;
+  headerLabel: string;
+  headerIcon: React.ComponentProps<typeof Ionicons>["name"];
+  numberKey: DocKey | null;
+  members: readonly DocKey[];
+};
+
+const DOCUMENT_GROUPS: DocGroup[] = [
+  { groupKey: "aadhaar", headerLabel: "Aadhaar Card", headerIcon: "card-outline", numberKey: "aadhaar_front", members: ["aadhaar_front", "aadhaar_back"] },
+  { groupKey: "pan", headerLabel: "PAN Card", headerIcon: "id-card-outline", numberKey: "pan_front", members: ["pan_front", "pan_back"] },
+  { groupKey: "trade", headerLabel: "Trade License", headerIcon: "document-text-outline", numberKey: "trade", members: ["trade"] },
+  { groupKey: "gst", headerLabel: "GST Certificate", headerIcon: "receipt-outline", numberKey: "gst", members: ["gst"] },
+  { groupKey: "fssai", headerLabel: "FSSAI License", headerIcon: "restaurant-outline", numberKey: "fssai", members: ["fssai"] },
+];
 
 export default function UploadDocumentsScreen() {
   const [loading, setLoading] = useState(true);
@@ -390,6 +418,26 @@ export default function UploadDocumentsScreen() {
 
   const uploadedCount = DOCUMENT_SECTIONS.filter((d) => serverDocs[d.key]?.url).length;
 
+  type StatusBadge = { icon: React.ComponentProps<typeof Ionicons>["name"]; text: string; color: string };
+
+  const computeGroupStatus = (group: DocGroup): StatusBadge | null => {
+    const rejectedAny = group.members.some(
+      (k) => !pendingFiles[k] && serverDocs[k]?.status === "rejected"
+    );
+    if (rejectedAny) return { icon: "close-circle", text: "Needs re-upload", color: colors.error };
+
+    const pendingFileAny = group.members.some((k) => !!pendingFiles[k]);
+    if (pendingFileAny) return { icon: "checkmark-circle-outline", text: "Ready to save", color: colors.primary };
+
+    const allApproved = group.members.every((k) => serverDocs[k]?.status === "approved");
+    if (allApproved) return { icon: "checkmark-circle", text: "Verified", color: colors.success };
+
+    const anyUploaded = group.members.some((k) => !!serverDocs[k]?.url);
+    if (anyUploaded) return { icon: "time-outline", text: "Pending review", color: colors.warning };
+
+    return null;
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
@@ -424,150 +472,162 @@ export default function UploadDocumentsScreen() {
             </View>
           </View>
 
-          {DOCUMENT_SECTIONS.map((section) => {
-            const doc = serverDocs[section.key];
-            const pendingFile = pendingFiles[section.key];
-            const isSavingThis = savingKey === section.key;
-            const previewUri = pendingFile?.uri ?? (doc?.url && doc?.status !== "rejected" ? doc.url : doc?.url);
-            const isPdf = pendingFile
-              ? pendingFile.type === "application/pdf"
-              : doc?.url?.toLowerCase().includes(".pdf");
-
-            // A freshly picked (not yet saved) file supersedes whatever the
-            // server last said — the shopkeeper has already acted on a
-            // rejection, so keep showing "Needs re-upload" until they save
-            // would be misleading.
-            const effectiveStatus = pendingFile ? null : doc?.status;
-
-            let statusBadge: {
-              icon: React.ComponentProps<typeof Ionicons>["name"];
-              text: string;
-              color: string;
-            } | null = null;
-            if (effectiveStatus === "approved") {
-              statusBadge = { icon: "checkmark-circle", text: "Verified", color: colors.success };
-            } else if (effectiveStatus === "rejected") {
-              statusBadge = { icon: "close-circle", text: "Needs re-upload", color: colors.error };
-            } else if (pendingFile) {
-              statusBadge = { icon: "checkmark-circle-outline", text: "Ready to save", color: colors.primary };
-            } else if (doc?.url) {
-              statusBadge = { icon: "time-outline", text: "Pending review", color: colors.warning };
-            }
+          {DOCUMENT_GROUPS.map((group) => {
+            const status = computeGroupStatus(group);
+            const numberSection = group.numberKey ? SECTION_BY_KEY[group.numberKey] : null;
 
             return (
-              <View key={section.key} style={styles.sectionCard}>
+              <View key={group.groupKey} style={styles.sectionCard}>
                 <View style={styles.sectionHeader}>
                   <View style={styles.sectionIconWrap}>
-                    <Ionicons name={section.icon} size={16} color={colors.primary} />
+                    <Ionicons name={group.headerIcon} size={16} color={colors.primary} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.sectionTitle}>{section.label}</Text>
+                    <Text style={styles.sectionTitle}>{group.headerLabel}</Text>
                     <Text style={styles.sectionSubtitle}>
-                      {statusBadge ? statusBadge.text : "Required for verification"}
+                      {status ? status.text : "Required for verification"}
                     </Text>
                   </View>
-                  {statusBadge && (
-                    <View style={[styles.statusBadge, { backgroundColor: statusBadge.color + "12" }]}>
-                      <Ionicons name={statusBadge.icon} size={14} color={statusBadge.color} />
-                      <Text style={[styles.statusBadgeText, { color: statusBadge.color }]}>
-                        {statusBadge.text}
+                  {status && (
+                    <View style={[styles.statusBadge, { backgroundColor: status.color + "12" }]}>
+                      <Ionicons name={status.icon} size={14} color={status.color} />
+                      <Text style={[styles.statusBadgeText, { color: status.color }]}>
+                        {status.text}
                       </Text>
                     </View>
                   )}
                 </View>
 
                 <View style={styles.sectionBody}>
-                  {effectiveStatus === "rejected" && doc?.rejection_reason ? (
-                    <View style={styles.rejectionBanner}>
-                      <Ionicons name="alert-circle" size={14} color={colors.error} />
-                      <Text style={styles.rejectionText}>{doc.rejection_reason}</Text>
-                    </View>
-                  ) : null}
-
-                  <Text style={styles.fieldLabel}>Document Number</Text>
-                  <TextInput
-                    style={styles.fieldInput}
-                    value={numbers[section.key]}
-                    onChangeText={(text) =>
-                      setNumbers((prev) => ({ ...prev, [section.key]: text }))
-                    }
-                    placeholder={section.placeholder}
-                    placeholderTextColor={colors.textTertiary}
-                    autoCapitalize="characters"
-                  />
-                  {(() => {
-                    const format = DOC_NUMBER_FORMATS[section.key];
-                    if (!format) return null; // trade — no fixed format to show
-                    const expectedLength = DOC_NUMBER_LENGTHS[section.key];
-                    const currentLength = numbers[section.key]?.length ?? 0;
-                    const mismatch = !!expectedLength && currentLength > 0 && currentLength !== expectedLength;
-                    return (
-                      <Text style={mismatch ? styles.lengthWarning : styles.formatHintText}>
-                        {mismatch
-                          ? `${currentLength > expectedLength! ? "Too long" : "Too short"} — expected ${format.description} (currently ${currentLength} characters).`
-                          : `Format: ${format.description}. Example: ${format.example}`}
-                      </Text>
-                    );
-                  })()}
-
-                  <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>Document File</Text>
-                  <TouchableOpacity
-                    style={[styles.uploadArea, (pendingFile || doc?.url) && styles.uploadAreaFilled]}
-                    activeOpacity={0.8}
-                    onPress={() => choosePickerFor(section.key)}
-                    disabled={isSavingThis}
-                  >
-                    {isSavingThis ? (
-                      <ActivityIndicator color={colors.primary} />
-                    ) : pendingFile || doc?.url ? (
-                      isPdf ? (
-                        <View style={styles.pdfChip}>
-                          <Ionicons name="document-text" size={28} color={colors.primary} />
-                          <Text style={styles.pdfChipText} numberOfLines={1}>
-                            {pendingFile?.name || "Document.pdf"}
-                          </Text>
-                        </View>
-                      ) : (
-                        <>
-                          <Image source={{ uri: previewUri! }} style={styles.preview} resizeMode="cover" />
-                          <View style={styles.reuploadOverlay}>
-                            <Ionicons name="camera" size={22} color="#fff" />
-                            <Text style={styles.reuploadText}>Change</Text>
-                          </View>
-                        </>
-                      )
-                    ) : (
-                      <>
-                        <View style={styles.uploadIcon}>
-                          <Ionicons name="cloud-upload-outline" size={26} color={colors.primary} />
-                        </View>
-                        <Text style={styles.uploadLabel}>Upload {section.label}</Text>
-                        <Text style={styles.uploadSub}>{FORMATS_DISCLAIMER}</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                  {(pendingFile || doc?.url) && (
-                    <View style={styles.fileMetaRow}>
-                      <Text style={styles.formatsHint}>{FORMATS_DISCLAIMER}</Text>
+                  {numberSection && (
+                    <>
+                      <Text style={styles.fieldLabel}>Document Number</Text>
+                      <TextInput
+                        style={styles.fieldInput}
+                        value={numbers[numberSection.key]}
+                        onChangeText={(text) =>
+                          setNumbers((prev) => ({ ...prev, [numberSection.key]: text }))
+                        }
+                        placeholder={numberSection.placeholder}
+                        placeholderTextColor={colors.textTertiary}
+                        autoCapitalize="characters"
+                      />
                       {(() => {
-                        const sizeLabel = pendingFile?.size
-                          ? formatPickedFileSize(pendingFile.size)
-                          : doc?.file_size ?? null;
-                        return sizeLabel ? <Text style={styles.fileSizeText}>{sizeLabel}</Text> : null;
+                        const format = DOC_NUMBER_FORMATS[numberSection.key];
+                        if (!format) return null; // trade — no fixed format to show
+                        const expectedLength = DOC_NUMBER_LENGTHS[numberSection.key];
+                        const currentLength = numbers[numberSection.key]?.length ?? 0;
+                        const mismatch = !!expectedLength && currentLength > 0 && currentLength !== expectedLength;
+                        return (
+                          <Text style={mismatch ? styles.lengthWarning : styles.formatHintText}>
+                            {mismatch
+                              ? `${currentLength > expectedLength! ? "Too long" : "Too short"} — expected ${format.description} (currently ${currentLength} characters).`
+                              : `Format: ${format.description}. Example: ${format.example}`}
+                          </Text>
+                        );
                       })()}
-                    </View>
+                    </>
                   )}
-                  {doc?.url && (
-                    <TouchableOpacity
-                      style={styles.deleteBtn}
-                      activeOpacity={0.7}
-                      onPress={() => deleteOne(section.key)}
-                      disabled={isSavingThis}
-                    >
-                      <Ionicons name="trash-outline" size={14} color={colors.error} />
-                      <Text style={styles.deleteBtnText}>Delete uploaded file</Text>
-                    </TouchableOpacity>
-                  )}
+
+                  {group.members.map((memberKey, idx) => {
+                    const memberSection = SECTION_BY_KEY[memberKey];
+                    const doc = serverDocs[memberKey];
+                    const pendingFile = pendingFiles[memberKey];
+                    const isSavingThis = savingKey === memberKey;
+                    const previewUri = pendingFile?.uri ?? (doc?.url && doc?.status !== "rejected" ? doc.url : doc?.url);
+                    const isPdf = pendingFile
+                      ? pendingFile.type === "application/pdf"
+                      : doc?.url?.toLowerCase().includes(".pdf");
+
+                    // A freshly picked (not yet saved) file supersedes whatever
+                    // the server last said — the shopkeeper has already acted
+                    // on a rejection, so keep showing "Needs re-upload" until
+                    // they save would be misleading.
+                    const effectiveStatus = pendingFile ? null : doc?.status;
+                    const isMultiMember = group.members.length > 1;
+
+                    return (
+                      <View
+                        key={memberKey}
+                        style={idx > 0 ? styles.memberBlockSpaced : undefined}
+                      >
+                        {isMultiMember ? (
+                          <Text style={[styles.memberHeader, idx === 0 && styles.memberHeaderFirst]}>
+                            {memberSection.label}
+                          </Text>
+                        ) : (
+                          <Text style={[styles.fieldLabel, { marginTop: numberSection ? spacing.md : 0 }]}>
+                            Document File
+                          </Text>
+                        )}
+
+                        {effectiveStatus === "rejected" && doc?.rejection_reason ? (
+                          <View style={styles.rejectionBanner}>
+                            <Ionicons name="alert-circle" size={14} color={colors.error} />
+                            <Text style={styles.rejectionText}>{doc.rejection_reason}</Text>
+                          </View>
+                        ) : null}
+
+                        <TouchableOpacity
+                          style={[styles.uploadArea, (pendingFile || doc?.url) && styles.uploadAreaFilled]}
+                          activeOpacity={0.8}
+                          onPress={() => choosePickerFor(memberKey)}
+                          disabled={isSavingThis}
+                        >
+                          {isSavingThis ? (
+                            <ActivityIndicator color={colors.primary} />
+                          ) : pendingFile || doc?.url ? (
+                            isPdf ? (
+                              <View style={styles.pdfChip}>
+                                <Ionicons name="document-text" size={28} color={colors.primary} />
+                                <Text style={styles.pdfChipText} numberOfLines={1}>
+                                  {pendingFile?.name || "Document.pdf"}
+                                </Text>
+                              </View>
+                            ) : (
+                              <>
+                                <Image source={{ uri: previewUri! }} style={styles.preview} resizeMode="cover" />
+                                <View style={styles.reuploadOverlay}>
+                                  <Ionicons name="camera" size={22} color="#fff" />
+                                  <Text style={styles.reuploadText}>Change</Text>
+                                </View>
+                              </>
+                            )
+                          ) : (
+                            <>
+                              <View style={styles.uploadIcon}>
+                                <Ionicons name="cloud-upload-outline" size={26} color={colors.primary} />
+                              </View>
+                              <Text style={styles.uploadLabel}>Upload {memberSection.label}</Text>
+                              <Text style={styles.uploadSub}>{FORMATS_DISCLAIMER}</Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                        {(pendingFile || doc?.url) && (
+                          <View style={styles.fileMetaRow}>
+                            <Text style={styles.formatsHint}>{FORMATS_DISCLAIMER}</Text>
+                            {(() => {
+                              const sizeLabel = pendingFile?.size
+                                ? formatPickedFileSize(pendingFile.size)
+                                : doc?.file_size ?? null;
+                              return sizeLabel ? <Text style={styles.fileSizeText}>{sizeLabel}</Text> : null;
+                            })()}
+                          </View>
+                        )}
+                        {doc?.url && (
+                          <TouchableOpacity
+                            style={styles.deleteBtn}
+                            activeOpacity={0.7}
+                            onPress={() => deleteOne(memberKey)}
+                            disabled={isSavingThis}
+                          >
+                            <Ionicons name="trash-outline" size={14} color={colors.error} />
+                            <Text style={styles.deleteBtnText}>Delete uploaded file</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    );
+                  })}
                 </View>
               </View>
             );
@@ -761,6 +821,15 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   rejectionText: { color: colors.error, fontSize: 12, fontWeight: "600", flex: 1, lineHeight: 16 },
+
+  memberHeader: { color: colors.textPrimary, fontSize: 12, fontWeight: "700", marginBottom: spacing.xs },
+  memberHeaderFirst: { marginTop: spacing.md },
+  memberBlockSpaced: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderLight,
+  },
 
   fieldLabel: {
     color: colors.textTertiary,

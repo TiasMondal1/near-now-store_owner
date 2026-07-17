@@ -388,7 +388,7 @@ export default function ProfileScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.docNavTitle}>Upload Shop Documents</Text>
                   <Text style={styles.docNavDesc}>
-                    Aadhaar, PAN, Trade License, GST & FSSAI
+                    Aadhaar (front/back), PAN (front/back), Trade License, GST & FSSAI
                   </Text>
                 </View>
               </View>
