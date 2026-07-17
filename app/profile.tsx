@@ -24,20 +24,10 @@ import { fetchStoresCached, peekStores, clearStoreCache } from "../lib/appCache"
 import { config } from "../lib/config";
 import { uploadStoreImage, uploadOwnerImage } from "../lib/storage";
 import { useRequireStoreApproval } from "../lib/useRequireStoreApproval";
-import {
-  countUploadedDocsFromRecord,
-  DOCS_STORAGE_KEY,
-  REQUIRED_DOC_KEYS,
-} from "../lib/verificationDocuments";
+import { fetchVerificationDocuments, REQUIRED_DOC_KEYS } from "../lib/verificationDocuments";
 
 const API_BASE = config.API_BASE;
 const OWNER_IMAGE_KEY = "owner_profile_image_url";
-
-function countUploadedDocs(store: any): number {
-  let count = countUploadedDocsFromRecord(store?.verification_documents);
-  if (store?.verification_document && count === 0) count = 1;
-  return count;
-}
 
 export default function ProfileScreen() {
   useRequireStoreApproval();
@@ -104,23 +94,22 @@ export default function ProfileScreen() {
     return () => { cancelled = true; };
   }, []);
 
+  const loadDocCount = useCallback(async (storeId: string) => {
+    try {
+      const s = await getSession();
+      if (!s?.token) return;
+      const docs = await fetchVerificationDocuments(s.token, storeId);
+      setUploadedDocCount(docs.filter((d) => !!d.url).length);
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       if (!storeInfo?.id) return;
-      void (async () => {
-        try {
-          const localRaw = await AsyncStorage.getItem(DOCS_STORAGE_KEY(storeInfo.id));
-          if (localRaw) {
-            const local = JSON.parse(localRaw);
-            setUploadedDocCount(REQUIRED_DOC_KEYS.filter((key) => local?.[key]?.url).length);
-            return;
-          }
-        } catch {
-          /* ignore */
-        }
-        setUploadedDocCount(countUploadedDocs(storeInfo));
-      })();
-    }, [storeInfo])
+      void loadDocCount(storeInfo.id);
+    }, [storeInfo, loadDocCount])
   );
 
   const hydrate = async (store: any) => {
@@ -129,20 +118,7 @@ export default function ProfileScreen() {
     setStoreAddress(store.address ?? "");
     setStorePhone(store.phone ?? "");
     if (store.image_url) setStoreImageUri(store.image_url);
-
-    let count = countUploadedDocs(store);
-    if (store?.id) {
-      try {
-        const localRaw = await AsyncStorage.getItem(DOCS_STORAGE_KEY(store.id));
-        if (localRaw) {
-          const local = JSON.parse(localRaw);
-          count = REQUIRED_DOC_KEYS.filter((key) => local?.[key]?.url).length;
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-    setUploadedDocCount(count);
+    if (store?.id) void loadDocCount(store.id);
   };
 
   const requestPermission = async () => {

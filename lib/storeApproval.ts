@@ -3,7 +3,6 @@ import { config } from "./config";
 
 export type ApprovalStore = CachedStore & {
   is_approved?: boolean;
-  verification_documents?: unknown;
 };
 
 /** Store is live for customers only after explicit admin approval. */

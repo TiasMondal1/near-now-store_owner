@@ -1,14 +1,74 @@
+import { config } from "./config";
+
 export const REQUIRED_DOC_KEYS = ["aadhaar", "pan", "trade", "gst", "fssai"] as const;
 export type RequiredDocKey = (typeof REQUIRED_DOC_KEYS)[number];
 
-export const DOCS_STORAGE_KEY = (storeId: string) => `store_verification_docs_${storeId}`;
+export type DocStatus = "pending" | "approved" | "rejected" | null;
 
-export function countUploadedDocsFromRecord(raw: unknown): number {
-  if (!raw) return 0;
+export type VerificationDocument = {
+  doc_type: RequiredDocKey;
+  number: string | null;
+  url: string | null;
+  status: DocStatus;
+  rejection_reason: string | null;
+  uploaded_at: string | null;
+  reviewed_at: string | null;
+};
+
+export type PickedDocFile = { uri: string; name: string; type: string };
+
+const API_BASE = config.API_BASE;
+
+/** Fetch the caller's store's 5 verification documents, each with a signed URL. */
+export async function fetchVerificationDocuments(
+  token: string,
+  storeId: string
+): Promise<VerificationDocument[]> {
+  const res = await fetch(`${API_BASE}/store-owner/stores/${storeId}/verification-documents`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Failed to fetch verification documents");
+  const json = await res.json();
+  return json?.documents ?? [];
+}
+
+/**
+ * Save one verification document's number and/or file. Uploads are proxied
+ * through the backend (multipart) rather than direct-to-Supabase-Storage —
+ * this app has no real Supabase Auth session to scope a client-side storage
+ * policy to. Always resets that document's status back to "pending" server-side.
+ */
+export async function saveVerificationDocument(
+  token: string,
+  storeId: string,
+  docType: RequiredDocKey,
+  fields: { number?: string; file?: PickedDocFile }
+): Promise<{ ok: true; document: VerificationDocument } | { ok: false; error: string }> {
+  const form = new FormData();
+  if (fields.number) form.append("number", fields.number);
+  if (fields.file) {
+    form.append("file", {
+      uri: fields.file.uri,
+      name: fields.file.name,
+      type: fields.file.type,
+    } as unknown as Blob);
+  }
+
   try {
-    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-    return REQUIRED_DOC_KEYS.filter((key) => parsed?.[key]?.url).length;
-  } catch {
-    return 0;
+    const res = await fetch(
+      `${API_BASE}/store-owner/stores/${storeId}/verification-documents/${docType}`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      }
+    );
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      return { ok: false, error: json?.error || "Failed to save document" };
+    }
+    return { ok: true, document: json.document };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "Network error" };
   }
 }

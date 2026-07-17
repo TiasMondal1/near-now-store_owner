@@ -17,7 +17,6 @@ export type CachedStore = {
   delivery_radius_km: number;
   is_active: boolean;
   is_approved?: boolean;
-  verification_documents?: unknown;
 };
 
 let _mem: { stores: CachedStore[]; ts: number } | null = null;

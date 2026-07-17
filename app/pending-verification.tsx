@@ -11,17 +11,24 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { clearSession, getSession } from "../session";
 import { colors, radius, spacing, shadows } from "../lib/theme";
 import { refreshStoreApproval } from "../lib/storeApproval";
 import { useStoreApprovalGate } from "../lib/useStoreApprovalGate";
 import {
-  countUploadedDocsFromRecord,
-  DOCS_STORAGE_KEY,
+  fetchVerificationDocuments,
   REQUIRED_DOC_KEYS,
+  type VerificationDocument,
 } from "../lib/verificationDocuments";
+
+const DOC_LABELS: Record<(typeof REQUIRED_DOC_KEYS)[number], string> = {
+  aadhaar: "Aadhaar Card",
+  pan: "PAN Card",
+  trade: "Trade License",
+  gst: "GST Certificate",
+  fssai: "FSSAI License",
+};
 
 const STEPS = [
   { key: "upload", label: "Upload documents", icon: "cloud-upload-outline" as const },
@@ -31,7 +38,7 @@ const STEPS = [
 
 export default function PendingVerificationScreen() {
   const { checking, store } = useStoreApprovalGate("require-pending");
-  const [uploadedCount, setUploadedCount] = useState(0);
+  const [documents, setDocuments] = useState<VerificationDocument[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -40,28 +47,27 @@ export default function PendingVerificationScreen() {
     Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
   }, []);
 
-  const loadDocCount = useCallback(async () => {
+  const loadDocuments = useCallback(async () => {
     if (!store?.id) {
-      setUploadedCount(0);
+      setDocuments([]);
       return;
     }
-
-    let count = countUploadedDocsFromRecord(store.verification_documents);
     try {
-      const localRaw = await AsyncStorage.getItem(DOCS_STORAGE_KEY(store.id));
-      if (localRaw) {
-        const local = JSON.parse(localRaw);
-        count = REQUIRED_DOC_KEYS.filter((key) => local?.[key]?.url).length;
-      }
+      const session = await getSession();
+      if (!session?.token) return;
+      const docs = await fetchVerificationDocuments(session.token, store.id);
+      setDocuments(docs);
     } catch {
-      /* ignore */
+      /* non-fatal — keep showing whatever we last had */
     }
-    setUploadedCount(count);
-  }, [store?.id, store?.verification_documents]);
+  }, [store?.id]);
 
   useEffect(() => {
-    void loadDocCount();
-  }, [loadDocCount]);
+    void loadDocuments();
+  }, [loadDocuments]);
+
+  const uploadedCount = documents.filter((d) => !!d.url).length;
+  const rejectedDocs = documents.filter((d) => d.status === "rejected");
 
   const checkApprovalNow = useCallback(async (silent = false) => {
     const session = await getSession();
@@ -82,13 +88,13 @@ export default function PendingVerificationScreen() {
         router.replace("/(tabs)/home");
         return;
       }
-      await loadDocCount();
+      await loadDocuments();
     } catch {
       if (!silent) Alert.alert("Could not refresh", "Check your connection and try again.");
     } finally {
       if (!silent) setRefreshing(false);
     }
-  }, [loadDocCount]);
+  }, [loadDocuments]);
 
   useEffect(() => {
     pollRef.current = setInterval(() => {
@@ -196,6 +202,17 @@ export default function PendingVerificationScreen() {
             <Text style={styles.docsDesc}>
               Upload Aadhaar, PAN, Trade License, GST Certificate, and FSSAI License to continue verification.
             </Text>
+
+            {rejectedDocs.map((doc) => (
+              <View key={doc.doc_type} style={styles.rejectionRow}>
+                <Ionicons name="close-circle" size={15} color={colors.error} />
+                <Text style={styles.rejectionRowText}>
+                  {DOC_LABELS[doc.doc_type]} needs to be re-uploaded
+                  {doc.rejection_reason ? ` — ${doc.rejection_reason}` : ""}
+                </Text>
+              </View>
+            ))}
+
             <TouchableOpacity
               style={styles.primaryBtn}
               onPress={() => router.push("/upload-documents")}
@@ -321,6 +338,18 @@ const styles = StyleSheet.create({
   countText: { color: colors.warning, fontSize: 12, fontWeight: "700" },
   countTextDone: { color: colors.success },
   docsDesc: { color: colors.textSecondary, fontSize: 13, lineHeight: 19, marginBottom: spacing.lg },
+  rejectionRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    backgroundColor: colors.error + "0C",
+    borderWidth: 1,
+    borderColor: colors.error + "30",
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  rejectionRowText: { color: colors.error, fontSize: 12, fontWeight: "600", flex: 1, lineHeight: 16 },
   primaryBtn: {
     flexDirection: "row",
     alignItems: "center",

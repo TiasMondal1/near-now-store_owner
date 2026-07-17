@@ -15,16 +15,18 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as DocumentPicker from "expo-document-picker";
 import { Ionicons } from "@expo/vector-icons";
 import { getSession } from "../session";
 import { colors, radius, spacing, shadows } from "../lib/theme";
-import { fetchStoresCached, peekStores, clearStoreCache } from "../lib/appCache";
-import { config } from "../lib/config";
-import { uploadVerificationDoc } from "../lib/storage";
-import { DOCS_STORAGE_KEY } from "../lib/verificationDocuments";
-
-const API_BASE = config.API_BASE;
+import { fetchStoresCached, peekStores } from "../lib/appCache";
+import {
+  fetchVerificationDocuments,
+  saveVerificationDocument,
+  type PickedDocFile,
+  type RequiredDocKey,
+  type VerificationDocument,
+} from "../lib/verificationDocuments";
 
 const DOCUMENT_SECTIONS = [
   { key: "aadhaar", label: "Aadhaar Card", icon: "card-outline" as const, placeholder: "12-digit Aadhaar number" },
@@ -34,60 +36,34 @@ const DOCUMENT_SECTIONS = [
   { key: "fssai", label: "FSSAI License", icon: "restaurant-outline" as const, placeholder: "14-digit FSSAI number" },
 ] as const;
 
-type DocKey = (typeof DOCUMENT_SECTIONS)[number]["key"];
-type DocEntry = { number: string; url: string | null };
-type DocsMap = Record<DocKey, DocEntry>;
+const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB
+const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+const FORMATS_DISCLAIMER = "Accepted formats: JPG, PNG, WEBP, PDF · Max size 2MB";
 
-const EMPTY_DOCS = (): DocsMap =>
-  Object.fromEntries(DOCUMENT_SECTIONS.map((d) => [d.key, { number: "", url: null }])) as DocsMap;
+type DocKey = RequiredDocKey;
+type DocsState = Record<DocKey, VerificationDocument | null>;
 
-function parseDocs(raw: unknown, legacyType?: string, legacyNumber?: string): DocsMap {
-  const docs = EMPTY_DOCS();
-  if (typeof raw === "string" && raw.trim()) {
-    try {
-      const parsed = JSON.parse(raw);
-      for (const section of DOCUMENT_SECTIONS) {
-        const entry = parsed?.[section.key];
-        if (entry) {
-          docs[section.key] = {
-            number: entry.number ?? "",
-            url: entry.url ?? null,
-          };
-        }
-      }
-      return docs;
-    } catch {
-      /* fall through */
-    }
-  }
-  if (raw && typeof raw === "object") {
-    for (const section of DOCUMENT_SECTIONS) {
-      const entry = (raw as Record<string, DocEntry>)[section.key];
-      if (entry) {
-        docs[section.key] = {
-          number: entry.number ?? "",
-          url: entry.url ?? null,
-        };
-      }
-    }
-    return docs;
-  }
-  if (legacyType && DOCUMENT_SECTIONS.some((d) => d.key === legacyType)) {
-    docs[legacyType as DocKey] = {
-      number: legacyNumber ?? "",
-      url: null,
-    };
-  }
-  return docs;
+const EMPTY_DOCS = (): DocsState =>
+  Object.fromEntries(DOCUMENT_SECTIONS.map((d) => [d.key, null])) as DocsState;
+
+function extFromMime(mime: string): string {
+  if (mime === "image/png") return "png";
+  if (mime === "image/webp") return "webp";
+  if (mime === "application/pdf") return "pdf";
+  return "jpg";
 }
 
 export default function UploadDocumentsScreen() {
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [storeId, setStoreId] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [docs, setDocs] = useState<DocsMap>(EMPTY_DOCS());
-  const [uploadingKey, setUploadingKey] = useState<DocKey | null>(null);
+  const [serverDocs, setServerDocs] = useState<DocsState>(EMPTY_DOCS());
+  const [numbers, setNumbers] = useState<Record<DocKey, string>>(
+    () => Object.fromEntries(DOCUMENT_SECTIONS.map((d) => [d.key, ""])) as Record<DocKey, string>
+  );
+  const [pendingFiles, setPendingFiles] = useState<Partial<Record<DocKey, PickedDocFile>>>({});
+  const [savingKey, setSavingKey] = useState<DocKey | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(20)).current;
@@ -98,6 +74,18 @@ export default function UploadDocumentsScreen() {
       Animated.timing(slideAnim, { toValue: 0, duration: 380, useNativeDriver: true }),
     ]).start();
   }, []);
+
+  const loadDocuments = async (authToken: string, targetStoreId: string) => {
+    const docs = await fetchVerificationDocuments(authToken, targetStoreId);
+    const next = EMPTY_DOCS();
+    const nextNumbers = { ...numbers };
+    for (const doc of docs) {
+      next[doc.doc_type] = doc;
+      nextNumbers[doc.doc_type] = doc.number ?? "";
+    }
+    setServerDocs(next);
+    setNumbers(nextNumbers);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -110,46 +98,21 @@ export default function UploadDocumentsScreen() {
       if (cancelled) return;
       setToken(session.token);
 
-      const selId = await AsyncStorage.getItem("selected_store_id");
       const cached = peekStores();
-      const stores = cached?.length
-        ? cached
-        : await fetchStoresCached(session.token, session.user?.id);
-      const store = (selId && stores.find((s: any) => s.id === selId)) || stores[0];
+      const stores = cached?.length ? cached : await fetchStoresCached(session.token, session.user?.id);
+      const store = stores[0];
       if (!store?.id) {
         setLoading(false);
         return;
       }
-
       setStoreId(store.id);
 
-      let hydrated = parseDocs(
-        (store as any).verification_documents,
-        (store as any).verification_document,
-        (store as any).verification_number
-      );
-
-      const localRaw = await AsyncStorage.getItem(DOCS_STORAGE_KEY(store.id));
-      if (localRaw) {
-        try {
-          const local = JSON.parse(localRaw) as Partial<DocsMap>;
-          for (const section of DOCUMENT_SECTIONS) {
-            const localEntry = local[section.key];
-            if (!localEntry) continue;
-            hydrated[section.key] = {
-              number: localEntry.number || hydrated[section.key].number,
-              url: localEntry.url || hydrated[section.key].url,
-            };
-          }
-        } catch {
-          /* ignore */
-        }
+      try {
+        await loadDocuments(session.token, store.id);
+      } catch {
+        /* non-fatal — screen still renders with empty state */
       }
-
-      if (!cancelled) {
-        setDocs(hydrated);
-        setLoading(false);
-      }
+      if (!cancelled) setLoading(false);
     })();
     return () => {
       cancelled = true;
@@ -165,38 +128,8 @@ export default function UploadDocumentsScreen() {
     return true;
   };
 
-  const persistLocal = async (next: DocsMap) => {
-    if (!storeId) return;
-    await AsyncStorage.setItem(DOCS_STORAGE_KEY(storeId), JSON.stringify(next));
-  };
-
-  const patchStore = async (fields: Record<string, string>) => {
-    if (!token || !storeId) return;
-    try {
-      await fetch(`${API_BASE}/store-owner/stores/${storeId}`, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(fields),
-      });
-      clearStoreCache();
-    } catch {
-      /* non-fatal */
-    }
-  };
-
-  const updateDoc = (key: DocKey, patch: Partial<DocEntry>) => {
-    setDocs((prev) => {
-      const next = { ...prev, [key]: { ...prev[key], ...patch } };
-      persistLocal(next);
-      return next;
-    });
-  };
-
-  const pickDocument = async (key: DocKey) => {
-    if (!(await requestPermission()) || !storeId) return;
+  const pickImage = async (key: DocKey) => {
+    if (!(await requestPermission())) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsEditing: false,
@@ -204,42 +137,102 @@ export default function UploadDocumentsScreen() {
     });
     if (result.canceled || !result.assets[0]) return;
 
-    const uri = result.assets[0].uri;
-    setUploadingKey(key);
+    const asset = result.assets[0];
+    const type = asset.mimeType || "image/jpeg";
+    if (!ALLOWED_MIME_TYPES.includes(type)) {
+      Alert.alert("Unsupported format", FORMATS_DISCLAIMER);
+      return;
+    }
+    if (asset.fileSize && asset.fileSize > MAX_FILE_SIZE_BYTES) {
+      Alert.alert("File too large", FORMATS_DISCLAIMER);
+      return;
+    }
+    setPendingFiles((prev) => ({
+      ...prev,
+      [key]: { uri: asset.uri, name: asset.fileName || `${key}.${extFromMime(type)}`, type },
+    }));
+  };
+
+  const pickPdf = async (key: DocKey) => {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: "application/pdf",
+      copyToCacheDirectory: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+
+    const asset = result.assets[0];
+    if (asset.size && asset.size > MAX_FILE_SIZE_BYTES) {
+      Alert.alert("File too large", FORMATS_DISCLAIMER);
+      return;
+    }
+    setPendingFiles((prev) => ({
+      ...prev,
+      [key]: { uri: asset.uri, name: asset.name || "document.pdf", type: "application/pdf" },
+    }));
+  };
+
+  const choosePickerFor = (key: DocKey) => {
+    Alert.alert("Upload document", "Choose a source", [
+      { text: "Take Photo / Choose Image", onPress: () => pickImage(key) },
+      { text: "Upload PDF", onPress: () => pickPdf(key) },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
+
+  const saveOne = async (key: DocKey): Promise<VerificationDocument | null> => {
+    if (!token || !storeId) return null;
+    const number = numbers[key]?.trim();
+    const file = pendingFiles[key];
+    const current = serverDocs[key];
+    if (!file && (number ?? "") === (current?.number ?? "")) return current; // nothing changed
+
+    setSavingKey(key);
     try {
-      const res = await uploadVerificationDoc(storeId, key, uri);
-      if (res.ok) {
-        updateDoc(key, { url: res.url });
-      } else {
+      const res = await saveVerificationDocument(token, storeId, key, {
+        number: number || undefined,
+        file,
+      });
+      if (!res.ok) {
         Alert.alert("Upload failed", res.error);
+        return current;
       }
+      setServerDocs((prev) => ({ ...prev, [key]: res.document }));
+      setPendingFiles((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      return res.document;
     } finally {
-      setUploadingKey(null);
+      setSavingKey(null);
     }
   };
 
-  const handleSave = async () => {
-    if (!storeId) return;
+  const handleSaveAll = async () => {
     setSaving(true);
     try {
-      const payload = JSON.stringify(docs);
-      await patchStore({ verification_documents: payload });
-      await persistLocal(docs);
-      const allUploaded = DOCUMENT_SECTIONS.every((section) => docs[section.key].url);
+      const results: Partial<Record<DocKey, VerificationDocument | null>> = {};
+      for (const section of DOCUMENT_SECTIONS) {
+        results[section.key] = await saveOne(section.key);
+      }
+      const allApproved = DOCUMENT_SECTIONS.every((s) => results[s.key]?.status === "approved");
+      const anySubmitted = DOCUMENT_SECTIONS.every((s) => !!results[s.key]?.url);
       Alert.alert(
         "Saved",
-        allUploaded
-          ? "All documents saved. Our team will verify them before your shop goes live to customers."
-          : "Your documents have been saved. Upload the remaining documents to complete verification."
+        allApproved
+          ? "All documents are approved."
+          : anySubmitted
+            ? "Your documents have been submitted. Our team will verify them before your shop goes live."
+            : "Upload the remaining documents to complete verification."
       );
     } catch {
-      Alert.alert("Error", "Failed to save documents. Please try again.");
+      Alert.alert("Error", "Failed to save one or more documents. Please try again.");
     } finally {
       setSaving(false);
     }
   };
 
-  const uploadedCount = DOCUMENT_SECTIONS.filter((d) => docs[d.key].url).length;
+  const uploadedCount = DOCUMENT_SECTIONS.filter((d) => serverDocs[d.key]?.url).length;
 
   if (loading) {
     return (
@@ -270,15 +263,32 @@ export default function UploadDocumentsScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.infoTitle}>Shop verification</Text>
               <Text style={styles.infoText}>
-                Upload clear photos of each document. {uploadedCount} of {DOCUMENT_SECTIONS.length} uploaded.
+                Upload clear documents. {uploadedCount} of {DOCUMENT_SECTIONS.length} submitted.
               </Text>
             </View>
           </View>
 
           {DOCUMENT_SECTIONS.map((section) => {
-            const entry = docs[section.key];
-            const isUploading = uploadingKey === section.key;
-            const isUploaded = Boolean(entry.url);
+            const doc = serverDocs[section.key];
+            const pendingFile = pendingFiles[section.key];
+            const isSavingThis = savingKey === section.key;
+            const previewUri = pendingFile?.uri ?? (doc?.url && doc?.status !== "rejected" ? doc.url : doc?.url);
+            const isPdf = pendingFile
+              ? pendingFile.type === "application/pdf"
+              : doc?.url?.toLowerCase().includes(".pdf");
+
+            let statusBadge: {
+              icon: React.ComponentProps<typeof Ionicons>["name"];
+              text: string;
+              color: string;
+            } | null = null;
+            if (doc?.status === "approved") {
+              statusBadge = { icon: "checkmark-circle", text: "Verified", color: colors.success };
+            } else if (doc?.status === "rejected") {
+              statusBadge = { icon: "close-circle", text: "Needs re-upload", color: colors.error };
+            } else if (doc?.url) {
+              statusBadge = { icon: "time-outline", text: "Pending review", color: colors.warning };
+            }
 
             return (
               <View key={section.key} style={styles.sectionCard}>
@@ -289,55 +299,78 @@ export default function UploadDocumentsScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.sectionTitle}>{section.label}</Text>
                     <Text style={styles.sectionSubtitle}>
-                      {isUploaded ? "Document uploaded" : "Required for verification"}
+                      {statusBadge ? statusBadge.text : "Required for verification"}
                     </Text>
                   </View>
-                  {isUploaded && (
-                    <View style={styles.uploadedBadge}>
-                      <Ionicons name="checkmark-circle" size={14} color={colors.success} />
-                      <Text style={styles.uploadedBadgeText}>Done</Text>
+                  {statusBadge && (
+                    <View style={[styles.statusBadge, { backgroundColor: statusBadge.color + "12" }]}>
+                      <Ionicons name={statusBadge.icon} size={14} color={statusBadge.color} />
+                      <Text style={[styles.statusBadgeText, { color: statusBadge.color }]}>
+                        {statusBadge.text}
+                      </Text>
                     </View>
                   )}
                 </View>
 
                 <View style={styles.sectionBody}>
+                  {doc?.status === "rejected" && doc.rejection_reason ? (
+                    <View style={styles.rejectionBanner}>
+                      <Ionicons name="alert-circle" size={14} color={colors.error} />
+                      <Text style={styles.rejectionText}>{doc.rejection_reason}</Text>
+                    </View>
+                  ) : null}
+
                   <Text style={styles.fieldLabel}>Document Number</Text>
                   <TextInput
                     style={styles.fieldInput}
-                    value={entry.number}
-                    onChangeText={(text) => updateDoc(section.key, { number: text })}
+                    value={numbers[section.key]}
+                    onChangeText={(text) =>
+                      setNumbers((prev) => ({ ...prev, [section.key]: text }))
+                    }
                     placeholder={section.placeholder}
                     placeholderTextColor={colors.textTertiary}
                     autoCapitalize="characters"
                   />
 
-                  <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>Document Image</Text>
+                  <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>Document File</Text>
                   <TouchableOpacity
-                    style={[styles.uploadArea, isUploaded && styles.uploadAreaFilled]}
+                    style={[styles.uploadArea, (pendingFile || doc?.url) && styles.uploadAreaFilled]}
                     activeOpacity={0.8}
-                    onPress={() => pickDocument(section.key)}
-                    disabled={isUploading}
+                    onPress={() => choosePickerFor(section.key)}
+                    disabled={isSavingThis}
                   >
-                    {isUploading ? (
+                    {isSavingThis ? (
                       <ActivityIndicator color={colors.primary} />
-                    ) : isUploaded && entry.url ? (
-                      <>
-                        <Image source={{ uri: entry.url }} style={styles.preview} resizeMode="cover" />
-                        <View style={styles.reuploadOverlay}>
-                          <Ionicons name="camera" size={22} color="#fff" />
-                          <Text style={styles.reuploadText}>Change</Text>
+                    ) : pendingFile || doc?.url ? (
+                      isPdf ? (
+                        <View style={styles.pdfChip}>
+                          <Ionicons name="document-text" size={28} color={colors.primary} />
+                          <Text style={styles.pdfChipText} numberOfLines={1}>
+                            {pendingFile?.name || "Document.pdf"}
+                          </Text>
                         </View>
-                      </>
+                      ) : (
+                        <>
+                          <Image source={{ uri: previewUri! }} style={styles.preview} resizeMode="cover" />
+                          <View style={styles.reuploadOverlay}>
+                            <Ionicons name="camera" size={22} color="#fff" />
+                            <Text style={styles.reuploadText}>Change</Text>
+                          </View>
+                        </>
+                      )
                     ) : (
                       <>
                         <View style={styles.uploadIcon}>
                           <Ionicons name="cloud-upload-outline" size={26} color={colors.primary} />
                         </View>
                         <Text style={styles.uploadLabel}>Upload {section.label}</Text>
-                        <Text style={styles.uploadSub}>JPG or PNG · max 5 MB</Text>
+                        <Text style={styles.uploadSub}>{FORMATS_DISCLAIMER}</Text>
                       </>
                     )}
                   </TouchableOpacity>
+                  {(pendingFile || doc?.url) && (
+                    <Text style={styles.formatsHint}>{FORMATS_DISCLAIMER}</Text>
+                  )}
                 </View>
               </View>
             );
@@ -345,7 +378,7 @@ export default function UploadDocumentsScreen() {
 
           <TouchableOpacity
             style={[styles.saveBtn, saving && { opacity: 0.55 }]}
-            onPress={handleSave}
+            onPress={handleSaveAll}
             disabled={saving}
             activeOpacity={0.85}
           >
@@ -439,17 +472,29 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: "700" },
   sectionSubtitle: { color: colors.textTertiary, fontSize: 11, marginTop: 1 },
-  uploadedBadge: {
+  statusBadge: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    backgroundColor: colors.success + "12",
     borderRadius: radius.full,
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
-  uploadedBadgeText: { color: colors.success, fontSize: 11, fontWeight: "700" },
+  statusBadgeText: { fontSize: 11, fontWeight: "700" },
   sectionBody: { padding: spacing.lg },
+
+  rejectionBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.xs,
+    backgroundColor: colors.error + "0C",
+    borderWidth: 1,
+    borderColor: colors.error + "30",
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  rejectionText: { color: colors.error, fontSize: 12, fontWeight: "600", flex: 1, lineHeight: 16 },
 
   fieldLabel: {
     color: colors.textTertiary,
@@ -495,7 +540,8 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   uploadLabel: { color: colors.primary, fontSize: 14, fontWeight: "700" },
-  uploadSub: { color: colors.textTertiary, fontSize: 11, fontWeight: "500" },
+  uploadSub: { color: colors.textTertiary, fontSize: 11, fontWeight: "500", textAlign: "center", paddingHorizontal: spacing.md },
+  formatsHint: { color: colors.textTertiary, fontSize: 11, fontWeight: "500", marginTop: 6 },
   preview: { ...StyleSheet.absoluteFillObject },
   reuploadOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -505,6 +551,8 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   reuploadText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  pdfChip: { alignItems: "center", justifyContent: "center", gap: 6, paddingHorizontal: spacing.lg },
+  pdfChipText: { color: colors.textPrimary, fontSize: 13, fontWeight: "600" },
 
   saveBtn: {
     flexDirection: "row",

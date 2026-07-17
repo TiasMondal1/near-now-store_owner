@@ -1,13 +1,17 @@
 /**
  * Supabase Storage helpers for uploading images from the app.
  *
- * Buckets used:
- *   store-images      – store banner/cover photos
- *   owner-images      – store owner profile photos
- *   store-documents   – verification documents (Aadhaar, FSSAI, etc.)
+ * Buckets used directly from the app:
+ *   store-images      – store banner/cover photos (public)
+ *   owner-images      – store owner profile photos (public)
  *
- * All three buckets should be PUBLIC so the returned URL is directly usable
- * in <Image source={{ uri }}> without signed-URL expiry.
+ * Both should be PUBLIC so the returned URL is directly usable in
+ * <Image source={{ uri }}> without signed-URL expiry.
+ *
+ * Verification documents (Aadhaar, FSSAI, etc.) are NOT uploaded from here —
+ * that bucket (store-documents) is private, and uploads are proxied through
+ * the backend instead (see lib/verificationDocuments.ts), since this app has
+ * no real Supabase Auth session to scope a client-side storage policy to.
  *
  * Run this SQL in Supabase to create the buckets and add the image columns
  * to the stores table:
@@ -16,17 +20,13 @@
  *   INSERT INTO storage.buckets (id, name, public)
  *   VALUES
  *     ('store-images',    'store-images',    true),
- *     ('owner-images',    'owner-images',    true),
- *     ('store-documents', 'store-documents', false)
+ *     ('owner-images',    'owner-images',    true)
  *   ON CONFLICT (id) DO NOTHING;
  *
  *   -- Columns on stores table
  *   ALTER TABLE stores
  *     ADD COLUMN IF NOT EXISTS image_url             TEXT,
  *     ADD COLUMN IF NOT EXISTS owner_image_url       TEXT,
- *     ADD COLUMN IF NOT EXISTS verification_document TEXT,
- *     ADD COLUMN IF NOT EXISTS verification_number   TEXT,
- *     ADD COLUMN IF NOT EXISTS verification_documents TEXT,
  *     ADD COLUMN IF NOT EXISTS is_approved          BOOLEAN DEFAULT false;
  */
 
@@ -87,15 +87,4 @@ export async function uploadOwnerImage(
   const ext = localUri.split('.').pop()?.toLowerCase() ?? 'jpg';
   const path = `${ownerId}/avatar.${ext}`;
   return uploadImage('owner-images', path, localUri);
-}
-
-/** Upload a verification document image. */
-export async function uploadVerificationDoc(
-  storeId: string,
-  docType: string,
-  localUri: string
-): Promise<UploadResult> {
-  const ext = localUri.split('.').pop()?.toLowerCase() ?? 'jpg';
-  const path = `${storeId}/${docType}.${ext}`;
-  return uploadImage('store-documents', path, localUri);
 }
