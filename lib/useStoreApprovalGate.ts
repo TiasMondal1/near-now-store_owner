@@ -10,7 +10,14 @@ const POLL_INTERVAL_MS = 30_000;
 
 /**
  * require-approved  → blocks unapproved shopkeepers (tabs, settings, orders, etc.)
- * require-pending   → keeps approved shopkeepers off the pending screen
+ * require-pending   → tracks approval state on the pending-verification screen,
+ *                      but does NOT navigate on its own. That screen shows a
+ *                      "Store Verified" alert and navigates only from the
+ *                      alert's own Continue button (see pending-verification.tsx)
+ *                      — a silent auto-redirect here would bypass that alert
+ *                      on the ordinary cold-launch-after-approval path, since
+ *                      this hook's mount check fires before the user can ever
+ *                      see or act on anything.
  */
 export function useStoreApprovalGate(mode: GateMode) {
   const [checking, setChecking] = useState(true);
@@ -45,10 +52,8 @@ export function useStoreApprovalGate(mode: GateMode) {
       router.replace("/pending-verification");
       return result;
     }
-    if (mode === "require-pending" && result.approved) {
-      router.replace("/(tabs)/home");
-      return result;
-    }
+    // require-pending intentionally does not navigate here — see the mode
+    // doc comment above.
 
     return result;
   }, [mode]);

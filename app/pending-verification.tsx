@@ -108,6 +108,10 @@ export default function PendingVerificationScreen() {
   }, [loadDocuments]);
 
   useEffect(() => {
+    // Check once immediately (don't wait out the first 30s interval tick) —
+    // this is what catches "approved while the app was closed" on a cold
+    // launch, now that useStoreApprovalGate no longer silently redirects.
+    void checkApprovalNow(true);
     pollRef.current = setInterval(() => {
       void checkApprovalNow(true);
     }, 30_000);
