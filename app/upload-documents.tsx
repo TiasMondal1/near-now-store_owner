@@ -429,13 +429,18 @@ export default function UploadDocumentsScreen() {
     const pendingFileAny = group.members.some((k) => !!pendingFiles[k]);
     if (pendingFileAny) return { icon: "checkmark-circle-outline", text: "Ready to save", color: colors.primary };
 
+    // A member with no file uploaded at all yet is still on the shopkeeper's
+    // side, not the admin's — must be checked before "allApproved"/"anyUploaded"
+    // below, or a group with one side approved and the other never uploaded
+    // reads as "Pending review" (implying it's awaiting admin action) when
+    // it's actually awaiting the shopkeeper.
+    const missingAny = group.members.some((k) => !serverDocs[k]?.url);
+    if (missingAny) return null;
+
     const allApproved = group.members.every((k) => serverDocs[k]?.status === "approved");
     if (allApproved) return { icon: "checkmark-circle", text: "Verified", color: colors.success };
 
-    const anyUploaded = group.members.some((k) => !!serverDocs[k]?.url);
-    if (anyUploaded) return { icon: "time-outline", text: "Pending review", color: colors.warning };
-
-    return null;
+    return { icon: "time-outline", text: "Pending review", color: colors.warning };
   };
 
   if (loading) {
