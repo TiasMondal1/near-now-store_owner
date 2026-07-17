@@ -139,11 +139,15 @@ export default function ProfileScreen() {
       quality: 0.85,
     });
     if (result.canceled || !result.assets[0]) return;
+    if (!storeInfo?.id) {
+      Alert.alert("Can't upload yet", "Store info is still loading — try again in a moment.");
+      return;
+    }
     const uri = result.assets[0].uri;
     setStoreImageUri(uri);
     setUploadingStoreImage(true);
     try {
-      const res = await uploadStoreImage(storeInfo?.id ?? "unknown", uri);
+      const res = await uploadStoreImage(storeInfo.id, uri);
       if (res.ok) {
         await patchStore({ image_url: res.url });
         setStoreImageUri(res.url);
@@ -164,11 +168,15 @@ export default function ProfileScreen() {
       quality: 0.85,
     });
     if (result.canceled || !result.assets[0]) return;
+    if (!session?.user?.id) {
+      Alert.alert("Can't upload yet", "Your session is still loading — try again in a moment.");
+      return;
+    }
     const uri = result.assets[0].uri;
     setOwnerImageUri(uri);
     setUploadingOwnerImage(true);
     try {
-      const res = await uploadOwnerImage(session?.user?.id ?? "unknown", uri);
+      const res = await uploadOwnerImage(session.user.id, uri);
       if (res.ok) {
         // Save remote URL so it persists across sessions
         await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);

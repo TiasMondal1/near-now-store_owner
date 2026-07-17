@@ -2,8 +2,8 @@
  * Supabase Storage helpers for uploading images from the app.
  *
  * Buckets used directly from the app:
- *   store-images      – store banner/cover photos (public)
- *   owner-images      – store owner profile photos (public)
+ *   store-images        – store banner/cover photos (public)
+ *   store-owner-images  – store owner profile photos (public)
  *
  * Both should be PUBLIC so the returned URL is directly usable in
  * <Image source={{ uri }}> without signed-URL expiry.
@@ -13,21 +13,12 @@
  * the backend instead (see lib/verificationDocuments.ts), since this app has
  * no real Supabase Auth session to scope a client-side storage policy to.
  *
- * Run this SQL in Supabase to create the buckets and add the image columns
- * to the stores table:
- *
- *   -- Storage buckets (public)
- *   INSERT INTO storage.buckets (id, name, public)
- *   VALUES
- *     ('store-images',    'store-images',    true),
- *     ('owner-images',    'owner-images',    true)
- *   ON CONFLICT (id) DO NOTHING;
- *
- *   -- Columns on stores table
- *   ALTER TABLE stores
- *     ADD COLUMN IF NOT EXISTS image_url             TEXT,
- *     ADD COLUMN IF NOT EXISTS owner_image_url       TEXT,
- *     ADD COLUMN IF NOT EXISTS is_approved          BOOLEAN DEFAULT false;
+ * Buckets, the stores.image_url/owner_image_url columns, and the anon-key
+ * write policies these uploads rely on are created by
+ * supabase/migrations/20260802000000_store_owner_images_buckets.sql in the
+ * near-and-now repo (previously manual/untracked — see that file for why
+ * these need an anon write policy, unlike the backend-proxied verification
+ * documents flow).
  */
 
 import { supabase } from './supabase';
@@ -86,5 +77,5 @@ export async function uploadOwnerImage(
 ): Promise<UploadResult> {
   const ext = localUri.split('.').pop()?.toLowerCase() ?? 'jpg';
   const path = `${ownerId}/avatar.${ext}`;
-  return uploadImage('owner-images', path, localUri);
+  return uploadImage('store-owner-images', path, localUri);
 }
