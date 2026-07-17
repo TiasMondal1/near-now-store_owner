@@ -81,3 +81,27 @@ export async function saveVerificationDocument(
     return { ok: false, error: e?.message || "Network error" };
   }
 }
+
+/** Delete an already-uploaded document, removing both the file and its record so it can be re-uploaded from scratch. */
+export async function deleteVerificationDocument(
+  token: string,
+  storeId: string,
+  docType: RequiredDocKey
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/store-owner/stores/${storeId}/verification-documents/${docType}`,
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    );
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      return { ok: false, error: json?.error || "Failed to delete document" };
+    }
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "Network error" };
+  }
+}

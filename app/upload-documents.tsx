@@ -23,6 +23,7 @@ import { getSession } from "../session";
 import { colors, radius, spacing, shadows } from "../lib/theme";
 import { fetchStoresCached, peekStores } from "../lib/appCache";
 import {
+  deleteVerificationDocument,
   fetchVerificationDocuments,
   formatPickedFileSize,
   saveVerificationDocument,
@@ -258,6 +259,44 @@ export default function UploadDocumentsScreen() {
     }
   };
 
+  const deleteOne = (key: DocKey) => {
+    const doc = serverDocs[key];
+    if (!doc?.url) return;
+    Alert.alert(
+      "Delete document",
+      doc.status === "approved"
+        ? "This document is already approved — deleting it means you'll need to re-upload and go through review again. Continue?"
+        : "This removes the uploaded file. You can upload a new one anytime.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            if (!token || !storeId) return;
+            setSavingKey(key);
+            try {
+              const res = await deleteVerificationDocument(token, storeId, key);
+              if (!res.ok) {
+                Alert.alert("Delete failed", res.error);
+                return;
+              }
+              setServerDocs((prev) => ({ ...prev, [key]: null }));
+              setNumbers((prev) => ({ ...prev, [key]: "" }));
+              setPendingFiles((prev) => {
+                const next = { ...prev };
+                delete next[key];
+                return next;
+              });
+            } finally {
+              setSavingKey(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleSaveAll = async () => {
     setSaving(true);
     try {
@@ -436,6 +475,17 @@ export default function UploadDocumentsScreen() {
                         return sizeLabel ? <Text style={styles.fileSizeText}>{sizeLabel}</Text> : null;
                       })()}
                     </View>
+                  )}
+                  {doc?.url && (
+                    <TouchableOpacity
+                      style={styles.deleteBtn}
+                      activeOpacity={0.7}
+                      onPress={() => deleteOne(section.key)}
+                      disabled={isSavingThis}
+                    >
+                      <Ionicons name="trash-outline" size={14} color={colors.error} />
+                      <Text style={styles.deleteBtnText}>Delete uploaded file</Text>
+                    </TouchableOpacity>
                   )}
                 </View>
               </View>
@@ -684,6 +734,15 @@ const styles = StyleSheet.create({
   },
   formatsHint: { color: colors.textTertiary, fontSize: 11, fontWeight: "500", flexShrink: 1 },
   fileSizeText: { color: colors.textSecondary, fontSize: 11, fontWeight: "700" },
+  deleteBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    marginTop: spacing.sm,
+    paddingVertical: 8,
+  },
+  deleteBtnText: { color: colors.error, fontSize: 12, fontWeight: "700" },
   preview: { ...StyleSheet.absoluteFillObject },
   reuploadOverlay: {
     ...StyleSheet.absoluteFillObject,
