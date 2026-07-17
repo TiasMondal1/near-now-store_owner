@@ -74,6 +74,7 @@ export default function UploadDocumentsScreen() {
   const [savingKey, setSavingKey] = useState<DocKey | null>(null);
   const [saving, setSaving] = useState(false);
   const [pickerSheetKey, setPickerSheetKey] = useState<DocKey | null>(null);
+  const suspendedRef = useRef(false);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(20)).current;
@@ -263,6 +264,14 @@ export default function UploadDocumentsScreen() {
     if (key) action(key);
   };
 
+  const showSuspendedNotice = () => {
+    Alert.alert(
+      "Store sent back for re-verification",
+      "Editing a verification document after approval requires your store to be re-verified before it's visible to customers again. Contact admin if you have questions.",
+      [{ text: "Continue", onPress: () => router.replace("/pending-verification") }]
+    );
+  };
+
   const saveOne = async (key: DocKey): Promise<VerificationDocument | null> => {
     if (!token || !storeId) return null;
     const number = numbers[key]?.trim();
@@ -299,6 +308,7 @@ export default function UploadDocumentsScreen() {
         delete next[key];
         return next;
       });
+      if (res.storeSuspended) suspendedRef.current = true;
       return mergedDoc;
     } finally {
       setSavingKey(null);
@@ -311,7 +321,7 @@ export default function UploadDocumentsScreen() {
     Alert.alert(
       "Delete document",
       doc.status === "approved"
-        ? "This document is already approved — deleting it means you'll need to re-upload and go through review again. Continue?"
+        ? "This document is already approved — deleting it means your store will be sent back for re-verification. Continue?"
         : "This removes the uploaded file. You can upload a new one anytime.",
       [
         { text: "Cancel", style: "cancel" },
@@ -334,6 +344,7 @@ export default function UploadDocumentsScreen() {
                 delete next[key];
                 return next;
               });
+              if (res.storeSuspended) showSuspendedNotice();
             } finally {
               setSavingKey(null);
             }
@@ -345,10 +356,15 @@ export default function UploadDocumentsScreen() {
 
   const handleSaveAll = async () => {
     setSaving(true);
+    suspendedRef.current = false;
     try {
       const results: Partial<Record<DocKey, VerificationDocument | null>> = {};
       for (const section of DOCUMENT_SECTIONS) {
         results[section.key] = await saveOne(section.key);
+      }
+      if (suspendedRef.current) {
+        showSuspendedNotice();
+        return;
       }
       const allApproved = DOCUMENT_SECTIONS.every((s) => results[s.key]?.status === "approved");
       const anySubmitted = DOCUMENT_SECTIONS.every((s) => !!results[s.key]?.url);

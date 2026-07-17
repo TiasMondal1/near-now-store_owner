@@ -98,7 +98,10 @@ export async function saveVerificationDocument(
   storeId: string,
   docType: RequiredDocKey,
   fields: { number?: string; file?: PickedDocFile }
-): Promise<{ ok: true; document: VerificationDocument } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; document: VerificationDocument; storeSuspended: boolean }
+  | { ok: false; error: string }
+> {
   const form = new FormData();
   if (fields.number) form.append("number", fields.number);
   if (fields.file) {
@@ -122,18 +125,23 @@ export async function saveVerificationDocument(
     if (!res.ok || !json?.success) {
       return { ok: false, error: json?.error || "Failed to save document" };
     }
-    return { ok: true, document: json.document };
+    return { ok: true, document: json.document, storeSuspended: !!json.storeSuspended };
   } catch (e: any) {
     return { ok: false, error: e?.message || "Network error" };
   }
 }
 
-/** Delete an already-uploaded document, removing both the file and its record so it can be re-uploaded from scratch. */
+/**
+ * Delete an already-uploaded document, removing both the file and its record
+ * so it can be re-uploaded from scratch. If the store was already approved,
+ * editing/removing a document sends it back for full re-verification — same
+ * as save (see storeSuspended).
+ */
 export async function deleteVerificationDocument(
   token: string,
   storeId: string,
   docType: RequiredDocKey
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; storeSuspended: boolean } | { ok: false; error: string }> {
   try {
     const res = await fetch(
       `${API_BASE}/store-owner/stores/${storeId}/verification-documents/${docType}`,
@@ -146,7 +154,7 @@ export async function deleteVerificationDocument(
     if (!res.ok || !json?.success) {
       return { ok: false, error: json?.error || "Failed to delete document" };
     }
-    return { ok: true };
+    return { ok: true, storeSuspended: !!json.storeSuspended };
   } catch (e: any) {
     return { ok: false, error: e?.message || "Network error" };
   }
