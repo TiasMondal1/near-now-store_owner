@@ -25,6 +25,7 @@ import { colors, radius, spacing, shadows } from "../lib/theme";
 import { fetchStoresCached, peekStores } from "../lib/appCache";
 import {
   DOC_NUMBER_FORMAT_HINTS,
+  DOC_NUMBER_LENGTHS,
   deleteVerificationDocument,
   fetchVerificationDocuments,
   formatPickedFileSize,
@@ -465,6 +466,20 @@ export default function UploadDocumentsScreen() {
                     placeholderTextColor={colors.textTertiary}
                     autoCapitalize="characters"
                   />
+                  {(() => {
+                    const expectedLength = DOC_NUMBER_LENGTHS[section.key];
+                    const currentLength = numbers[section.key]?.length ?? 0;
+                    if (!expectedLength || currentLength === 0 || currentLength === expectedLength) {
+                      return null;
+                    }
+                    return (
+                      <Text style={styles.lengthWarning}>
+                        {currentLength > expectedLength
+                          ? `Too long — must be exactly ${expectedLength} characters (currently ${currentLength}).`
+                          : `Must be exactly ${expectedLength} characters (currently ${currentLength}).`}
+                      </Text>
+                    );
+                  })()}
 
                   <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>Document File</Text>
                   <TouchableOpacity
@@ -737,6 +752,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.primary + "30",
   },
+  lengthWarning: { color: colors.error, fontSize: 11, fontWeight: "600", marginTop: 4 },
 
   uploadArea: {
     marginTop: spacing.xs,

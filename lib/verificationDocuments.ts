@@ -41,6 +41,14 @@ export const DOC_NUMBER_FORMAT_HINTS: Partial<Record<RequiredDocKey, string>> = 
   fssai: "14-digit FSSAI number",
 };
 
+/** Exact expected length for the 4 fixed-length documents — no entry for Trade License. */
+export const DOC_NUMBER_LENGTHS: Partial<Record<RequiredDocKey, number>> = {
+  aadhaar: 12,
+  pan: 10,
+  gst: 15,
+  fssai: 14,
+};
+
 export function validateDocNumber(docType: RequiredDocKey, number: string): boolean {
   const pattern = DOC_NUMBER_PATTERNS[docType];
   if (!pattern) return true; // trade — no fixed format to check
