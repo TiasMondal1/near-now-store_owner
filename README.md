@@ -15,7 +15,7 @@ A React Native (Expo) mobile application for store owners to manage their stores
 ### 🎉 New Features (March 2026)
 - **Advanced Order Management** - Filtering, search, bulk operations, CSV export
 - **Enhanced Inventory** - Categories, low stock alerts, bulk operations, fuzzy search
-- **Store Settings** - Edit store details, business hours, delivery configuration
+- **Store Settings** - Edit store details and delivery configuration
 - **Push Notifications** - Order alerts, low stock warnings, daily summaries
 - **Security Enhancements** - Environment validation, error handling, API retry logic
 
@@ -192,10 +192,6 @@ await storeService.updateStore(storeId, {
   delivery_radius_km: 5,
   delivery_fee: 20
 }, token);
-
-// Business hours
-await storeService.updateBusinessHours(storeId, businessHours, token);
-const isOpen = storeService.isStoreOpenNow(businessHours);
 ```
 
 ### Notification Service (`lib/notifications.ts`)

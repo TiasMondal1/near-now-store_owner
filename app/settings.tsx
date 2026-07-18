@@ -99,7 +99,6 @@ export default function SettingsScreen() {
   const ownerPhone = session?.user?.phone || '';
   const storeItems: SettingItem[] = [
     { key: 'store', icon: 'storefront-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Store Settings', desc: 'Name, address, delivery radius', onPress: () => setShowStoreSettings(true) },
-    { key: 'hours', icon: 'time-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Business Hours', desc: 'Opening and closing times', onPress: () => router.push('/business-hours') },
   ];
   const prefItems: SettingItem[] = [
     { key: 'notif-inbox', icon: 'notifications-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Notifications', desc: 'View order alerts and updates', onPress: () => router.push('/notification-inbox') },

@@ -19,10 +19,9 @@ const FAQ: { q: string; a: string }[] = [
   { q: 'When do I get paid?', a: 'Payouts are processed after orders are delivered. Check the Payouts tab for your earnings history.' },
   { q: 'How do I change my store name or address?', a: 'Go to Settings > Store Settings. You can update your store name, address, delivery radius, and more.' },
   { q: 'What is the pickup code?', a: 'After accepting an order, a pickup code is generated. Share this code with the delivery partner when they arrive to collect the order.' },
-  { q: 'How do I set business hours?', a: 'Go to Settings > Business Hours. Toggle each day on/off and set opening and closing times.' },
   { q: 'Can I reject an order?', a: 'Yes. On the incoming order card, tap Reject. This cannot be undone — the order will be reassigned to another store.' },
   { q: 'How do I remove a product?', a: 'Go to Home > Your Stock, expand the list, and tap the trash icon next to the product you want to remove.' },
-  { q: 'My store is online but I am not getting orders', a: 'Make sure you have active products, your delivery radius is set correctly, and your business hours cover the current time.' },
+  { q: 'My store is online but I am not getting orders', a: 'Make sure you have active products and your delivery radius is set correctly.' },
 ];
 
 const QUICK_MESSAGES = [
