@@ -196,6 +196,20 @@ function patchAppBuildGradle(contents) {
     );
   }
 
+  // 5. Use the "-optimize" default config so R8 runs its full optimization
+  //    passes (the plain proguard-android.txt disables them, which is why
+  //    Play Console reports "optimisation isn't enabled").
+  const proguardReplacement = [
+    `            // Use the "-optimize" default config so R8 runs its full optimization`,
+    `            // passes (the plain proguard-android.txt disables them, which is why`,
+    `            // Play Console reports "optimisation isn't enabled").`,
+    `            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"`,
+  ].join("\n");
+  contents = contents.replace(
+    `            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"`,
+    proguardReplacement
+  );
+
   return contents;
 }
 
