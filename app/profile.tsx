@@ -121,17 +121,7 @@ export default function ProfileScreen() {
     if (store?.id) void loadDocCount(store.id);
   };
 
-  const requestPermission = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert("Permission needed", "Allow photo library access to upload images.");
-      return false;
-    }
-    return true;
-  };
-
   const pickStoreImage = async () => {
-    if (!(await requestPermission())) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsEditing: true,
@@ -160,7 +150,6 @@ export default function ProfileScreen() {
   };
 
   const pickOwnerImage = async () => {
-    if (!(await requestPermission())) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsEditing: true,

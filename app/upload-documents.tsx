@@ -159,15 +159,6 @@ export default function UploadDocumentsScreen() {
     };
   }, []);
 
-  const requestLibraryPermission = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert("Permission needed", "Allow photo library access to upload documents.");
-      return false;
-    }
-    return true;
-  };
-
   const requestCameraPermission = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
@@ -238,7 +229,6 @@ export default function UploadDocumentsScreen() {
   };
 
   const pickImage = async (key: DocKey) => {
-    if (!(await requestLibraryPermission())) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsEditing: false,
