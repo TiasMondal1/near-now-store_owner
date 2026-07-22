@@ -23,7 +23,10 @@
       "Bash(jarsigner -verify -verbose -certs app-release.aab)",
       "Bash(mkdir -p /tmp_extract)",
       "Bash(unzip -p app-release.aab \"META-INF/*.RSA\")",
-      "Bash(netstat -ano)"
+      "Bash(netstat -ano)",
+      "Bash(git add:*)",
+      "Bash(git rebase:*)",
+      "Bash(GIT_EDITOR=true git rebase --continue)"
     ]
   }
 }
