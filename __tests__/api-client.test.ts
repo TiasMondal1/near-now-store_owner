@@ -1,3 +1,42 @@
+// api-client.ts now pulls in session.ts (AsyncStorage/SecureStore) and
+// expo-router (for the 401 -> redirect handling below) — mock both so this
+// file doesn't need a real native environment, same mocks session.test.ts uses.
+const mockStore: Record<string, string> = {};
+const mockSecureStore: Record<string, string> = {};
+
+jest.mock("@react-native-async-storage/async-storage", () => ({
+  __esModule: true,
+  default: {
+    getItem: jest.fn(async (k: string) => (k in mockStore ? mockStore[k] : null)),
+    setItem: jest.fn(async (k: string, v: string) => {
+      mockStore[k] = v;
+    }),
+    removeItem: jest.fn(async (k: string) => {
+      delete mockStore[k];
+    }),
+    multiRemove: jest.fn(async (keys: string[]) => {
+      keys.forEach((k) => delete mockStore[k]);
+    }),
+  },
+}));
+
+jest.mock("expo-secure-store", () => ({
+  __esModule: true,
+  getItemAsync: jest.fn(async (k: string) => (k in mockSecureStore ? mockSecureStore[k] : null)),
+  setItemAsync: jest.fn(async (k: string, v: string) => {
+    mockSecureStore[k] = v;
+  }),
+  deleteItemAsync: jest.fn(async (k: string) => {
+    delete mockSecureStore[k];
+  }),
+}));
+
+const mockRouterReplace = jest.fn();
+jest.mock("expo-router", () => ({
+  __esModule: true,
+  router: { replace: (...args: unknown[]) => mockRouterReplace(...args) },
+}));
+
 import { apiClient } from "../lib/api-client";
 
 function jsonResponse(status: number, body: unknown, ok = status < 400) {
@@ -16,6 +55,28 @@ describe("ApiClient.request", () => {
     global.fetch = originalFetch;
     jest.useRealTimers();
     jest.restoreAllMocks();
+    mockRouterReplace.mockClear();
+    for (const k of Object.keys(mockStore)) delete mockStore[k];
+    for (const k of Object.keys(mockSecureStore)) delete mockSecureStore[k];
+  });
+
+  it("clears the session and redirects to /landing on a 401 (session expired)", async () => {
+    mockStore["nearandnow_session"] = JSON.stringify({
+      expiresAt: Date.now() + 60_000,
+      user: { id: "u1", name: "Shop", role: "shopkeeper", isActivated: true },
+    });
+    mockSecureStore["nearandnow_shopkeeper_token"] = "stale-token";
+
+    global.fetch = jest.fn().mockResolvedValue(jsonResponse(401, { error: "Invalid or expired token" }));
+
+    const res = await apiClient.get("/shopkeeper/orders");
+
+    expect(res.success).toBe(false);
+    expect(mockRouterReplace).toHaveBeenCalledWith("/landing");
+    expect(mockStore["nearandnow_session"]).toBeUndefined();
+    expect(mockSecureStore["nearandnow_shopkeeper_token"]).toBeUndefined();
+    // 401 is a 4xx — no retry.
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("returns success with parsed data on 200", async () => {

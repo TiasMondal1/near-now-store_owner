@@ -2,8 +2,10 @@
  * Centralized API client with error handling, retry logic, and request/response interceptors
  */
 
+import { router } from 'expo-router';
 import { config } from './config';
 import { errorHandler, ErrorSeverity } from './error-handler';
+import { clearSession } from '../session';
 
 interface RequestConfig {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -88,6 +90,19 @@ class ApiClient {
           data = text ? JSON.parse(text) : null;
         } catch {
           data = { raw: text };
+        }
+
+        if (response.status === 401) {
+          // Session expired/revoked — no code path anywhere in this app was
+          // clearing the session or navigating away, so an expired token left
+          // every screen just showing empty data forever with no way back to
+          // login short of manually finding Settings → Logout. Clear it and
+          // send the shopkeeper back to the same screen a missing token
+          // already redirects to on cold start (see home.tsx's bootstrap
+          // effect), instead of leaving them stuck.
+          await clearSession();
+          errorHandler.handleAuthError({ status: 401, endpoint, statusText: response.statusText });
+          router.replace('/landing');
         }
 
         if (!response.ok) {
