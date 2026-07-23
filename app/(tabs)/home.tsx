@@ -40,6 +40,7 @@ import {
 } from "../../lib/appCache";
 import { isStoreApproved } from "../../lib/storeApproval";
 import { notificationService } from "../../lib/notifications";
+import { useSmartPoll } from "../../lib/useSmartPoll";
 
 const API_BASE = config.API_BASE;
 const SELECTED_STORE_KEY = "selected_store_id";
@@ -108,7 +109,12 @@ export default function HomeTab() {
   }, [storeProducts, debouncedSearchQuery]);
 
   const activeProductCount = useMemo(() => storeProducts.filter((p) => p.is_active !== false).length, [storeProducts]);
-  const activeOrderCount = 0;
+  // Was hardcoded to 0 — the dashboard always showed "Waiting for orders..."
+  // even with real orders in progress. "Active" here means accepted-but-not-yet-
+  // handed-off allocations, matching previous-orders.tsx's own activeAllocations
+  // filter (alloc_status === "accepted"); pending_acceptance ones are "incoming",
+  // surfaced separately, not counted as already-active here.
+  const [activeOrderCount, setActiveOrderCount] = useState(0);
 
   // Entrance animation
   useEffect(() => {
@@ -215,6 +221,36 @@ export default function HomeTab() {
     approvalPollRef.current = setInterval(checkApproval, 30_000);
     return () => { if (approvalPollRef.current) { clearInterval(approvalPollRef.current); approvalPollRef.current = null; } };
   }, [selectedStore?.is_approved, selectedStore?.id, session?.token]);
+
+  const fetchActiveOrderCount = useCallback(async () => {
+    if (!session?.token || !selectedStore?.id) return;
+    try {
+      const res = await fetch(`${API_BASE}/shopkeeper/orders?active=true`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      const orders: Array<{ store_id?: string; alloc_status?: string }> = json?.orders ?? [];
+      const count = orders.filter((o) => o.store_id === selectedStore.id && o.alloc_status === "accepted").length;
+      setActiveOrderCount(count);
+    } catch {
+      // Non-fatal — dashboard stays on its last known count rather than flashing 0.
+    }
+  }, [session?.token, selectedStore?.id]);
+
+  useEffect(() => { fetchActiveOrderCount(); }, [fetchActiveOrderCount]);
+
+  useSmartPoll(fetchActiveOrderCount, {
+    intervalMs: 15_000,
+    slowIntervalMs: 30_000,
+    enabled: !!(session?.token && selectedStore?.id),
+  });
+
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchActiveOrderCount();
+    }, [fetchActiveOrderCount])
+  );
 
   // Single source of truth for "should we be here at all" — reacts to
   // is_approved flipping to false regardless of what caused the refresh
