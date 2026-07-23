@@ -63,6 +63,7 @@ module.exports = () => {
     plugins: [
       "expo-router",
       "expo-font",
+      "expo-secure-store",
       "@sentry/react-native",
       [
         "expo-image-picker",
