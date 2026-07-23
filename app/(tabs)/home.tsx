@@ -39,6 +39,7 @@ import {
   type CachedStore,
 } from "../../lib/appCache";
 import { isStoreApproved } from "../../lib/storeApproval";
+import { notificationService } from "../../lib/notifications";
 
 const API_BASE = config.API_BASE;
 const SELECTED_STORE_KEY = "selected_store_id";
@@ -137,6 +138,13 @@ export default function HomeTab() {
         if (!s?.token) { if (!cancelled) router.replace("/landing"); return; }
         if (cancelled) return;
         setSession(s);
+        // Push notifications were never actually turned on for anyone — the only
+        // way a token got registered was a shopkeeper manually finding
+        // Settings → Notifications → Enable. Register on every app-session start
+        // instead, matching what login already implies. Fire-and-forget: this
+        // must never block or fail the screen (no permission, Expo Go, etc. are
+        // all handled internally and are non-fatal).
+        notificationService.initialize().catch(() => {});
         const cached = peekStores();
         if (cached && cached.length > 0) {
           setStores(cached);
