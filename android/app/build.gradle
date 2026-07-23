@@ -94,7 +94,7 @@ android {
         applicationId 'com.nearandnow.shopkeeper'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 12
+        versionCode 13
         versionName "1.0.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
@@ -168,6 +168,38 @@ android {
         }
     }
 
+    // PHOTO PICKER POLICY: Strip broad media/storage permissions that the AGP
+    // re-injects as "implied permissions" after manifest merging. The app uses
+    // the Android system Photo Picker via expo-image-picker, so these are not needed.
+    def permissionsToRemove = [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+    ]
+    android.applicationVariants.all { variant ->
+        variant.outputs.each { output ->
+            def processManifest = output.hasProperty("processManifestProvider") ?
+                output.processManifestProvider.get() : output.processManifest
+            processManifest.doLast {
+                def manifestDir = it.multiApkManifestOutputDirectory?.get()?.asFile ?:
+                    it.manifestOutputDirectory?.get()?.asFile
+                if (manifestDir == null) return
+                manifestDir.eachFileMatch(~/.*AndroidManifest\.xml/) { manifestFile ->
+                    def text = manifestFile.text
+                    permissionsToRemove.each { perm ->
+                        text = text.replaceAll(
+                            /(?m)^\s*<uses-permission[^>]*android:name="${java.util.regex.Pattern.quote(perm)}"[^>]*\/>\s*\n?/, ''
+                        )
+                    }
+                    manifestFile.text = text
+                }
+            }
+        }
+    }
+
     // NEARNOW_ABI_VERSION_CODES: give each per-ABI APK a unique versionCode. The
     // universal APK (no ABI filter) keeps the plain defaultConfig.versionCode.
     applicationVariants.all { variant ->
@@ -228,5 +260,43 @@ dependencies {
         implementation("com.facebook.react:hermes-android")
     } else {
         implementation jscFlavor
+    }
+}
+
+// PHOTO PICKER POLICY: Strip "implied" media/storage permissions that AGP
+// re-injects after manifest merging. Runs on every build via gradle.taskGraph.
+def mediaPermsToStrip = [
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+    "android.permission.READ_MEDIA_IMAGES",
+    "android.permission.READ_MEDIA_VIDEO",
+    "android.permission.READ_MEDIA_AUDIO",
+    "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+]
+gradle.taskGraph.whenReady { graph ->
+    graph.allTasks.findAll { it.name.contains("processApplicationManifest") || it.name.contains("processReleaseManifest") }.each { t ->
+        t.doLast {
+            def baseDir = new File(project.buildDir, "intermediates")
+            ["bundle_manifest", "merged_manifests", "packaged_manifests"].each { sub ->
+                def subDir = new File(baseDir, sub)
+                if (subDir.exists()) {
+                    subDir.eachFileRecurse { f ->
+                        if (f.name == "AndroidManifest.xml") {
+                            def txt = f.text
+                            def changed = false
+                            mediaPermsToStrip.each { p ->
+                                def before = txt
+                                txt = txt.replaceAll("(?m)^\\s*<uses-permission[^>]*android:name=\"${java.util.regex.Pattern.quote(p)}\"[^>]*/>[\\r\\n]*", "")
+                                if (txt != before) changed = true
+                            }
+                            if (changed) {
+                                f.text = txt
+                                println "Stripped media permissions from: ${f.path}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

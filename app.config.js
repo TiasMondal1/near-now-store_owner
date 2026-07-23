@@ -3,6 +3,7 @@
 
 const withAbiSplits = require("./plugins/withAbiSplits");
 const withTabletSupport = require("./plugins/withTabletSupport");
+const withRemoveMediaPermissions = require("./plugins/withRemoveMediaPermissions");
 
 module.exports = () => {
   const googleMapsApiKey =
@@ -41,7 +42,7 @@ module.exports = () => {
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       package: "com.nearandnow.shopkeeper",
-      versionCode: 12,
+      versionCode: 13,
       jsEngine: "hermes",
       // Native Maps SDK meta-data — required for MapView tiles on Android
       config: {
@@ -81,6 +82,7 @@ module.exports = () => {
       ],
       withAbiSplits,
       withTabletSupport,
+      withRemoveMediaPermissions,
     ],
     extra: {
       apiBaseUrl:
