@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
+import { clearStoreCache } from "./lib/appCache";
 
 const SESSION_KEY = "nearandnow_session";
 const TOKEN_KEY = "nearandnow_shopkeeper_token";
@@ -95,6 +96,11 @@ export async function getSession(): Promise<UserSession | null> {
 
 export async function clearSession() {
   _memSession = null;
+  // Store list is cached independently of the session (in-memory + AsyncStorage,
+  // shared across whoever's currently logged in) — without clearing it here, a
+  // different shopkeeper logging in within the cache's TTL would see the
+  // previous shopkeeper's stores until it naturally expired.
+  clearStoreCache();
   await Promise.all([
     SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {}),
     AsyncStorage.multiRemove([
