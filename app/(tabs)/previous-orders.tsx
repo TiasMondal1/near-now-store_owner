@@ -45,6 +45,9 @@ type Allocation = {
   items: AllocationItem[];
   customer_area: string | null;
   customer_distance: string | null;
+  receiver_name?: string | null;
+  receiver_phone?: string | null;
+  receiver_address?: string | null;
 };
 
 function safeDate(str: string | null | undefined): Date | null {
@@ -612,6 +615,19 @@ export default function OrdersTab() {
                     <Text style={styles.pickupCodeValue}>{a.pickup_code}</Text>
                   </View>
                   <Text style={styles.pickupCodeHint}>Tell to driver</Text>
+                </View>
+              )}
+
+              {a.receiver_name && (
+                <View style={styles.pickupCodeBox}>
+                  <View style={styles.pickupCodeIcon}>
+                    <Ionicons name="person-outline" size={14} color={colors.primary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.pickupCodeLabel}>Deliver to (receiver)</Text>
+                    <Text style={styles.pickupCodeValue}>{a.receiver_name}</Text>
+                    {a.receiver_phone && <Text style={styles.orderMeta}>{a.receiver_phone}</Text>}
+                  </View>
                 </View>
               )}
 
