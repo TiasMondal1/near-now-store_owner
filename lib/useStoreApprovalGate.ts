@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { getSession } from "../session";
 import { isStoreApproved, refreshStoreApproval, type ApprovalStore } from "./storeApproval";
+import { supabase } from "./supabase";
 
 type GateMode = "require-approved" | "require-pending";
 
@@ -78,13 +79,44 @@ export function useStoreApprovalGate(mode: GateMode) {
   // Periodic re-check so an admin action (approve/revoke) taken while the
   // shopkeeper is sitting still on a tab screen — not navigating, not
   // refocusing — is still detected within a bounded time, not only on the
-  // next mount/focus.
+  // next mount/focus. Fallback: the realtime subscription below delivers
+  // near-instantly once it's connected; this covers the gap before that
+  // first connects, or a store row we don't have an id for yet.
   useEffect(() => {
     const id = setInterval(() => {
       void evaluate();
     }, POLL_INTERVAL_MS);
     return () => clearInterval(id);
   }, [evaluate]);
+
+  // Realtime: near-instant re-check the moment an admin approves or revokes
+  // this store, instead of waiting up to 30s for the poll above. This gate
+  // wraps every tab screen plus pending-verification, so this is what
+  // actually closes the gap that previously only home.tsx's own bespoke
+  // subscription covered for its own local dashboard state — every other
+  // screen using this hook (settings, orders, pending-verification itself)
+  // had no realtime at all until now.
+  //
+  // stores.public_read is intentionally open (USING (true)) — store data
+  // (name/address/approval status) isn't sensitive, so unlike the rider
+  // app's own-row fix this needs no auth bridge, just a plain filtered
+  // subscription on the anon client.
+  useEffect(() => {
+    if (!store?.id || !supabase) return;
+    const channel = supabase
+      .channel(`store-approval-gate:${store.id}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${store.id}` },
+        () => {
+          void evaluate();
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase?.removeChannel(channel);
+    };
+  }, [store?.id, evaluate]);
 
   return { checking, store, approved, isApproved: isStoreApproved(store), refresh: evaluate };
 }
