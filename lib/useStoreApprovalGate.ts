@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { getSession } from "../session";
@@ -25,6 +25,15 @@ export function useStoreApprovalGate(mode: GateMode) {
   const [store, setStore] = useState<ApprovalStore | null>(null);
   const [approved, setApproved] = useState(false);
 
+  // Once we've genuinely confirmed the store is approved, a later transient
+  // network error is safe to fail open on (don't kick an active shopkeeper
+  // out mid-session over a flaky connection). Before that first confirmation
+  // — i.e. we've never actually verified this store is approved — failing
+  // open on an error would let an unapproved shopkeeper straight past the
+  // gate on the very first, unconfirmed check. So: fail closed until proven
+  // otherwise, fail open only after trust has been established.
+  const hasConfirmedApprovedRef = useRef(false);
+
   const evaluate = useCallback(async () => {
     const session = await getSession();
     if (!session?.token) {
@@ -41,13 +50,18 @@ export function useStoreApprovalGate(mode: GateMode) {
       // cached (still-approved) store kept passing this check indefinitely.
       result = await refreshStoreApproval(session.token, session.user?.id);
     } catch {
-      // Network failure: fail open so a transient error does not lock the
-      // owner out or hang this screen on "checking" forever.
+      if (mode === "require-approved" && !hasConfirmedApprovedRef.current) {
+        router.replace("/pending-verification");
+      }
+      // Already-confirmed-approved sessions fail open here so a transient
+      // error does not lock the owner out or hang this screen on "checking"
+      // forever.
       return null;
     }
 
     setStore(result.store);
     setApproved(result.approved);
+    if (result.approved) hasConfirmedApprovedRef.current = true;
 
     if (mode === "require-approved" && !result.approved) {
       router.replace("/pending-verification");

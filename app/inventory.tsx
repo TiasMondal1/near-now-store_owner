@@ -19,7 +19,7 @@ import { config } from "../lib/config";
 import { colors, radius, spacing } from "../lib/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { getMergedInventoryFromDb, upsertStoreProduct, getMasterProductCategories, getStoreProductsFromDb } from "../lib/storeProducts";
-import { useRequireStoreApproval } from "../lib/useRequireStoreApproval";
+import { useStoreApprovalGate } from "../lib/useStoreApprovalGate";
 
 const API_BASE = config.API_BASE;
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
@@ -86,7 +86,7 @@ const ProductItem = memo(({
 });
 
 export default function InventoryScreen() {
-  useRequireStoreApproval();
+  const { checking: checkingApproval } = useStoreApprovalGate("require-approved");
   const params = useLocalSearchParams<{ storeId?: string }>();
   const [loading, setLoading] = useState(() => !(persistedProducts.length > 0));
   const [products, setProducts] = useState<any[]>(() =>
@@ -525,6 +525,16 @@ export default function InventoryScreen() {
       </View>
     );
   }, [loading, products.length, notInStore.length, selectedCategory, filteredBySearch.length]);
+
+  if (checkingApproval) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.loadingBlock}>
+          <ActivityIndicator color={colors.primary} size="large" />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
