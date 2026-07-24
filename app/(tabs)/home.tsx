@@ -292,14 +292,18 @@ export default function HomeTab() {
 
   useEffect(() => {
     if (!selectedStore?.id || !supabase) return;
-    const channel = supabase.channel(`products-${selectedStore.id}-${Date.now()}`).on("postgres_changes", { event: "*", schema: "public", table: "products", filter: `store_id=eq.${selectedStore.id}` }, () => { fetchStoreProductsRef.current?.(true); }).subscribe();
+    // Stable channel name (no Date.now() suffix) so switching stores doesn't
+    // churn out a brand-new, never-reused channel identity on every switch —
+    // cleanup below already unsubscribes the old one before this re-fires.
+    const channel = supabase.channel(`products-${selectedStore.id}`).on("postgres_changes", { event: "*", schema: "public", table: "products", filter: `store_id=eq.${selectedStore.id}` }, () => { fetchStoreProductsRef.current?.(true); }).subscribe();
     return () => { supabase?.removeChannel(channel); };
   }, [selectedStore?.id]);
 
   useEffect(() => {
     if (!selectedStore?.id || !session?.token || !supabase) return;
     const token = session.token; const userId = session.user?.id;
-    const channel = supabase.channel(`store-${selectedStore.id}-${Date.now()}`).on("postgres_changes", { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${selectedStore.id}` }, () => {
+    // Stable channel name — see the products-channel effect above for why.
+    const channel = supabase.channel(`store-${selectedStore.id}`).on("postgres_changes", { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${selectedStore.id}` }, () => {
       // fetchStores() -> fetchStoresCached() is cache-first (up to a 10min
       // TTL) — without clearing it here, this event firing because the row
       // genuinely changed could still just hand back the stale cached data,
