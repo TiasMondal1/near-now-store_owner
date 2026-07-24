@@ -27,8 +27,6 @@ import { apiClient } from "../../lib/api-client";
 import { useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
 import { useRequireStoreApproval } from "../../lib/useRequireStoreApproval";
 
-const AUTO_COMPLETE_MS = 2 * 60 * 1000;
-
 type AllocationItem = {
   id: string;
   product_name: string;
@@ -282,35 +280,9 @@ export default function OrdersTab() {
           (a: Allocation) => a.alloc_status === "accepted" || a.alloc_status === "pending_acceptance"
         );
 
-        const now = Date.now();
-        const toComplete = active.filter((a: Allocation) => {
-          if (a.alloc_status !== "accepted") return false;
-          const ts = (a as any).accepted_at ?? a.placed_at;
-          return ts && now - new Date(ts).getTime() >= AUTO_COMPLETE_MS;
-        });
-
-        if (toComplete.length > 0) {
-          await Promise.allSettled(
-            toComplete.map((a: Allocation) =>
-              apiClient
-                .post(
-                  `/shopkeeper/allocations/${a.allocation_id}/complete`,
-                  undefined,
-                  { Authorization: `Bearer ${session.token}` }
-                )
-                .catch(() => {})
-            )
-          );
-          fetchPreviousOrdersRef.current?.();
-        }
-
-        const stillActive = active.filter(
-          (a: Allocation) => !toComplete.some((c: Allocation) => c.allocation_id === a.allocation_id)
-        );
-
         setAllocations((prev) => {
           const prevMap = new Map(prev.map((a) => [a.allocation_id, a]));
-          return stillActive.map((o: Allocation) => ({
+          return active.map((o: Allocation) => ({
             ...o,
             pickup_code: o.pickup_code ?? prevMap.get(o.allocation_id)?.pickup_code ?? null,
           }));
