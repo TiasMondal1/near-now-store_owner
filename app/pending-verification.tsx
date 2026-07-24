@@ -14,6 +14,7 @@ import { router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { clearSession, getSession } from "../session";
+import { notificationService } from "../lib/notifications";
 import { colors, radius, spacing, shadows } from "../lib/theme";
 import { refreshStoreApproval } from "../lib/storeApproval";
 import { useStoreApprovalGate } from "../lib/useStoreApprovalGate";
@@ -129,6 +130,7 @@ export default function PendingVerificationScreen() {
         text: "Logout",
         style: "destructive",
         onPress: async () => {
+          await notificationService.unregister();
           await clearSession();
           router.replace("/landing");
         },

@@ -19,6 +19,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, shadows } from '../lib/theme';
 import { getSession, clearSession } from '../session';
+import { notificationService } from '../lib/notifications';
 import { config } from '../lib/config';
 import { Store } from '../lib/store-service';
 import StoreSettingsModal from '../components/StoreSettingsModal';
@@ -81,7 +82,7 @@ export default function SettingsScreen() {
   const handleLogout = () => {
     Alert.alert('Logout', 'Are you sure you want to logout?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Logout', style: 'destructive', onPress: async () => { await clearSession(); router.replace('/landing'); } },
+      { text: 'Logout', style: 'destructive', onPress: async () => { await notificationService.unregister(); await clearSession(); router.replace('/landing'); } },
     ]);
   };
 

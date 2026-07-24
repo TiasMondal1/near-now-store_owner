@@ -319,6 +319,29 @@ class NotificationService {
   }
 
   /**
+   * Clear this device's registered push token from the backend. Call before
+   * clearSession() on explicit logout — otherwise the store's expo_push_token
+   * stays pointed at this device, and a different shopkeeper logging in on the
+   * same (shared) device keeps receiving the previous shopkeeper's order
+   * notifications until they happen to re-register (which may never happen if
+   * push init only runs once per app session, not per login).
+   */
+  async unregister(): Promise<void> {
+    try {
+      const authToken = await this.getAuthToken();
+      if (!authToken) return;
+
+      await apiClient.post(
+        '/store-owner/notifications/register',
+        { pushToken: null },
+        { Authorization: `Bearer ${authToken}` }
+      );
+    } catch (error) {
+      console.error('Failed to unregister push token:', error);
+    }
+  }
+
+  /**
    * Get auth token from storage
    */
   private async getAuthToken(): Promise<string | null> {

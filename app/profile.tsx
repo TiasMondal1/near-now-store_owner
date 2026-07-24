@@ -19,6 +19,7 @@ import * as ImagePicker from "expo-image-picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { getSession, clearSession } from "../session";
+import { notificationService } from "../lib/notifications";
 import { colors, radius, spacing, shadows } from "../lib/theme";
 import { fetchStoresCached, peekStores, clearStoreCache } from "../lib/appCache";
 import { config } from "../lib/config";
@@ -228,6 +229,7 @@ export default function ProfileScreen() {
         text: "Logout",
         style: "destructive",
         onPress: async () => {
+          await notificationService.unregister();
           await clearSession();
           router.replace("/landing");
         },
