@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { clearStoreCache } from "./lib/appCache";
+import { setShopkeeperAuthToken } from "./lib/supabase";
 
 const SESSION_KEY = "nearandnow_session";
 const TOKEN_KEY = "nearandnow_shopkeeper_token";
@@ -36,6 +37,7 @@ export async function saveSession(session: Omit<UserSession, 'expiresAt'> & { ex
     expiresAt: session.expiresAt ?? Date.now() + SESSION_TTL_MS,
   };
   _memSession = withExpiry;
+  setShopkeeperAuthToken(withExpiry.token);
   // The auth token is the one field that lets someone impersonate this
   // shopkeeper — keep it in SecureStore (Android Keystore / iOS Keychain), not
   // plain AsyncStorage, which is trivially readable via filesystem access on a
@@ -88,6 +90,7 @@ export async function getSession(): Promise<UserSession | null> {
       return null;
     }
     _memSession = session;
+    setShopkeeperAuthToken(session.token);
     return _memSession;
   } catch {
     return null;
@@ -96,6 +99,7 @@ export async function getSession(): Promise<UserSession | null> {
 
 export async function clearSession() {
   _memSession = null;
+  setShopkeeperAuthToken(null);
   // Store list is cached independently of the session (in-memory + AsyncStorage,
   // shared across whoever's currently logged in) — without clearing it here, a
   // different shopkeeper logging in within the cache's TTL would see the
@@ -131,6 +135,7 @@ export async function guardFreshInstall(): Promise<void> {
         AsyncStorage.multiRemove([SESSION_KEY, "inventory_persisted_state", "inventory_products_cache"]),
       ]);
       _memSession = null;
+      setShopkeeperAuthToken(null);
       // Write the install token so subsequent launches don't wipe again
       await AsyncStorage.setItem(INSTALL_TOKEN_KEY, "1");
     }
