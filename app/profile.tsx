@@ -26,6 +26,7 @@ import { config } from "../lib/config";
 import { uploadStoreImage, uploadOwnerImage } from "../lib/storage";
 import { useRequireStoreApproval } from "../lib/useRequireStoreApproval";
 import { fetchVerificationDocuments, REQUIRED_DOC_KEYS } from "../lib/verificationDocuments";
+import { useSmartPoll } from "../lib/useSmartPoll";
 
 const API_BASE = config.API_BASE;
 const OWNER_IMAGE_KEY = "owner_profile_image_url";
@@ -49,6 +50,22 @@ export default function ProfileScreen() {
   const [uploadingOwnerImage, setUploadingOwnerImage] = useState(false);
   const [uploadingStoreImage, setUploadingStoreImage] = useState(false);
   const [uploadedDocCount, setUploadedDocCount] = useState(0);
+
+  // Store name/address/phone edits now go through admin review instead of
+  // applying immediately — see requestProfileChange() on the backend.
+  const [pendingChangeRequest, setPendingChangeRequest] = useState<{
+    id: string;
+    changes: Record<string, { old: string | null; new: string }>;
+  } | null>(null);
+  // Mirrors pendingChangeRequest for the transition check in
+  // loadPendingChangeRequest without reading state inside a setState
+  // updater (React updaters must be pure — the store re-fetch/hydrate
+  // there is a real side effect, and updaters can run more than once for a
+  // single state transition). Also guards against an in-flight request
+  // resolving out of order (e.g. a 20s poll tick issued just before a
+  // same-screen submit, resolving just after) from clobbering fresher state.
+  const pendingChangeRequestRef = useRef<typeof pendingChangeRequest>(null);
+  const pendingRequestFetchSeq = useRef(0);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(24)).current;
@@ -106,11 +123,60 @@ export default function ProfileScreen() {
     }
   }, []);
 
+  const loadPendingChangeRequest = useCallback(async (storeId: string) => {
+    // Stale-response guard: only the most recently-issued fetch's result is
+    // ever applied, so an earlier poll tick's response (e.g. one issued just
+    // before a submit, resolving just after) can't clobber fresher state —
+    // same pattern as useOrderTrackingRealtime's monotonic sequence refs.
+    const seq = ++pendingRequestFetchSeq.current;
+    try {
+      const s = await getSession();
+      if (!s?.token) return;
+      const res = await fetch(`${API_BASE}/store-owner/stores/${storeId}/profile-change-request`, {
+        headers: { Authorization: `Bearer ${s.token}` },
+      });
+      const json = await res.json().catch(() => null);
+      if (seq !== pendingRequestFetchSeq.current) return;
+      if (!res.ok || !json?.success) return;
+
+      const nextRequest = json.request ?? null;
+      const prev = pendingChangeRequestRef.current;
+      pendingChangeRequestRef.current = nextRequest;
+      setPendingChangeRequest(nextRequest);
+
+      // A previously-pending request just resolved (approved/rejected) —
+      // re-fetch the store row so approved name/address/phone values show
+      // up without the shopkeeper needing to leave and re-enter the screen.
+      if (prev && !nextRequest) {
+        clearStoreCache();
+        try {
+          const fresh = await fetchStoresCached(s.token, s.user?.id);
+          if (seq !== pendingRequestFetchSeq.current) return;
+          const fresher = fresh.find((st: any) => st.id === storeId);
+          if (fresher) await hydrate(fresher);
+        } catch {
+          /* non-fatal */
+        }
+      }
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       if (!storeInfo?.id) return;
       void loadDocCount(storeInfo.id);
-    }, [storeInfo, loadDocCount])
+      void loadPendingChangeRequest(storeInfo.id);
+    }, [storeInfo, loadDocCount, loadPendingChangeRequest])
+  );
+
+  // While a change request is pending, poll for the admin's decision so the
+  // banner clears (and the resolved values apply) without needing to leave
+  // and re-enter this screen.
+  useSmartPoll(
+    () => { if (storeInfo?.id) void loadPendingChangeRequest(storeInfo.id); },
+    { intervalMs: 20_000, enabled: !!pendingChangeRequest && !!storeInfo?.id }
   );
 
   const hydrate = async (store: any) => {
@@ -202,16 +268,42 @@ export default function ProfileScreen() {
     setSaving(true);
     try {
       const patch: Record<string, string> = {};
-      if (storeName.trim()) patch.name = storeName.trim();
-      if (storeAddress.trim()) patch.address = storeAddress.trim();
-      if (storePhone.trim()) patch.phone = storePhone.trim();
+      if (storeName.trim() && storeName.trim() !== (storeInfo.name ?? "")) patch.name = storeName.trim();
+      if (storeAddress.trim() && storeAddress.trim() !== (storeInfo.address ?? "")) patch.address = storeAddress.trim();
+      if (storePhone.trim() && storePhone.trim() !== (storeInfo.phone ?? "")) patch.phone = storePhone.trim();
 
-      await patchStore(patch);
-      const fresh = await fetchStoresCached(session.token, session.user?.id);
-      if (fresh.length) await hydrate(fresh[0]);
+      if (Object.keys(patch).length === 0) {
+        setEditing(false);
+        return;
+      }
+
+      // Name/address/phone no longer apply immediately — they go through
+      // admin review (requestProfileChange on the backend). Revert the
+      // visible fields to the still-current approved values; the pending
+      // banner below shows what was actually submitted.
+      const res = await fetch(`${API_BASE}/store-owner/stores/${storeInfo.id}/profile-change-request`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(patch),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || "Failed to submit changes");
+      }
+      // Invalidate any in-flight poll fetch issued before this submit — it
+      // could otherwise resolve afterward with the pre-submit (null) state
+      // and clobber the pending banner we're about to show.
+      pendingRequestFetchSeq.current++;
+      pendingChangeRequestRef.current = json.request;
+      setPendingChangeRequest(json.request);
+      await hydrate(storeInfo);
       setEditing(false);
-    } catch {
-      Alert.alert("Error", "Failed to save changes. Please try again.");
+      Alert.alert("Submitted for review", "Your requested changes have been sent to the admin team and will apply once approved.");
+    } catch (e: any) {
+      Alert.alert("Error", e?.message || "Failed to save changes. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -357,6 +449,20 @@ export default function ProfileScreen() {
               </>
             ) : null}
           </SectionCard>
+
+          {pendingChangeRequest && (
+            <View style={styles.pendingBanner}>
+              <Ionicons name="time-outline" size={18} color={colors.warning} />
+              <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                <Text style={styles.pendingBannerTitle}>Changes pending admin review</Text>
+                {Object.entries(pendingChangeRequest.changes).map(([field, diff]) => (
+                  <Text key={field} style={styles.pendingBannerLine}>
+                    {field === "name" ? "Store Name" : field === "address" ? "Address" : "Phone"}: {diff.new}
+                  </Text>
+                ))}
+              </View>
+            </View>
+          )}
 
           {/* Store Information */}
           <SectionCard title="Store Information" icon="storefront-outline">
@@ -524,6 +630,20 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   scroll: { paddingBottom: 60 },
+
+  pendingBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: colors.warning + "18",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.warning + "40",
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    padding: spacing.md,
+  },
+  pendingBannerTitle: { fontWeight: "700", fontSize: 13, color: colors.textPrimary, marginBottom: 2 },
+  pendingBannerLine: { fontSize: 12, color: colors.textSecondary },
 
   topBar: {
     flexDirection: "row",
