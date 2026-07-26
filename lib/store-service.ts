@@ -100,38 +100,6 @@ class StoreService {
     return this.updateStore(storeId, { delivery_fee: fee }, token);
   }
 
-  /**
-   * Toggle store online/offline status.
-   * Uses /store-owner/stores/:id/online directly (no /api prefix).
-   */
-  async toggleStoreStatus(
-    storeId: string,
-    isActive: boolean,
-    token: string
-  ): Promise<boolean> {
-    try {
-      const res = await fetch(
-        `${config.API_BASE}/store-owner/stores/${storeId}/online`,
-        {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ is_active: isActive }),
-        }
-      );
-      const json = res.ok ? await res.json().catch(() => null) : null;
-      if (res.ok && json?.success) {
-        this.invalidateCache();
-        return true;
-      }
-      return false;
-    } catch {
-      return false;
-    }
-  }
-
   getCachedStore(): Store | null {
     return this.storeCache;
   }
