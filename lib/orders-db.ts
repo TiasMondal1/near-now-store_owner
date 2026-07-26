@@ -200,8 +200,14 @@ export async function getOrdersFromDb(storeId: string): Promise<OrderForStore[]>
 }
 
 /**
- * RPC get_orders_for_store(p_store_id) — run supabase/orders-rpc-and-rls.sql in Supabase SQL Editor.
- * Links all tables server-side (SECURITY DEFINER), so no RLS blocking.
+ * RPC get_orders_for_store(p_store_id) — defined in the near-and-now repo's
+ * supabase/migrations/20260904000000_get_orders_for_store_rpc_and_ownership_check.sql
+ * (previously an untracked, unowned SQL script in this repo's own supabase/
+ * folder — moved there since this schema is shared with the backend/admin
+ * repo, which owns all other tracked migrations). Links all tables
+ * server-side (SECURITY DEFINER), so no RLS blocking; gated by
+ * shopkeeper_owns_store() so a caller only ever gets back their own store's
+ * orders.
  */
 async function getOrdersFromDbViaRpc(storeId: string): Promise<{ orders: OrderForStore[]; failed: boolean }> {
   if (!supabase || !storeId) return { orders: [], failed: false };
