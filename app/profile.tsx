@@ -30,6 +30,7 @@ import { useSmartPoll } from "../lib/useSmartPoll";
 
 const API_BASE = config.API_BASE;
 const OWNER_IMAGE_KEY = "owner_profile_image_url";
+const MAX_STORE_IMAGES = 5;
 
 export default function ProfileScreen() {
   useRequireStoreApproval();
@@ -46,9 +47,14 @@ export default function ProfileScreen() {
 
   // Images
   const [ownerImageUri, setOwnerImageUri] = useState<string | null>(null);
-  const [storeImageUri, setStoreImageUri] = useState<string | null>(null);
+  // Store gallery — up to MAX_STORE_IMAGES (enforced backend-side), replacing
+  // the old single storeImageUri. `store_images` (migration 20260903000000)
+  // is the source of truth; storeInfo.image_url is only used as a one-time
+  // optimistic placeholder for the first paint, before the real list loads.
+  const [storeImages, setStoreImages] = useState<{ id: string; url: string }[]>([]);
   const [uploadingOwnerImage, setUploadingOwnerImage] = useState(false);
   const [uploadingStoreImage, setUploadingStoreImage] = useState(false);
+  const [removingImageId, setRemovingImageId] = useState<string | null>(null);
   const [uploadedDocCount, setUploadedDocCount] = useState(0);
 
   // Store name/address/phone edits now go through admin review instead of
@@ -163,12 +169,29 @@ export default function ProfileScreen() {
     }
   }, []);
 
+  const loadStoreImages = useCallback(async (storeId: string) => {
+    try {
+      const s = await getSession();
+      if (!s?.token) return;
+      const res = await fetch(`${API_BASE}/store-owner/stores/${storeId}/images`, {
+        headers: { Authorization: `Bearer ${s.token}` },
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.success) {
+        setStoreImages((json.images ?? []).map((img: any) => ({ id: img.id, url: img.url })));
+      }
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       if (!storeInfo?.id) return;
       void loadDocCount(storeInfo.id);
       void loadPendingChangeRequest(storeInfo.id);
-    }, [storeInfo, loadDocCount, loadPendingChangeRequest])
+      void loadStoreImages(storeInfo.id);
+    }, [storeInfo, loadDocCount, loadPendingChangeRequest, loadStoreImages])
   );
 
   // While a change request is pending, poll for the admin's decision so the
@@ -184,11 +207,26 @@ export default function ProfileScreen() {
     setStoreName(store.name ?? "");
     setStoreAddress(store.address ?? "");
     setStorePhone(store.phone ?? "");
-    if (store.image_url) setStoreImageUri(store.image_url);
-    if (store?.id) void loadDocCount(store.id);
+    // Optimistic placeholder only, for the first paint before the real
+    // gallery loads — never overwrites an already-loaded list.
+    if (store.image_url) {
+      setStoreImages((prev) => (prev.length ? prev : [{ id: "__placeholder__", url: store.image_url }]));
+    }
+    if (store?.id) {
+      void loadDocCount(store.id);
+      void loadStoreImages(store.id);
+    }
   };
 
   const pickStoreImage = async () => {
+    if (!storeInfo?.id) {
+      Alert.alert("Can't upload yet", "Store info is still loading — try again in a moment.");
+      return;
+    }
+    if (storeImages.length >= MAX_STORE_IMAGES) {
+      Alert.alert("Gallery full", `A store can have at most ${MAX_STORE_IMAGES} photos. Remove one before adding another.`);
+      return;
+    }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsEditing: true,
@@ -196,24 +234,61 @@ export default function ProfileScreen() {
       quality: 0.85,
     });
     if (result.canceled || !result.assets[0]) return;
-    if (!storeInfo?.id) {
-      Alert.alert("Can't upload yet", "Store info is still loading — try again in a moment.");
-      return;
-    }
+
     const uri = result.assets[0].uri;
-    setStoreImageUri(uri);
     setUploadingStoreImage(true);
     try {
       const res = await uploadStoreImage(storeInfo.id, uri);
-      if (res.ok) {
-        await patchStore({ image_url: res.url });
-        setStoreImageUri(res.url);
-      } else {
+      if (!res.ok) {
         Alert.alert("Upload failed", res.error);
+        return;
       }
+      const s = await getSession();
+      if (!s?.token) return;
+      const addRes = await fetch(`${API_BASE}/store-owner/stores/${storeInfo.id}/images`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${s.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ url: res.url }),
+      });
+      const addJson = await addRes.json().catch(() => null);
+      if (!addRes.ok || !addJson?.success) {
+        Alert.alert("Error", addJson?.error || "Photo uploaded but couldn't be added to your gallery.");
+        return;
+      }
+      await loadStoreImages(storeInfo.id);
     } finally {
       setUploadingStoreImage(false);
     }
+  };
+
+  const removeStoreImage = (imageId: string) => {
+    if (!storeInfo?.id || imageId === "__placeholder__") return;
+    Alert.alert("Remove photo?", "This photo will be removed from your store's gallery.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: async () => {
+          setRemovingImageId(imageId);
+          try {
+            const s = await getSession();
+            if (!s?.token) return;
+            const res = await fetch(`${API_BASE}/store-owner/stores/${storeInfo.id}/images/${imageId}`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${s.token}` },
+            });
+            const json = await res.json().catch(() => null);
+            if (!res.ok || !json?.success) {
+              Alert.alert("Error", json?.error || "Failed to remove photo.");
+              return;
+            }
+            await loadStoreImages(storeInfo.id);
+          } finally {
+            setRemovingImageId(null);
+          }
+        },
+      },
+    ]);
   };
 
   const pickOwnerImage = async () => {
@@ -373,8 +448,8 @@ export default function ProfileScreen() {
               onPress={editing ? pickStoreImage : undefined}
               disabled={uploadingStoreImage}
             >
-              {storeImageUri ? (
-                <Image source={{ uri: storeImageUri }} style={styles.heroBannerImage} resizeMode="cover" />
+              {storeImages[0]?.url ? (
+                <Image source={{ uri: storeImages[0].url }} style={styles.heroBannerImage} resizeMode="cover" />
               ) : (
                 <View style={[styles.heroBannerImage, styles.heroBannerPlaceholder]}>
                   <Ionicons name="storefront-outline" size={52} color={colors.primary + "55"} />
@@ -386,10 +461,10 @@ export default function ProfileScreen() {
                   <ActivityIndicator color="#fff" size="large" />
                 </View>
               )}
-              {editing && !uploadingStoreImage && (
+              {editing && !uploadingStoreImage && storeImages.length < MAX_STORE_IMAGES && (
                 <View style={styles.heroEditBadge}>
                   <Ionicons name="camera" size={13} color="#fff" />
-                  <Text style={styles.heroEditBadgeText}>Change photo</Text>
+                  <Text style={styles.heroEditBadgeText}>Add photo</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -436,6 +511,38 @@ export default function ProfileScreen() {
               </View>
             )}
           </View>
+
+          {storeImages.length > 1 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.galleryStrip}
+            >
+              {storeImages.map((img, idx) => (
+                <View key={img.id} style={styles.galleryThumbWrap}>
+                  <Image source={{ uri: img.url }} style={styles.galleryThumb} />
+                  {idx === 0 && (
+                    <View style={styles.galleryCoverBadge}>
+                      <Text style={styles.galleryCoverBadgeText}>Cover</Text>
+                    </View>
+                  )}
+                  {editing && img.id !== "__placeholder__" && (
+                    <TouchableOpacity
+                      style={styles.galleryRemoveBadge}
+                      onPress={() => removeStoreImage(img.id)}
+                      disabled={removingImageId === img.id}
+                    >
+                      {removingImageId === img.id ? (
+                        <ActivityIndicator color="#fff" size="small" />
+                      ) : (
+                        <Ionicons name="close" size={12} color="#fff" />
+                      )}
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+            </ScrollView>
+          )}
 
           {/* Personal Information */}
           <SectionCard title="Account" icon="person-outline">
@@ -713,6 +820,32 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     paddingHorizontal: 14,
     paddingVertical: 8,
+  },
+
+  // Store photo gallery strip
+  galleryStrip: { paddingHorizontal: spacing.lg, gap: spacing.sm, marginBottom: spacing.md },
+  galleryThumbWrap: { position: "relative", width: 72, height: 72 },
+  galleryThumb: { width: 72, height: 72, borderRadius: radius.md, backgroundColor: colors.border },
+  galleryCoverBadge: {
+    position: "absolute",
+    bottom: 4,
+    left: 4,
+    backgroundColor: "rgba(15,23,42,0.65)",
+    borderRadius: radius.sm,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  galleryCoverBadgeText: { color: "#fff", fontSize: 9, fontWeight: "700" },
+  galleryRemoveBadge: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.error,
+    alignItems: "center",
+    justifyContent: "center",
   },
   heroEditBadgeText: { color: "#fff", fontSize: 12, fontWeight: "600" },
 

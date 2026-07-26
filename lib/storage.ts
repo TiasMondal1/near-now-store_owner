@@ -2,8 +2,8 @@
  * Supabase Storage helpers for uploading images from the app.
  *
  * Buckets used directly from the app:
- *   store-images        – store banner/cover photos (public)
- *   store-owner-images  – store owner profile photos (public)
+ *   store-images        – store gallery photos, up to MAX_STORE_IMAGES (public)
+ *   store-owner-images  – store owner profile photo (public)
  *
  * Both should be PUBLIC so the returned URL is directly usable in
  * <Image source={{ uri }}> without signed-URL expiry.
@@ -13,12 +13,14 @@
  * the backend instead (see lib/verificationDocuments.ts), since this app has
  * no real Supabase Auth session to scope a client-side storage policy to.
  *
- * Buckets, the stores.image_url/owner_image_url columns, and the anon-key
- * write policies these uploads rely on are created by
- * supabase/migrations/20260802000000_store_owner_images_buckets.sql in the
+ * Buckets and the anon-key write policies these uploads rely on are created
+ * by supabase/migrations/20260802000000_store_owner_images_buckets.sql in the
  * near-and-now repo (previously manual/untracked — see that file for why
  * these need an anon write policy, unlike the backend-proxied verification
- * documents flow).
+ * documents flow). uploadStoreImage() results are registered in the
+ * `store_images` table (migration 20260903000000) via
+ * storeOwner.controller.ts's addStoreImage, not written straight to
+ * stores.image_url anymore — see profile.tsx's gallery UI.
  */
 
 import { supabase } from './supabase';
@@ -60,13 +62,20 @@ async function uploadImage(
   }
 }
 
-/** Upload the store's banner/cover photo. */
+/**
+ * Upload one photo to the store's gallery (up to MAX_STORE_IMAGES, enforced
+ * backend-side in storeOwner.controller.ts's addStoreImage). Each upload
+ * gets its own path — a fixed `cover.${ext}` path would silently overwrite
+ * whatever was there before, which is exactly the single-image limitation
+ * this multi-image support replaces.
+ */
 export async function uploadStoreImage(
   storeId: string,
   localUri: string
 ): Promise<UploadResult> {
   const ext = localUri.split('.').pop()?.toLowerCase() ?? 'jpg';
-  const path = `${storeId}/cover.${ext}`;
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const path = `${storeId}/${unique}.${ext}`;
   return uploadImage('store-images', path, localUri);
 }
 
