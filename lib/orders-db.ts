@@ -90,11 +90,24 @@ export type OrderForStore = {
 };
 
 /**
+ * Thrown by getOrdersFromDb only when every fallback stage failed with a
+ * real error (RLS/network/query failure) — as opposed to a stage
+ * legitimately returning zero rows. Lets callers show a real error state
+ * with a retry instead of silently rendering "no orders."
+ */
+export class OrdersFetchFailedError extends Error {
+  constructor() {
+    super("Failed to load orders. Please check your connection and try again.");
+    this.name = "OrdersFetchFailedError";
+  }
+}
+
+/**
  * Fallback: fetch orders by querying customer_orders and linking store_orders where store_id matches.
  * Use when store_orders filtered by store_id returns 0 (e.g. different store id source).
  */
-async function getOrdersFromDbViaCustomerOrders(storeId: string): Promise<OrderForStore[]> {
-  if (!supabase || !storeId) return [];
+async function getOrdersFromDbViaCustomerOrders(storeId: string): Promise<{ orders: OrderForStore[]; failed: boolean }> {
+  if (!supabase || !storeId) return { orders: [], failed: false };
 
   const { data: coRows, error } = await supabase
     .from("customer_orders")
@@ -104,7 +117,7 @@ async function getOrdersFromDbViaCustomerOrders(storeId: string): Promise<OrderF
 
   if (error) {
     console.warn("[orders-db] customer_orders fallback error:", error.message);
-    return [];
+    return { orders: [], failed: true };
   }
 
   const rows = (coRows ?? []) as (CustomerOrderRow & { store_orders?: StoreOrderRow | StoreOrderRow[] | null })[];
@@ -117,7 +130,7 @@ async function getOrdersFromDbViaCustomerOrders(storeId: string): Promise<OrderF
     if (so) pairs.push({ so, co: row });
   }
 
-  if (pairs.length === 0) return [];
+  if (pairs.length === 0) return { orders: [], failed: false };
 
   const storeOrderIds = pairs.map((p) => p.so.id);
   const { data: itemsData } = await supabase
@@ -132,7 +145,7 @@ async function getOrdersFromDbViaCustomerOrders(storeId: string): Promise<OrderF
     itemsByStoreOrderId[sid].push(item);
   });
 
-  return pairs.map(({ so, co }) => {
+  const orders = pairs.map(({ so, co }) => {
     const rawItems = itemsByStoreOrderId[so.id] ?? [];
     const order_items = rawItems.map((it) => ({
       id: it.id,
@@ -157,36 +170,53 @@ async function getOrdersFromDbViaCustomerOrders(storeId: string): Promise<OrderF
       customer_order_id: so.customer_order_id ?? co?.id,
     } as OrderForStore;
   });
+
+  return { orders, failed: false };
 }
 
 /**
  * Fetch orders via RPC (links store_orders + customer_orders + order_items in DB; bypasses RLS).
  * Falls back to direct table queries then API if RPC is missing or fails.
+ *
+ * Throws OrdersFetchFailedError if every stage of the fallback chain hit a
+ * real error and none produced a result — as opposed to a stage legitimately
+ * finding zero orders, which resolves to [] as before. Lets callers show a
+ * real error state instead of an indistinguishable "no orders" empty state.
  */
 export async function getOrdersFromDb(storeId: string): Promise<OrderForStore[]> {
   if (!supabase || !storeId) return [];
 
-  const fromRpc = await getOrdersFromDbViaRpc(storeId);
-  if (fromRpc.length > 0) return fromRpc;
+  const rpcResult = await getOrdersFromDbViaRpc(storeId);
+  if (rpcResult.orders.length > 0) return rpcResult.orders;
 
-  return getOrdersFromDbViaTables(storeId);
+  const tablesResult = await getOrdersFromDbViaTables(storeId);
+  if (tablesResult.orders.length > 0) return tablesResult.orders;
+
+  // Every stage came back empty. If any stage got there via a real error
+  // rather than legitimately finding nothing, surface it instead of
+  // returning an indistinguishable empty list.
+  if (rpcResult.failed || tablesResult.failed) throw new OrdersFetchFailedError();
+  return [];
 }
 
 /**
  * RPC get_orders_for_store(p_store_id) — run supabase/orders-rpc-and-rls.sql in Supabase SQL Editor.
  * Links all tables server-side (SECURITY DEFINER), so no RLS blocking.
  */
-async function getOrdersFromDbViaRpc(storeId: string): Promise<OrderForStore[]> {
-  if (!supabase || !storeId) return [];
+async function getOrdersFromDbViaRpc(storeId: string): Promise<{ orders: OrderForStore[]; failed: boolean }> {
+  if (!supabase || !storeId) return { orders: [], failed: false };
 
   const { data, error } = await supabase.rpc("get_orders_for_store", { p_store_id: storeId });
 
   if (error) {
-    if (error.code !== "42883") console.warn("[orders-db] RPC get_orders_for_store error:", error.message);
-    return [];
+    // 42883 = function does not exist — an expected, documented case when
+    // the optional RPC hasn't been set up, not a real failure.
+    if (error.code === "42883") return { orders: [], failed: false };
+    console.warn("[orders-db] RPC get_orders_for_store error:", error.message);
+    return { orders: [], failed: true };
   }
 
-  if (data == null) return [];
+  if (data == null) return { orders: [], failed: false };
   // RPC returns single jsonb array; Supabase may give us the array or one row containing it
   let raw: any[] = [];
   if (Array.isArray(data)) {
@@ -230,22 +260,25 @@ async function getOrdersFromDbViaRpc(storeId: string): Promise<OrderForStore[]> 
       (coData as { id: string; placed_at?: string }[]).forEach(
         (co) => { if (co.placed_at) tsMap[co.id] = co.placed_at; }
       );
-      return mapped.map((o) => {
-        const ts = o.customer_order_id ? tsMap[o.customer_order_id as string] : undefined;
-        if (!ts) return { ...o, created_at: o.created_at || new Date().toISOString() };
-        return { ...o, placed_at: ts, created_at: o.created_at || ts };
-      });
+      return {
+        orders: mapped.map((o) => {
+          const ts = o.customer_order_id ? tsMap[o.customer_order_id as string] : undefined;
+          if (!ts) return { ...o, created_at: o.created_at || new Date().toISOString() };
+          return { ...o, placed_at: ts, created_at: o.created_at || ts };
+        }),
+        failed: false,
+      };
     }
   }
 
-  return mapped.map((o) => ({ ...o, created_at: o.created_at || new Date().toISOString() }));
+  return { orders: mapped.map((o) => ({ ...o, created_at: o.created_at || new Date().toISOString() })), failed: false };
 }
 
 /**
  * Direct table reads (can be blocked by RLS). Links: store_orders -> customer_orders, store_orders -> order_items.
  */
-async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[]> {
-  if (!supabase || !storeId) return [];
+async function getOrdersFromDbViaTables(storeId: string): Promise<{ orders: OrderForStore[]; failed: boolean }> {
+  if (!supabase || !storeId) return { orders: [], failed: false };
 
   const { data: storeOrdersData, error: soError } = await supabase
     .from("store_orders")
@@ -256,7 +289,7 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[
 
   if (soError) {
     console.warn("[orders-db] store_orders error:", soError.message);
-    return [];
+    return { orders: [], failed: true };
   }
 
   let storeOrders = (storeOrdersData ?? []) as StoreOrderRow[];
@@ -264,9 +297,10 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[
   // Fallback: if no store_orders for this store_id, try other ways to get orders
   if (storeOrders.length === 0) {
     const linked = await getOrdersFromDbViaCustomerOrders(storeId);
-    if (linked.length > 0) {
+    if (linked.orders.length > 0) {
       return linked;
     }
+    if (linked.failed) return linked;
     // Fallback 2: store_id format/case mismatch — fetch recent rows and match in JS.
     // Scoped to last 90 days and capped at 100 rows to limit payload.
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
@@ -276,7 +310,11 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[
       .gte("created_at", ninetyDaysAgo)
       .order("created_at", { ascending: false })
       .limit(100);
-    if (!allErr && Array.isArray(allRows) && allRows.length > 0) {
+    if (allErr) {
+      console.warn("[orders-db] 90-day fallback error:", allErr.message);
+      return { orders: [], failed: true };
+    }
+    if (Array.isArray(allRows) && allRows.length > 0) {
       const storeIdStr = String(storeId).toLowerCase().trim();
       const matched = (allRows as StoreOrderRow[]).filter(
         (so) => so.store_id && (String(so.store_id).toLowerCase().trim() === storeIdStr || so.store_id === storeId)
@@ -286,13 +324,10 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[
         // continue below to fetch customer_orders and items
       } else {
         if (__DEV__) console.warn("[orders-db] store_orders exist but none for store_id=" + storeId);
-        return [];
+        return { orders: [], failed: false };
       }
     } else {
-      if (__DEV__ && allRows?.length) {
-        console.warn("[orders-db] store_orders exist but none for store_id=" + storeId);
-      }
-      return [];
+      return { orders: [], failed: false };
     }
   }
 
@@ -328,7 +363,7 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[
     itemsByStoreOrderId[sid].push(item);
   });
 
-  return storeOrders.map((so) => {
+  const orders = storeOrders.map((so) => {
     const co = so.customer_order_id ? customerOrdersMap[so.customer_order_id] : null;
     const rawItems = itemsByStoreOrderId[so.id] ?? [];
     const order_items = rawItems.map((it) => ({
@@ -354,6 +389,8 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<OrderForStore[
       customer_order_id: so.customer_order_id ?? undefined,
     } as OrderForStore;
   });
+
+  return { orders, failed: false };
 }
 
 /**

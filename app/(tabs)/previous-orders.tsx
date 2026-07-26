@@ -18,7 +18,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, radius, spacing, shadows } from "../../lib/theme";
-import { getOrderByIdFromDb, getOrdersFromDb } from "../../lib/orders-db";
+import { getOrderByIdFromDb, getOrdersFromDb, OrdersFetchFailedError } from "../../lib/orders-db";
 import { supabase } from "../../lib/supabase";
 import { getStatusColor, formatStatus, isDelivered } from "../../lib/order-utils";
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
@@ -206,6 +206,7 @@ export default function OrdersTab() {
 
   const [allOrders, setAllOrders] = useState<any[]>([]);
   const [prevLoading, setPrevLoading] = useState(true);
+  const [previousOrdersError, setPreviousOrdersError] = useState(false);
   const [collapsedDates, setCollapsedDates] = useState<Set<string>>(new Set());
 
   const toggleDate = useCallback((title: string) => {
@@ -302,7 +303,8 @@ export default function OrdersTab() {
     if (!session || !storeId) return;
     try {
       const fromDb = await getOrdersFromDb(storeId);
-      if (!Array.isArray(fromDb) || fromDb.length === 0) return;
+      setPreviousOrdersError(false);
+      if (!Array.isArray(fromDb) || fromDb.length === 0) { setAllOrders([]); return; }
 
       const coIds = [
         ...new Set(
@@ -342,7 +344,8 @@ export default function OrdersTab() {
         })
       );
       setAllOrders(withData);
-    } catch {
+    } catch (e) {
+      if (e instanceof OrdersFetchFailedError) setPreviousOrdersError(true);
       setAllOrders([]);
     }
   }, [session, storeId]);
@@ -659,13 +662,29 @@ export default function OrdersTab() {
         />
       ) : (
         previousOrders.length === 0 ? (
-          <View style={styles.emptyWrap}>
-            <View style={[styles.emptyIconWrap, { backgroundColor: colors.info + "12" }]}>
-              <Ionicons name="time-outline" size={36} color={colors.info} />
+          previousOrdersError ? (
+            <View style={styles.emptyWrap}>
+              <View style={[styles.emptyIconWrap, { backgroundColor: colors.error + "12" }]}>
+                <Ionicons name="alert-circle-outline" size={36} color={colors.error} />
+              </View>
+              <Text style={styles.emptyTitle}>Couldn't load orders</Text>
+              <Text style={styles.emptySub}>Check your connection and try again.</Text>
+              <TouchableOpacity
+                style={[styles.emptyIconWrap, { backgroundColor: colors.error, width: undefined, height: undefined, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, marginTop: spacing.md, borderRadius: radius.md }]}
+                onPress={fetchPreviousOrders}
+              >
+                <Text style={{ color: "#fff", fontWeight: "600" }}>Try Again</Text>
+              </TouchableOpacity>
             </View>
-            <Text style={styles.emptyTitle}>No previous orders</Text>
-            <Text style={styles.emptySub}>Delivered orders will appear here</Text>
-          </View>
+          ) : (
+            <View style={styles.emptyWrap}>
+              <View style={[styles.emptyIconWrap, { backgroundColor: colors.info + "12" }]}>
+                <Ionicons name="time-outline" size={36} color={colors.info} />
+              </View>
+              <Text style={styles.emptyTitle}>No previous orders</Text>
+              <Text style={styles.emptySub}>Delivered orders will appear here</Text>
+            </View>
+          )
         ) : (
           <SectionList
             sections={visibleSections}

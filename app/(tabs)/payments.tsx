@@ -16,7 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../../session";
-import { getOrdersFromDb, type OrderForStore } from "../../lib/orders-db";
+import { getOrdersFromDb, OrdersFetchFailedError, type OrderForStore } from "../../lib/orders-db";
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
 import { colors, radius, spacing, shadows } from "../../lib/theme";
 import { useRequireStoreApproval } from "../../lib/useRequireStoreApproval";
@@ -118,6 +118,7 @@ export default function PaymentsTab() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [payouts, setPayouts] = useState<PayoutRow[]>([]);
+  const [payoutsError, setPayoutsError] = useState(false);
   const [period, setPeriod] = useState<Period>("today");
   const sessionRef = useRef<any>(null);
   const storeIdRef = useRef<string | null>(null);
@@ -156,6 +157,7 @@ export default function PaymentsTab() {
       if (!sid) return;
 
       const orders = await getOrdersFromDb(sid);
+      setPayoutsError(false);
       const delivered = orders.filter((o) => DELIVERED.has(o.status));
 
       const rows: PayoutRow[] = delivered.map((o) => ({
@@ -168,8 +170,8 @@ export default function PaymentsTab() {
         return tb - ta;
       });
       setPayouts(rows);
-    } catch {
-      // non-fatal
+    } catch (e) {
+      if (e instanceof OrdersFetchFailedError) setPayoutsError(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -296,19 +298,35 @@ export default function PaymentsTab() {
             />
           )}
           ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <View style={styles.emptyIconWrap}>
-                <Ionicons name="wallet-outline" size={36} color={colors.primary} />
+            payoutsError ? (
+              <View style={styles.emptyContainer}>
+                <View style={styles.emptyIconWrap}>
+                  <Ionicons name="alert-circle-outline" size={36} color={colors.error} />
+                </View>
+                <Text style={styles.emptyText}>Couldn't load payouts</Text>
+                <Text style={styles.emptySub}>Check your connection and try again.</Text>
+                <TouchableOpacity
+                  style={{ backgroundColor: colors.error, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, marginTop: spacing.md, borderRadius: radius.md }}
+                  onPress={() => load(true)}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "600" }}>Try Again</Text>
+                </TouchableOpacity>
               </View>
-              <Text style={styles.emptyText}>
-                {period === "today" ? "No earnings today" : period === "week" ? "No earnings this week" : "No payouts yet"}
-              </Text>
-              <Text style={styles.emptySub}>
-                {period === "all"
-                  ? "Payouts appear here once orders are delivered"
-                  : "Completed orders in this period will show here"}
-              </Text>
-            </View>
+            ) : (
+              <View style={styles.emptyContainer}>
+                <View style={styles.emptyIconWrap}>
+                  <Ionicons name="wallet-outline" size={36} color={colors.primary} />
+                </View>
+                <Text style={styles.emptyText}>
+                  {period === "today" ? "No earnings today" : period === "week" ? "No earnings this week" : "No payouts yet"}
+                </Text>
+                <Text style={styles.emptySub}>
+                  {period === "all"
+                    ? "Payouts appear here once orders are delivered"
+                    : "Completed orders in this period will show here"}
+                </Text>
+              </View>
+            )
           }
         />
       )}
