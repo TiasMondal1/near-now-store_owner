@@ -166,8 +166,8 @@ export function useOrders(token: string | null, _storeId?: string | null) {
       if (json?.pickup_code) setPickupCode(json.pickup_code);
       closeIncomingOrder();
       fetchOrders();
-    } catch {
-      Alert.alert('Error', 'Failed to accept order. Please try again.');
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to accept order. Please try again.');
     }
   }, [token, closeIncomingOrder, fetchOrders]);
 

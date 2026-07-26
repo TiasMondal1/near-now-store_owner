@@ -205,6 +205,7 @@ class ApiClient {
    * Get error message from error object
    */
   private getErrorMessage(error: any): string {
+    if (error?.data?.error) return error.data.error;
     if (error?.data?.message) return error.data.message;
     if (error?.message) return error.message;
     if (error?.statusText) return error.statusText;
