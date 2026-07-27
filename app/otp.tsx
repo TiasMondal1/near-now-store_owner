@@ -98,7 +98,7 @@ export default function StoreOwnerOtpScreen() {
       const hasToken = !!token;
       if (hasToken && user?.role && !isShopkeeperAppRole(user.role)) { Alert.alert("Login failed", "The phone number does not match our records."); return; }
       if (hasToken) {
-        await saveSession({ token, user: { id: user?.id ?? json.userId ?? json.data?.userId ?? "", name: user?.name ?? user?.full_name ?? "Shopkeeper", role: normalizeToShopkeeperRole(user?.role), isActivated: user?.isActivated ?? user?.is_activated ?? true, phone: user?.phone ?? phone, email: (() => { const e = coalesceEmail(user?.email, ""); return e || undefined; })() } });
+        await saveSession({ token, user: { id: user?.id ?? json.userId ?? json.data?.userId ?? "", name: user?.name ?? user?.full_name ?? "Shopkeeper", role: normalizeToShopkeeperRole(user?.role), isActivated: user?.isActivated ?? user?.is_activated ?? false, phone: user?.phone ?? phone, email: (() => { const e = coalesceEmail(user?.email, ""); return e || undefined; })() } });
         navigatedAway.current = true; router.replace("/"); return;
       }
       if (mode === "signup" && !hasToken) { const signupTicket = json.signupTicket ?? json.data?.signupTicket; router.replace({ pathname: "/store-owner-signup", params: { phone, signupTicket } }); return; }

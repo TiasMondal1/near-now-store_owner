@@ -306,7 +306,7 @@ export default function StoreOwnerSignupScreen() {
           id: json.user.id,
           name: json.user.name,
           role: normalizeToShopkeeperRole(json.user.role),
-          isActivated: json.user.isActivated ?? json.user.is_activated ?? true,
+          isActivated: json.user.isActivated ?? json.user.is_activated ?? false,
           phone: json.user.phone ?? phone,
           email: sessionEmail || undefined,
         },
