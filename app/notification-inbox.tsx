@@ -81,7 +81,9 @@ export default function NotificationInboxScreen() {
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}` },
       });
-    } catch {}
+    } catch (error) {
+      if (__DEV__) console.warn('[notification-inbox] Mark all read failed', error);
+    }
   }, [token]);
 
   const markOneRead = useCallback(async (id: string) => {
@@ -92,7 +94,9 @@ export default function NotificationInboxScreen() {
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}` },
       });
-    } catch {}
+    } catch (error) {
+      if (__DEV__) console.warn('[notification-inbox] Mark one read failed', error);
+    }
   }, [token]);
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;

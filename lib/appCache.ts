@@ -45,7 +45,9 @@ export async function hydrateStoreCache(): Promise<CachedStore[] | null> {
       _mem = parsed;
       return parsed.stores;
     }
-  } catch {}
+  } catch (error) {
+    if (__DEV__) console.warn('[appCache] Hydrate store cache failed', error);
+  }
   return null;
 }
 
@@ -54,7 +56,9 @@ export async function persistStores(stores: CachedStore[]): Promise<void> {
   _mem = { stores, ts: Date.now() };
   try {
     await AsyncStorage.setItem(STORE_CACHE_KEY, JSON.stringify(_mem));
-  } catch {}
+  } catch (error) {
+    if (__DEV__) console.warn('[appCache] Persist store cache failed', error);
+  }
 }
 
 /** Force-update the is_active flag without a full refetch. */

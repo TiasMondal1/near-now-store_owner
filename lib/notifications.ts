@@ -34,7 +34,7 @@ if (!IS_EXPO_GO) {
       }),
     });
   } catch (e) {
-    console.warn('[notifications] expo-notifications unavailable:', e);
+    if (__DEV__) console.warn('[notifications] expo-notifications unavailable:', e);
     Notifications = null;
   }
 }
@@ -86,7 +86,7 @@ class NotificationService {
       await this.loadPreferences();
 
       if (IS_EXPO_GO) {
-        console.log('[notifications] Skipping push setup: running in Expo Go');
+        if (__DEV__) console.log('[notifications] Skipping push setup: running in Expo Go');
         return;
       }
 
@@ -95,10 +95,10 @@ class NotificationService {
         await this.registerForPushNotifications();
         this.setupNotificationListeners();
       } else {
-        console.log('Notifications disabled: Not a physical device');
+        if (__DEV__) console.log('Notifications disabled: Not a physical device');
       }
     } catch (error) {
-      console.warn('Failed to initialize notifications:', error);
+      if (__DEV__) console.warn('Failed to initialize notifications:', error);
       // Don't throw - app should work without notifications
     }
   }
@@ -108,12 +108,12 @@ class NotificationService {
    */
   async registerForPushNotifications(): Promise<string | null> {
     if (IS_EXPO_GO || !Notifications) {
-      console.log('[notifications] Push registration skipped: Expo Go or module unavailable');
+      if (__DEV__) console.log('[notifications] Push registration skipped: Expo Go or module unavailable');
       return null;
     }
 
     if (!Device.isDevice) {
-      console.log('Push notifications only work on physical devices');
+      if (__DEV__) console.log('Push notifications only work on physical devices');
       return null;
     }
 
@@ -139,7 +139,7 @@ class NotificationService {
       }
 
       if (finalStatus !== 'granted') {
-        console.log('Notification permissions not granted');
+        if (__DEV__) console.log('Notification permissions not granted');
         return null;
       }
 
@@ -147,25 +147,25 @@ class NotificationService {
       try {
         token = await Notifications.getExpoPushTokenAsync();
       } catch (error: any) {
-        console.warn('Could not get push token:', error?.message || error);
+        if (__DEV__) console.warn('Could not get push token:', error?.message || error);
         return null;
       }
 
       if (!token?.data) {
-        console.warn('No push token received');
+        if (__DEV__) console.warn('No push token received');
         return null;
       }
 
       await AsyncStorage.setItem(PUSH_TOKEN_KEY, token.data);
 
       this.registerTokenWithBackend(token.data).catch((err) => {
-        console.warn('Failed to register token with backend:', err);
+        if (__DEV__) console.warn('Failed to register token with backend:', err);
       });
 
-      console.log('✅ Push notification token registered');
+      if (__DEV__) console.log('✅ Push notification token registered');
       return token.data;
     } catch (error: any) {
-      console.warn('Push notification registration failed:', error?.message || error);
+      if (__DEV__) console.warn('Push notification registration failed:', error?.message || error);
       return null;
     }
   }
@@ -188,7 +188,7 @@ class NotificationService {
         { Authorization: `Bearer ${authToken}` }
       );
     } catch (error) {
-      console.error('Failed to register token with backend:', error);
+      if (__DEV__) console.error('Failed to register token with backend:', error);
     }
   }
 
@@ -200,22 +200,22 @@ class NotificationService {
     try {
       Notifications.addNotificationReceivedListener((notification) => {
         try {
-          console.log('Notification received:', notification);
+          if (__DEV__) console.log('Notification received:', notification);
         } catch (error) {
-          console.warn('Error handling notification:', error);
+          if (__DEV__) console.warn('Error handling notification:', error);
         }
       });
 
       Notifications.addNotificationResponseReceivedListener((response) => {
         try {
-          console.log('Notification tapped:', response);
+          if (__DEV__) console.log('Notification tapped:', response);
           this.handleNotificationTap(response.notification);
         } catch (error) {
-          console.warn('Error handling notification tap:', error);
+          if (__DEV__) console.warn('Error handling notification tap:', error);
         }
       });
     } catch (error) {
-      console.warn('Failed to setup notification listeners:', error);
+      if (__DEV__) console.warn('Failed to setup notification listeners:', error);
     }
   }
 
@@ -228,7 +228,7 @@ class NotificationService {
     // Navigate based on notification type
     if (data?.type === 'new_order') {
       // Navigate to orders screen
-      console.log('Navigate to order:', data.orderId);
+      if (__DEV__) console.log('Navigate to order:', data.orderId);
     }
   }
 
@@ -242,23 +242,6 @@ class NotificationService {
   ): Promise<void> {
     if (!Notifications) return;
     await Notifications.scheduleNotificationAsync({
-      content: { title, body, data, sound: true },
-      trigger: null,
-    });
-  }
-
-  /**
-   * Schedule notification (simplified - sends immediately for now)
-   * TODO: Fix trigger type when expo-notifications types are updated
-   */
-  async scheduleNotification(
-    title: string,
-    body: string,
-    _triggerDate: Date,
-    data?: Record<string, any>
-  ): Promise<string> {
-    if (!Notifications) return '';
-    return await Notifications.scheduleNotificationAsync({
       content: { title, body, data, sound: true },
       trigger: null,
     });
@@ -305,7 +288,7 @@ class NotificationService {
         );
       }
     } catch (error) {
-      console.error('Failed to update notification preferences:', error);
+      if (__DEV__) console.error('Failed to update notification preferences:', error);
     }
   }
 
@@ -319,7 +302,7 @@ class NotificationService {
         this.preferences = { ...DEFAULT_PREFERENCES, ...JSON.parse(stored) };
       }
     } catch (error) {
-      console.error('Failed to load notification preferences:', error);
+      if (__DEV__) console.error('Failed to load notification preferences:', error);
     }
   }
 
@@ -342,7 +325,7 @@ class NotificationService {
         { Authorization: `Bearer ${authToken}` }
       );
     } catch (error) {
-      console.error('Failed to unregister push token:', error);
+      if (__DEV__) console.error('Failed to unregister push token:', error);
     }
   }
 
@@ -354,7 +337,7 @@ class NotificationService {
       const session = await getSession();
       return session?.token ?? null;
     } catch (error) {
-      console.error('Failed to get auth token:', error);
+      if (__DEV__) console.error('Failed to get auth token:', error);
     }
     return null;
   }

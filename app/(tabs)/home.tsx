@@ -216,7 +216,9 @@ export default function HomeTab() {
             Animated.timing(approvedBannerAnim, { toValue: 0, duration: 350, useNativeDriver: true }),
           ]).start(() => setApprovedBanner(false));
         }
-      } catch {}
+      } catch (error) {
+        if (__DEV__) console.warn('[home] Approval poll failed', error);
+      }
     };
     approvalPollRef.current = setInterval(checkApproval, 30_000);
     return () => { if (approvalPollRef.current) { clearInterval(approvalPollRef.current); approvalPollRef.current = null; } };
@@ -279,7 +281,12 @@ export default function HomeTab() {
   }, [stores]);
 
   const invalidateAllCaches = useCallback(async () => {
-    try { await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY); await AsyncStorage.removeItem(INVENTORY_CACHE_KEY); } catch {}
+    try {
+      await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
+      await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
+    } catch (error) {
+      if (__DEV__) console.warn('[home] Cache invalidation failed', error);
+    }
   }, []);
 
   useEffect(() => {
