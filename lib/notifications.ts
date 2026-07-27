@@ -41,7 +41,6 @@ if (!IS_EXPO_GO) {
 
 export interface NotificationPreferences {
   newOrders: boolean;
-  lowStock: boolean;
   dailySummary: boolean;
   payments: boolean;
   systemAlerts: boolean;
@@ -49,7 +48,6 @@ export interface NotificationPreferences {
 
 const DEFAULT_PREFERENCES: NotificationPreferences = {
   newOrders: true,
-  lowStock: true,
   dailySummary: true,
   payments: true,
   systemAlerts: true,
@@ -231,9 +229,6 @@ class NotificationService {
     if (data?.type === 'new_order') {
       // Navigate to orders screen
       console.log('Navigate to order:', data.orderId);
-    } else if (data?.type === 'low_stock') {
-      // Navigate to inventory
-      console.log('Navigate to inventory');
     }
   }
 

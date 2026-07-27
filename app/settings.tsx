@@ -99,7 +99,6 @@ export default function SettingsScreen() {
   const prefItems: SettingItem[] = [
     { key: 'notif-inbox', icon: 'notifications-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Notifications', desc: 'View order alerts and updates', onPress: () => router.push('/notification-inbox') },
     { key: 'notif', icon: 'options-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Notification Preferences', desc: 'Manage alerts and sounds', onPress: () => setShowNotifications(true) },
-    { key: 'stock', icon: 'warning-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Low Stock Alerts', desc: 'Set threshold for stock warnings', onPress: () => router.push('/low-stock-settings') },
   ];
 
   return (
