@@ -11,7 +11,14 @@ export default function NotificationSettings({ onClose }: Props) {
   const [prefs, setPrefs] = useState<NotificationPreferences>(notificationService.getPreferences());
   const [enabled, setEnabled] = useState(false);
 
-  useEffect(() => { notificationService.areNotificationsEnabled().then(setEnabled); }, []);
+  useEffect(() => {
+    notificationService.areNotificationsEnabled().then(setEnabled);
+    // getPreferences() above can snapshot the hardcoded defaults if this
+    // screen mounts before the service's AsyncStorage load (kicked off at
+    // import time) has resolved — re-sync once it's actually ready so a
+    // previously-saved preference isn't shown/overwritten as "on".
+    notificationService.whenReady().then(() => setPrefs(notificationService.getPreferences()));
+  }, []);
 
   const toggle = async (key: keyof NotificationPreferences) => {
     const next = { ...prefs, [key]: !prefs[key] };
@@ -62,7 +69,9 @@ export default function NotificationSettings({ onClose }: Props) {
                 <Text style={st.enableBtnText}>Enable</Text>
               </TouchableOpacity>
             ) : (
-              <View style={st.onBadge}><Text style={st.onBadgeText}>On</Text></View>
+              <TouchableOpacity style={st.onBadge} onPress={handleEnable}>
+                <Text style={st.onBadgeText}>On</Text>
+              </TouchableOpacity>
             )}
           </View>
         </View>

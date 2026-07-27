@@ -58,9 +58,19 @@ const DEFAULT_PREFERENCES: NotificationPreferences = {
 class NotificationService {
   private static instance: NotificationService;
   private preferences: NotificationPreferences = DEFAULT_PREFERENCES;
+  private readyPromise: Promise<void>;
 
   private constructor() {
-    this.loadPreferences();
+    this.readyPromise = this.loadPreferences();
+  }
+
+  /**
+   * Resolves once persisted preferences have been loaded from AsyncStorage.
+   * getPreferences() called before this resolves can return stale defaults —
+   * callers that render preferences on mount should await this first.
+   */
+  whenReady(): Promise<void> {
+    return this.readyPromise;
   }
 
   static getInstance(): NotificationService {

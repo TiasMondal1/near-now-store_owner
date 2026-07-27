@@ -20,9 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, shadows } from '../lib/theme';
 import { getSession, clearSession } from '../session';
 import { notificationService } from '../lib/notifications';
-import { config } from '../lib/config';
-import { Store } from '../lib/store-service';
-import StoreSettingsModal from '../components/StoreSettingsModal';
+import { CachedStore, fetchStoresCached, peekStores } from '../lib/appCache';
 import NotificationSettings from '../components/NotificationSettings';
 import { useRequireStoreApproval } from '../lib/useRequireStoreApproval';
 
@@ -39,10 +37,8 @@ type SettingItem = {
 export default function SettingsScreen() {
   useRequireStoreApproval();
   const [loading, setLoading] = useState(true);
-  const [store, setStore] = useState<Store | null>(null);
-  const [token, setToken] = useState<string | null>(null);
+  const [store, setStore] = useState<CachedStore | null>(peekStores()?.[0] ?? null);
   const [session, setSession] = useState<any>(null);
-  const [showStoreSettings, setShowStoreSettings] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(14)).current;
@@ -62,19 +58,21 @@ export default function SettingsScreen() {
     try {
       const s: any = await getSession();
       if (!s?.token) { router.replace('/landing'); return; }
-      setToken(s.token);
       setSession(s);
-      const userId = s.user?.id;
-      const response = await fetch(
-        `${config.API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ''}`,
-        { headers: { Authorization: `Bearer ${s.token}` } }
-      );
-      const data = await response.json();
-      if (data?.stores?.[0]) setStore(data.stores[0]);
+      // Session is all this screen needs to render (name/phone come from it,
+      // and the store is only used for the "Store ID" info row) — render
+      // immediately instead of blocking on a store fetch, then backfill the
+      // store in the background via the shared cache used by the other tabs
+      // (was previously a redundant uncached fetch on every visit here).
+      setLoading(false);
+
+      const cached = peekStores();
+      if (cached?.[0]) setStore(cached[0]);
+      const fresh = await fetchStoresCached(s.token, s.user?.id);
+      if (fresh?.[0]) setStore(fresh[0]);
     } catch (error) {
       console.error('Failed to load settings:', error);
       Alert.alert('Error', 'Failed to load settings');
-    } finally {
       setLoading(false);
     }
   };
@@ -98,9 +96,6 @@ export default function SettingsScreen() {
 
   const ownerName = session?.user?.name || 'Shopkeeper';
   const ownerPhone = session?.user?.phone || '';
-  const storeItems: SettingItem[] = [
-    { key: 'store', icon: 'storefront-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Store Settings', desc: 'Name, address, delivery radius', onPress: () => setShowStoreSettings(true) },
-  ];
   const prefItems: SettingItem[] = [
     { key: 'notif-inbox', icon: 'notifications-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Notifications', desc: 'View order alerts and updates', onPress: () => router.push('/notification-inbox') },
     { key: 'notif', icon: 'options-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Notification Preferences', desc: 'Manage alerts and sounds', onPress: () => setShowNotifications(true) },
@@ -133,26 +128,6 @@ export default function SettingsScreen() {
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
           </TouchableOpacity>
-
-          {/* Store section */}
-          <Text style={st.sectionLabel}>Store</Text>
-          <View style={st.cardGroup}>
-            {storeItems.map((item, idx) => (
-              <React.Fragment key={item.key}>
-                <TouchableOpacity style={st.row} onPress={item.onPress} activeOpacity={0.6}>
-                  <View style={[st.rowIcon, { backgroundColor: item.iconBg }]}>
-                    <Ionicons name={item.icon} size={20} color={item.iconColor} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={st.rowTitle}>{item.title}</Text>
-                    <Text style={st.rowDesc}>{item.desc}</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-                </TouchableOpacity>
-                {idx < storeItems.length - 1 && <View style={st.rowDivider} />}
-              </React.Fragment>
-            ))}
-          </View>
 
           {/* Preferences section */}
           <Text style={st.sectionLabel}>Preferences</Text>
@@ -214,21 +189,10 @@ export default function SettingsScreen() {
         </Animated.View>
       </ScrollView>
 
-      {store && token && (
-        <>
-          <StoreSettingsModal
-            visible={showStoreSettings}
-            onClose={() => setShowStoreSettings(false)}
-            store={store}
-            token={token}
-            onUpdate={loadData}
-          />
-          {showNotifications && (
-            <View style={st.notifOverlay}>
-              <NotificationSettings onClose={() => setShowNotifications(false)} />
-            </View>
-          )}
-        </>
+      {showNotifications && (
+        <View style={st.notifOverlay}>
+          <NotificationSettings onClose={() => setShowNotifications(false)} />
+        </View>
       )}
     </SafeAreaView>
   );
