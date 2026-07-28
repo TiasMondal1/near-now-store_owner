@@ -1206,6 +1206,7 @@ const viewOnlyStyles = StyleSheet.create({
     justifyContent: "center",
     borderWidth: 3,
     borderColor: colors.surface,
+    overflow: "hidden",
   },
   camBadge: {
     position: "absolute",

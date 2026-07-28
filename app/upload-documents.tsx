@@ -496,8 +496,11 @@ export default function UploadDocumentsScreen() {
         allApproved
           ? "All documents are approved."
           : anySubmitted
-            ? "Your documents have been submitted. Our team will verify them before your shop goes live."
-            : "Upload the remaining documents to complete verification."
+            ? "Your documents have been submitted. Next, add your billing info so we can pay out your earnings."
+            : "Upload the remaining documents to complete verification.",
+        anySubmitted
+          ? [{ text: "Add Billing Info", onPress: () => router.push("/billing-info") }]
+          : undefined
       );
     } catch {
       Alert.alert("Error", "Failed to save one or more documents. Please try again.");

@@ -3,17 +3,18 @@ import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, spacing, radius } from "../lib/theme";
 
-type TabKey = "details" | "status" | "documents";
+type TabKey = "details" | "status" | "documents" | "billing";
 
 const TABS: {
   key: TabKey;
   label: string;
   icon: React.ComponentProps<typeof Ionicons>["name"];
-  route: "/store-owner-signup" | "/pending-verification" | "/upload-documents";
+  route: "/store-owner-signup" | "/pending-verification" | "/upload-documents" | "/billing-info";
 }[] = [
   { key: "details", label: "Details", icon: "person-outline", route: "/store-owner-signup" },
   { key: "status", label: "Status", icon: "hourglass-outline", route: "/pending-verification" },
   { key: "documents", label: "Documents", icon: "document-text-outline", route: "/upload-documents" },
+  { key: "billing", label: "Billing", icon: "card-outline", route: "/billing-info" },
 ];
 
 /**
