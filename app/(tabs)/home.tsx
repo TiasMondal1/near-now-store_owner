@@ -33,6 +33,7 @@ import {
 import { StoreStatusCard } from "../../components/StoreStatusCard";
 import {
   fetchStoresCached,
+  forceFetchStores,
   peekStores,
   patchStoreActive,
   clearStoreCache,
@@ -161,7 +162,11 @@ export default function HomeTab() {
             return;
           }
           setLoading(false);
-          fetchStoresCached(s.token, s.user?.id).then((fresh) => {
+          // Genuinely refetch here, not fetchStoresCached — that would just
+          // return the same cached array back while it's still warm (up to
+          // 10 minutes), so a stale/wrong store name or address shown from
+          // cache would never actually get corrected in the background.
+          forceFetchStores(s.token, s.user?.id).then((fresh) => {
             if (!cancelled && fresh.length > 0) {
               if (!isStoreApproved(fresh[0])) {
                 router.replace("/pending-verification");

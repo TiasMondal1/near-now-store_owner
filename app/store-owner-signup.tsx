@@ -28,11 +28,9 @@ import { coalesceEmail, isPlausibleEmail, normalizeSignupEmail } from "../lib/em
 import { isMapsEnabled } from "../lib/maps-env";
 import { normalizeToShopkeeperRole } from "../lib/shopkeeperRole";
 import { colors, radius, spacing } from "../lib/theme";
-import { peekStores, fetchStoresCached, clearStoreCache, type CachedStore } from "../lib/appCache";
-import { uploadOwnerImage } from "../lib/storage";
+import { peekStores, fetchStoresCached, clearStoreCache, persistStores, type CachedStore } from "../lib/appCache";
+import { uploadOwnerImage, OWNER_IMAGE_KEY } from "../lib/storage";
 import VerificationNavBar from "../components/VerificationNavBar";
-
-const OWNER_IMAGE_KEY = "owner_profile_image_url";
 
 const API_BASE = config.API_BASE;
 const GOOGLE_MAPS_API_KEY = config.GOOGLE_MAPS_API_KEY;
@@ -94,6 +92,7 @@ export default function StoreOwnerSignupScreen() {
   const [viewOnly, setViewOnly] = useState(!phone);
   const [loadingExisting, setLoadingExisting] = useState(false);
   const [existingStore, setExistingStore] = useState<CachedStore | null>(cachedStore);
+  const [storeLoadFailed, setStoreLoadFailed] = useState(false);
   const [ownerName2, setOwnerName2] = useState(""); // read-only display copies, kept separate from the editable form's own state above
   const [ownerPhone, setOwnerPhone] = useState("");
   const [ownerEmail, setOwnerEmail] = useState("");
@@ -103,6 +102,32 @@ export default function StoreOwnerSignupScreen() {
   // attach the photo to, so the actual upload is deferred until handleNext
   // succeeds and a real user id exists (see there for the upload call).
   const [pendingOwnerImageUri, setPendingOwnerImageUri] = useState<string | null>(null);
+
+  // Identity fields (store name/address) must always be authoritative —
+  // unlike the home tab's own use of fetchStoresCached (a 10-minute cache,
+  // fine for read-heavy dashboard fields), this screen bypasses that cache
+  // and hits the network directly every time, then re-persists the fresh
+  // result so the rest of the app also gets corrected data. A prior stale/
+  // wrong cache entry (e.g. from right after signup) would otherwise keep
+  // showing blank/incorrect store name indefinitely for up to 10 minutes.
+  const loadStore = async (session: { token: string }) => {
+    setStoreLoadFailed(false);
+    try {
+      const res = await fetch(`${API_BASE}/store-owner/stores`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      const json = await res.json().catch(() => null);
+      const stores: CachedStore[] = json?.stores ?? [];
+      if (stores[0]) {
+        setExistingStore(stores[0]);
+        await persistStores(stores);
+      } else {
+        setStoreLoadFailed(true);
+      }
+    } catch {
+      setStoreLoadFailed(true);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -126,11 +151,7 @@ export default function StoreOwnerSignupScreen() {
       // just refreshes it in the background.
       if (!cachedStore) setLoadingExisting(true);
       try {
-        const cached = peekStores();
-        const stores = cached?.length ? cached : await fetchStoresCached(session.token, session.user?.id);
-        if (stores[0]) setExistingStore(stores[0]);
-      } catch {
-        // non-fatal — screen still shows whatever session/cache info it already has
+        await loadStore(session);
       } finally {
         setLoadingExisting(false);
       }
@@ -174,6 +195,7 @@ export default function StoreOwnerSignupScreen() {
       setOwnerImageUri(uri);
       return;
     }
+    if (ownerImageUri) return; // already set — read-only from here on, mirrors the rider app
 
     const session = await getSession();
     if (!session?.user?.id) {
@@ -505,90 +527,119 @@ export default function StoreOwnerSignupScreen() {
     return (
       <SafeAreaView style={styles.safeArea}>
         <Stack.Screen options={{ animation: "fade" }} />
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          <View style={styles.header}>
-            <Text style={styles.tag}>Near&Now · Shopkeeper</Text>
-            <Text style={styles.title}>Your Details</Text>
-            <Text style={styles.subtitle}>Submitted — shown read-only until you&apos;re verified</Text>
-          </View>
+        <ScrollView contentContainerStyle={styles.viewOnlyScroll}>
+          <View>
+            <VerificationNavBar active="details" />
 
-          <VerificationNavBar active="details" />
-
-          {loadingExisting ? (
-            <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.xxl }} />
-          ) : (
-            <View style={styles.form}>
-              <View style={{ alignItems: "center", marginBottom: spacing.lg }}>
-                <TouchableOpacity
-                  style={viewOnlyStyles.avatarTouch}
-                  onPress={pickOwnerImage}
-                  disabled={uploadingOwnerImage}
-                  activeOpacity={0.8}
-                >
-                  {uploadingOwnerImage ? (
-                    <View style={viewOnlyStyles.avatar}>
-                      <ActivityIndicator color={colors.primary} />
-                    </View>
-                  ) : ownerImageUri ? (
-                    <Image source={{ uri: ownerImageUri }} style={viewOnlyStyles.avatar} />
-                  ) : (
-                    <View style={viewOnlyStyles.avatar}>
-                      <Ionicons name="person" size={32} color={colors.primary} />
-                    </View>
-                  )}
+            <View style={viewOnlyStyles.avatarSection}>
+              <TouchableOpacity
+                style={viewOnlyStyles.avatarTouch}
+                onPress={pickOwnerImage}
+                disabled={uploadingOwnerImage || !!ownerImageUri}
+                activeOpacity={ownerImageUri ? 1 : 0.8}
+              >
+                {uploadingOwnerImage ? (
+                  <View style={viewOnlyStyles.avatar}>
+                    <ActivityIndicator color={colors.primary} />
+                  </View>
+                ) : ownerImageUri ? (
+                  <Image source={{ uri: ownerImageUri }} style={viewOnlyStyles.avatar} />
+                ) : (
+                  <View style={viewOnlyStyles.avatar}>
+                    <Ionicons name="person" size={32} color={colors.primary} />
+                  </View>
+                )}
+                {ownerImageUri ? (
+                  <View style={viewOnlyStyles.lockBadge}>
+                    <Ionicons name="lock-closed" size={11} color="#fff" />
+                  </View>
+                ) : (
                   <View style={viewOnlyStyles.camBadge}>
                     <Ionicons name="camera" size={12} color="#fff" />
                   </View>
-                </TouchableOpacity>
-                <Text style={viewOnlyStyles.avatarHint}>
-                  {ownerImageUri ? "Tap to change your photo" : "Tap to add your photo"}
-                </Text>
-              </View>
-
-              <View style={styles.inputBlock}>
-                <Text style={styles.label}>Your name</Text>
-                <View style={styles.readonlyBox}>
-                  <Text style={styles.readonlyText}>{ownerName2 || "—"}</Text>
-                </View>
-              </View>
-              <View style={styles.inputBlock}>
-                <Text style={styles.label}>Store name</Text>
-                <View style={styles.readonlyBox}>
-                  <Text style={styles.readonlyText}>{existingStore?.name || "—"}</Text>
-                </View>
-              </View>
-              <View style={styles.inputBlock}>
-                <Text style={styles.label}>Phone</Text>
-                <View style={styles.readonlyBox}>
-                  <Text style={styles.readonlyText}>{ownerPhone || "—"}</Text>
-                </View>
-              </View>
-              <View style={styles.inputBlock}>
-                <Text style={styles.label}>Email</Text>
-                <View style={styles.readonlyBox}>
-                  <Text style={styles.readonlyText}>{ownerEmail || "—"}</Text>
-                </View>
-              </View>
-              <View style={styles.inputBlock}>
-                <Text style={styles.label}>Store address</Text>
-                <View style={styles.readonlyBox}>
-                  <Text style={styles.readonlyText}>{existingStore?.address || "—"}</Text>
-                </View>
-              </View>
-
-              <View style={viewOnlyStyles.lockNote}>
-                <Ionicons name="lock-closed-outline" size={16} color={colors.primary} />
-                <Text style={viewOnlyStyles.lockNoteText}>
-                  Name, store name, and address can&apos;t be changed here. Once you&apos;re verified, update them from your Profile page.
-                </Text>
-              </View>
-
-              <TouchableOpacity style={viewOnlyStyles.logoutBtn} onPress={handleLogout} activeOpacity={0.85}>
-                <Ionicons name="log-out-outline" size={18} color={colors.error} />
-                <Text style={viewOnlyStyles.logoutText}>Logout</Text>
+                )}
               </TouchableOpacity>
+              <Text style={viewOnlyStyles.avatarHint}>
+                {ownerImageUri ? "Photo already on file — locked" : "Tap to add your photo"}
+              </Text>
             </View>
-          )}
+            <Text style={viewOnlyStyles.title}>Your Details</Text>
+            <Text style={viewOnlyStyles.subtitle}>Submitted — shown read-only until you&apos;re verified</Text>
+
+            {loadingExisting ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.xl }} />
+            ) : (
+              <>
+                <View style={viewOnlyStyles.card}>
+                  <Text style={viewOnlyStyles.label}>Phone</Text>
+                  <View style={viewOnlyStyles.readOnlyField}>
+                    <Ionicons name="call-outline" size={18} color={colors.textTertiary} />
+                    <Text style={viewOnlyStyles.readOnlyText}>{ownerPhone || "—"}</Text>
+                  </View>
+
+                  <Text style={viewOnlyStyles.label}>Your Name</Text>
+                  <TextInput
+                    style={[viewOnlyStyles.input, viewOnlyStyles.inputReadOnly]}
+                    value={ownerName2 || "—"}
+                    editable={false}
+                  />
+
+                  <Text style={viewOnlyStyles.label}>Store Name</Text>
+                  <TextInput
+                    style={[viewOnlyStyles.input, viewOnlyStyles.inputReadOnly]}
+                    value={existingStore?.name || (storeLoadFailed ? "Couldn't load" : "—")}
+                    editable={false}
+                  />
+
+                  <Text style={viewOnlyStyles.label}>Email</Text>
+                  <TextInput
+                    style={[viewOnlyStyles.input, viewOnlyStyles.inputReadOnly]}
+                    value={ownerEmail || "—"}
+                    editable={false}
+                  />
+
+                  <Text style={viewOnlyStyles.label}>Store Address</Text>
+                  <TextInput
+                    style={[viewOnlyStyles.input, viewOnlyStyles.inputReadOnly, { height: 80, textAlignVertical: "top", paddingTop: 12 }]}
+                    value={existingStore?.address || (storeLoadFailed ? "Couldn't load" : "—")}
+                    editable={false}
+                    multiline
+                  />
+
+                  {storeLoadFailed && (
+                    <TouchableOpacity
+                      style={viewOnlyStyles.retryBtn}
+                      onPress={async () => {
+                        const session = await getSession();
+                        if (session?.token) await loadStore(session);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="refresh" size={14} color={colors.primary} />
+                      <Text style={viewOnlyStyles.retryBtnText}>Couldn't load store details — tap to retry</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                <View style={viewOnlyStyles.nextStepCard}>
+                  <View style={viewOnlyStyles.nextStepIcon}>
+                    <Ionicons name="lock-closed-outline" size={22} color={colors.primary} />
+                  </View>
+                  <View style={viewOnlyStyles.nextStepCopy}>
+                    <Text style={viewOnlyStyles.nextStepTitle}>These details are locked for now</Text>
+                    <Text style={viewOnlyStyles.nextStepText}>
+                      Name, store name, and address can&apos;t be changed here. Once you&apos;re verified, update them from your Profile page.
+                    </Text>
+                  </View>
+                </View>
+              </>
+            )}
+
+            <TouchableOpacity style={viewOnlyStyles.logoutBtn} onPress={handleLogout} activeOpacity={0.85}>
+              <Ionicons name="log-out-outline" size={18} color={colors.error} />
+              <Text style={viewOnlyStyles.logoutText}>Logout</Text>
+            </TouchableOpacity>
+          </View>
         </ScrollView>
       </SafeAreaView>
     );
@@ -970,6 +1021,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.lg,
   },
   scrollContent: { paddingBottom: spacing.xl },
+  viewOnlyScroll: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.xl },
 
   // Header
   header: { paddingTop: spacing.lg, gap: 6, marginBottom: spacing.lg },
@@ -1198,9 +1250,9 @@ const styles = StyleSheet.create({
 const viewOnlyStyles = StyleSheet.create({
   avatarTouch: { position: "relative" },
   avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 76,
+    height: 76,
+    borderRadius: 38,
     backgroundColor: colors.primaryBg,
     alignItems: "center",
     justifyContent: "center",
@@ -1221,19 +1273,91 @@ const viewOnlyStyles = StyleSheet.create({
     borderWidth: 2,
     borderColor: colors.surface,
   },
+  lockBadge: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.textTertiary,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: colors.surface,
+  },
   avatarHint: { fontSize: 12, color: colors.textTertiary, marginTop: spacing.sm },
-  lockNote: {
+  avatarSection: { alignItems: "center", marginTop: spacing.md, marginBottom: spacing.md },
+  title: { color: colors.textPrimary, fontSize: 26, fontWeight: "800", marginBottom: spacing.xs },
+  subtitle: { color: colors.textSecondary, fontSize: 15, marginBottom: spacing.lg },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.md,
+  },
+  label: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "700",
+    marginBottom: 6,
+    marginTop: spacing.lg,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  input: {
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    height: 48,
+    color: colors.textPrimary,
+    fontSize: 15,
+  },
+  inputReadOnly: { backgroundColor: colors.surfaceVariant, color: colors.textSecondary },
+  readOnlyField: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    height: 48,
+  },
+  readOnlyText: { color: colors.textSecondary, fontSize: 15 },
+  nextStepCopy: { flex: 1 },
+  retryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: spacing.sm,
+  },
+  retryBtnText: { color: colors.primary, fontSize: 12, fontWeight: "600" },
+  nextStepCard: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: spacing.sm,
+    gap: spacing.md,
     backgroundColor: colors.primaryBg,
     borderWidth: 1,
     borderColor: colors.primary + "30",
     borderRadius: radius.lg,
     padding: spacing.md,
-    marginTop: spacing.sm,
+    marginTop: spacing.md,
   },
-  lockNoteText: { flex: 1, fontSize: 12, color: colors.textSecondary, lineHeight: 18 },
+  nextStepIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface,
+  },
+  nextStepTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: "700" },
+  nextStepText: { color: colors.textSecondary, fontSize: 12, lineHeight: 18, marginTop: 3 },
   logoutBtn: {
     flexDirection: "row",
     alignItems: "center",

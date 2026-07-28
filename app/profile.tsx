@@ -21,7 +21,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { getSession, clearSession } from "../session";
 import { notificationService } from "../lib/notifications";
 import { colors, radius, spacing, shadows } from "../lib/theme";
-import { fetchStoresCached, peekStores, clearStoreCache } from "../lib/appCache";
+import { fetchStoresCached, forceFetchStores, peekStores, clearStoreCache } from "../lib/appCache";
 import { config } from "../lib/config";
 import { uploadStoreImage, uploadOwnerImage } from "../lib/storage";
 import { useRequireStoreApproval } from "../lib/useRequireStoreApproval";
@@ -100,7 +100,10 @@ export default function ProfileScreen() {
       if (cached?.length) {
         const picked = (selId && cached.find((s: any) => s.id === selId)) || cached[0];
         await hydrate(picked);
-        fetchStoresCached(s.token, s.user?.id).then(async (fresh) => {
+        // Genuinely refetch — fetchStoresCached would just hand back the same
+        // cached array while it's still warm (up to 10 min), so a stale
+        // name/address shown from cache would never self-correct here.
+        forceFetchStores(s.token, s.user?.id).then(async (fresh) => {
           if (!cancelled && fresh.length) {
             const freshPicked = (selId && fresh.find(s => s.id === selId)) || fresh[0];
             await hydrate(freshPicked);

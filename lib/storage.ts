@@ -25,6 +25,15 @@
 
 import { supabase } from './supabase';
 
+/**
+ * Shared AsyncStorage key for the owner's profile photo URL — both
+ * store-owner-signup.tsx (Details) and billing-info.tsx read/write the same
+ * owner photo (backed by stores.owner_image_url), so both must use this same
+ * key or an upload from one screen won't be visible on the other until the
+ * next network refetch.
+ */
+export const OWNER_IMAGE_KEY = "owner_profile_image_url";
+
 type UploadResult =
   | { ok: true; url: string }
   | { ok: false; error: string };

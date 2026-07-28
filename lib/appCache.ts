@@ -90,6 +90,22 @@ export async function fetchStoresCached(
   const hit = peekStores();
   if (hit) return hit;
 
+  return forceFetchStores(token, userId);
+}
+
+/**
+ * Always hits the network, bypassing the warm-cache short-circuit that
+ * fetchStoresCached uses. Identity fields (store name/address) must be able
+ * to self-correct — a caller that already showed cached data and now wants a
+ * background "refresh" gets nothing from fetchStoresCached() while the
+ * 10-minute cache is still warm, since that function just returns the same
+ * cached array again. Use this instead wherever the intent is genuinely "get
+ * the current truth from the server", not "get something to show quickly".
+ */
+export async function forceFetchStores(
+  token: string,
+  userId?: string
+): Promise<CachedStore[]> {
   if (_inflight) return _inflight;
 
   _inflight = (async (): Promise<CachedStore[]> => {

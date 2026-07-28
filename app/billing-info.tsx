@@ -13,12 +13,13 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { getSession } from "../session";
 import { colors, radius, spacing, shadows } from "../lib/theme";
 import { config } from "../lib/config";
-import { clearStoreCache, fetchStoresCached, peekStores } from "../lib/appCache";
-import { uploadOwnerImage } from "../lib/storage";
+import { clearStoreCache, forceFetchStores, peekStores } from "../lib/appCache";
+import { uploadOwnerImage, OWNER_IMAGE_KEY } from "../lib/storage";
 import { fetchBillingInfo, saveBillingInfo, type BillingInfo, type PickedBillingFile } from "../lib/billingInfo";
 import VerificationNavBar from "../components/VerificationNavBar";
 
@@ -59,8 +60,12 @@ export default function BillingInfoScreen() {
       }
       setToken(session.token);
 
-      const cached = peekStores();
-      const stores = cached?.length ? cached : await fetchStoresCached(session.token, session.user?.id);
+      // Always hit the network for the real, current store — a stale cached
+      // entry (e.g. a wrong/blank name persisted from an earlier session)
+      // would otherwise keep pointing this screen at bad data for up to the
+      // cache's 10-minute TTL, and getBillingInfo's ownership check would
+      // silently 403 if the cached id ever belonged to a different store.
+      const stores = await forceFetchStores(session.token, session.user?.id);
       const store = stores[0];
       if (!store?.id) {
         setLoading(false);
@@ -105,6 +110,10 @@ export default function BillingInfoScreen() {
         body: JSON.stringify({ owner_image_url: res.url }),
       });
       clearStoreCache();
+      // The Details screen's own avatar reads from this same AsyncStorage key
+      // (not a network fetch) — without writing it here too, a photo
+      // uploaded from Billing Info would never show up on Details.
+      await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);
       setOwnerImageUrl(res.url);
     } finally {
       setUploadingOwnerImage(false);
