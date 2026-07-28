@@ -3,8 +3,12 @@
  *
  * Android changes:
  *  • Adds <supports-screens> declaring large + xlarge screen compatibility.
- *  • Changes screenOrientation from "portrait" to "fullSensor" so tablets
- *    can rotate to landscape while phones default to their natural orientation.
+ *  • Changes screenOrientation from "portrait" to "fullUser" so tablets can
+ *    rotate to landscape while still respecting the device's rotation-lock
+ *    setting — "fullSensor" (the initial choice here) looks similar but
+ *    ignores rotation lock entirely, always rotating with the physical
+ *    sensor regardless of what the user has set; "fullUser" defers to the
+ *    lock when it's on and only rotates freely when it's off.
  *  • Removes the "portrait" lock on ML Kit's GmsBarcodeScanningDelegateActivity
  *    (pulled in transitively by expo-camera) via tools:replace, so Android 16
  *    large-screen devices don't flag an orientation restriction.
@@ -33,15 +37,17 @@ module.exports = function withTabletSupport(config) {
       ];
     }
 
-    // ── 2. Change screenOrientation to fullSensor on the main activity ────────
-    // "fullSensor" lets Android use the device's natural orientation:
-    // phones stay portrait-first, tablets rotate freely to landscape.
+    // ── 2. Change screenOrientation to fullUser on the main activity ─────────
+    // "fullUser" lets Android use the device's natural orientation — phones
+    // stay portrait-first, tablets rotate freely to landscape — while still
+    // respecting the user's rotation-lock setting (unlike "fullSensor",
+    // which rotates purely off the physical sensor and ignores the lock).
     const activities =
       manifest.manifest.application?.[0]?.activity ?? [];
 
     for (const activity of activities) {
       if (activity.$?.["android:name"] === ".MainActivity") {
-        activity.$["android:screenOrientation"] = "fullSensor";
+        activity.$["android:screenOrientation"] = "fullUser";
         // configChanges must include orientation so React Native handles
         // rotation without destroying the activity.
         const existing = activity.$["android:configChanges"] ?? "";
@@ -71,7 +77,7 @@ module.exports = function withTabletSupport(config) {
         appNode.activity.push({
           $: {
             "android:name": gmsScannerName,
-            "android:screenOrientation": "fullSensor",
+            "android:screenOrientation": "fullUser",
             "tools:replace": "android:screenOrientation",
           },
         });

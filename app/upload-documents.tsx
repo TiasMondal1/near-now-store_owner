@@ -15,14 +15,17 @@ import {
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { router } from "expo-router";
+import { Stack, router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Ionicons } from "@expo/vector-icons";
 import { getSession } from "../session";
 import { colors, radius, spacing, shadows } from "../lib/theme";
+import { config } from "../lib/config";
 import { clearStoreCache, fetchStoresCached, peekStores } from "../lib/appCache";
+import { uploadStoreImage } from "../lib/storage";
+import VerificationNavBar from "../components/VerificationNavBar";
 import {
   DOC_NUMBER_FORMATS,
   DOC_NUMBER_LENGTHS,
@@ -36,6 +39,9 @@ import {
   type RequiredDocKey,
   type VerificationDocument,
 } from "../lib/verificationDocuments";
+
+const API_BASE = config.API_BASE;
+const MAX_STORE_IMAGES = 5;
 
 const DOCUMENT_SECTIONS = [
   { key: "aadhaar_front", label: "Aadhaar Card (Front)", icon: "card-outline" as const, placeholder: "12-digit Aadhaar number", hasNumber: true },
@@ -91,8 +97,13 @@ const DOCUMENT_GROUPS: DocGroup[] = [
 ];
 
 export default function UploadDocumentsScreen() {
-  const [loading, setLoading] = useState(true);
-  const [storeId, setStoreId] = useState<string | null>(null);
+  // Seed storeId from the shared store cache when warm (e.g. the shopkeeper
+  // already visited Home/Status this session) so this screen renders
+  // immediately instead of a blank spinner — loadDocuments/loadStoreImages
+  // below still refresh in the background regardless.
+  const cachedStoreId = peekStores()?.[0]?.id ?? null;
+  const [loading, setLoading] = useState(!cachedStoreId);
+  const [storeId, setStoreId] = useState<string | null>(cachedStoreId);
   const [token, setToken] = useState<string | null>(null);
   const [serverDocs, setServerDocs] = useState<DocsState>(EMPTY_DOCS());
   const [numbers, setNumbers] = useState<Record<DocKey, string>>(
@@ -103,6 +114,14 @@ export default function UploadDocumentsScreen() {
   const [saving, setSaving] = useState(false);
   const [pickerSheetKey, setPickerSheetKey] = useState<DocKey | null>(null);
   const suspendedRef = useRef(false);
+
+  // Store photo gallery — same store_images table/endpoints profile.tsx's
+  // hero banner already uses; kept editable in both places (per explicit
+  // instruction) rather than moved, so a shopkeeper can manage it from
+  // whichever screen they're already on.
+  const [storeImages, setStoreImages] = useState<{ id: string; url: string }[]>([]);
+  const [uploadingStoreImage, setUploadingStoreImage] = useState(false);
+  const [removingImageId, setRemovingImageId] = useState<string | null>(null);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(20)).current;
@@ -125,6 +144,95 @@ export default function UploadDocumentsScreen() {
     }
     setServerDocs(next);
     setNumbers(nextNumbers);
+  };
+
+  const loadStoreImages = async (targetStoreId: string) => {
+    try {
+      const session = await getSession();
+      if (!session?.token) return;
+      const res = await fetch(`${API_BASE}/store-owner/stores/${targetStoreId}/images`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.success) {
+        setStoreImages((json.images ?? []).map((img: any) => ({ id: img.id, url: img.url })));
+      }
+    } catch {
+      /* non-fatal */
+    }
+  };
+
+  const pickStoreImage = async () => {
+    if (!storeId) {
+      Alert.alert("Can't upload yet", "Store info is still loading — try again in a moment.");
+      return;
+    }
+    if (storeImages.length >= MAX_STORE_IMAGES) {
+      Alert.alert("Gallery full", `A store can have at most ${MAX_STORE_IMAGES} photos. Remove one before adding another.`);
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [16, 9],
+      quality: 0.85,
+    });
+    if (result.canceled || !result.assets[0]) return;
+
+    const uri = result.assets[0].uri;
+    setUploadingStoreImage(true);
+    try {
+      const res = await uploadStoreImage(storeId, uri);
+      if (!res.ok) {
+        Alert.alert("Upload failed", res.error);
+        return;
+      }
+      const session = await getSession();
+      if (!session?.token) return;
+      const addRes = await fetch(`${API_BASE}/store-owner/stores/${storeId}/images`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ url: res.url }),
+      });
+      const addJson = await addRes.json().catch(() => null);
+      if (!addRes.ok || !addJson?.success) {
+        Alert.alert("Error", addJson?.error || "Photo uploaded but couldn't be added to your gallery.");
+        return;
+      }
+      await loadStoreImages(storeId);
+    } finally {
+      setUploadingStoreImage(false);
+    }
+  };
+
+  const removeStoreImage = (imageId: string) => {
+    if (!storeId) return;
+    Alert.alert("Remove photo?", "This photo will be removed from your store's gallery.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: async () => {
+          setRemovingImageId(imageId);
+          try {
+            const session = await getSession();
+            if (!session?.token) return;
+            const res = await fetch(`${API_BASE}/store-owner/stores/${storeId}/images/${imageId}`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${session.token}` },
+            });
+            const json = await res.json().catch(() => null);
+            if (!res.ok || !json?.success) {
+              Alert.alert("Error", json?.error || "Failed to remove photo.");
+              return;
+            }
+            await loadStoreImages(storeId);
+          } finally {
+            setRemovingImageId(null);
+          }
+        },
+      },
+    ]);
   };
 
   useEffect(() => {
@@ -153,6 +261,7 @@ export default function UploadDocumentsScreen() {
       } catch {
         /* non-fatal — screen still renders with empty state */
       }
+      void loadStoreImages(store.id);
     })();
     return () => {
       cancelled = true;
@@ -436,6 +545,7 @@ export default function UploadDocumentsScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
+        <Stack.Screen options={{ animation: "fade" }} />
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
@@ -445,6 +555,7 @@ export default function UploadDocumentsScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
+      <Stack.Screen options={{ animation: "fade" }} />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
@@ -455,6 +566,8 @@ export default function UploadDocumentsScreen() {
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
+          <VerificationNavBar active="documents" />
+
           <View style={styles.infoBanner}>
             <View style={styles.infoIconWrap}>
               <Ionicons name="shield-checkmark" size={18} color={colors.primary} />
@@ -464,6 +577,61 @@ export default function UploadDocumentsScreen() {
               <Text style={styles.infoText}>
                 Upload clear documents. {uploadedCount} of {DOCUMENT_SECTIONS.length} submitted.
               </Text>
+            </View>
+          </View>
+
+          <View style={styles.sectionCard}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionIconWrap}>
+                <Ionicons name="images-outline" size={16} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sectionTitle}>Store Images</Text>
+                <Text style={styles.sectionSubtitle}>{storeImages.length}/{MAX_STORE_IMAGES} added — shown to customers</Text>
+              </View>
+            </View>
+            <View style={styles.sectionBody}>
+              <View style={styles.galleryStrip}>
+                {storeImages.map((img, idx) => (
+                  <View key={img.id} style={styles.galleryThumbWrap}>
+                    <Image source={{ uri: img.url }} style={styles.galleryThumb} />
+                    {idx === 0 && (
+                      <View style={styles.galleryCoverBadge}>
+                        <Text style={styles.galleryCoverBadgeText}>Cover</Text>
+                      </View>
+                    )}
+                    <TouchableOpacity
+                      style={styles.galleryRemoveBadge}
+                      onPress={() => removeStoreImage(img.id)}
+                      disabled={removingImageId === img.id}
+                    >
+                      {removingImageId === img.id ? (
+                        <ActivityIndicator color="#fff" size="small" />
+                      ) : (
+                        <Ionicons name="close" size={12} color="#fff" />
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                {storeImages.length < MAX_STORE_IMAGES && (
+                  <TouchableOpacity
+                    style={styles.galleryAddBtn}
+                    onPress={pickStoreImage}
+                    disabled={uploadingStoreImage}
+                    activeOpacity={0.8}
+                  >
+                    {uploadingStoreImage ? (
+                      <ActivityIndicator color={colors.primary} size="small" />
+                    ) : (
+                      <>
+                        <Ionicons name="add" size={22} color={colors.primary} />
+                        <Text style={styles.galleryAddText}>Add</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                )}
+              </View>
+              <Text style={styles.formatHintText}>You can also manage these from your Profile page.</Text>
             </View>
           </View>
 
@@ -847,6 +1015,43 @@ const styles = StyleSheet.create({
   },
   lengthWarning: { color: colors.error, fontSize: 11, fontWeight: "600", marginTop: 4 },
   formatHintText: { color: colors.textTertiary, fontSize: 11, fontWeight: "500", marginTop: 4 },
+
+  galleryStrip: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.sm },
+  galleryThumbWrap: { position: "relative", width: 72, height: 72 },
+  galleryThumb: { width: 72, height: 72, borderRadius: radius.md, backgroundColor: colors.border },
+  galleryCoverBadge: {
+    position: "absolute",
+    bottom: 4,
+    left: 4,
+    backgroundColor: "rgba(15,23,42,0.65)",
+    borderRadius: radius.xs,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  galleryCoverBadgeText: { color: "#fff", fontSize: 9, fontWeight: "700" },
+  galleryRemoveBadge: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.error,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  galleryAddBtn: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.md,
+    borderWidth: 2,
+    borderStyle: "dashed",
+    borderColor: colors.primary + "40",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primary + "06",
+  },
+  galleryAddText: { color: colors.primary, fontSize: 11, fontWeight: "700", marginTop: 2 },
 
   uploadArea: {
     marginTop: spacing.xs,

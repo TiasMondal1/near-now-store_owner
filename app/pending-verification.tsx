@@ -10,19 +10,19 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { router } from "expo-router";
+import { Stack, router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { clearSession, getSession } from "../session";
 import { notificationService } from "../lib/notifications";
 import { colors, radius, spacing, shadows } from "../lib/theme";
-import { refreshStoreApproval } from "../lib/storeApproval";
 import { useStoreApprovalGate } from "../lib/useStoreApprovalGate";
 import {
   fetchVerificationDocuments,
   REQUIRED_DOC_KEYS,
   type VerificationDocument,
 } from "../lib/verificationDocuments";
+import VerificationNavBar from "../components/VerificationNavBar";
 
 const DOC_LABELS: Record<(typeof REQUIRED_DOC_KEYS)[number], string> = {
   aadhaar_front: "Aadhaar Card (Front)",
@@ -41,10 +41,16 @@ const STEPS = [
 ];
 
 export default function PendingVerificationScreen() {
-  const { checking, store } = useStoreApprovalGate("require-pending");
+  // The gate hook is already the single source of truth for approval state —
+  // it fetches on mount, on every screen focus, every 30s, and on realtime
+  // updates. This screen used to run a second, fully independent
+  // refreshStoreApproval() call on top of that, plus its own separate 30s
+  // poll — doubling network round-trips on every visit, which is what made
+  // navigating between Details/Status/Documents feel slow. Consolidated onto
+  // the hook's own `refresh`/`approved` so there's exactly one fetch path.
+  const { checking, store, approved, refresh } = useStoreApprovalGate("require-pending");
   const [documents, setDocuments] = useState<VerificationDocument[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -79,49 +85,32 @@ export default function PendingVerificationScreen() {
   const rejectedDocs = documents.filter((d) => d.status === "rejected");
 
   const checkApprovalNow = useCallback(async (silent = false) => {
-    const session = await getSession();
-    if (!session?.token) {
-      router.replace("/landing");
-      return;
-    }
-
     if (!silent) setRefreshing(true);
     try {
-      const result = await refreshStoreApproval(session.token, session.user?.id);
-      if (result.approved) {
-        // Navigate only from the button, not immediately here too — the
-        // store cache write above (inside refreshStoreApproval) needs to
-        // actually land before the tabs layout's own approval gate reads it,
-        // and firing router.replace() a second time immediately (this call
-        // is non-blocking, so it ran before the user even saw the alert)
-        // was redundant and could race that write.
-        Alert.alert(
-          "Store Verified",
-          "Your documents have been approved. You can now use the app and go online for customers.",
-          [{ text: "Continue", onPress: () => router.replace("/(tabs)/home") }]
-        );
-        return;
-      }
+      await refresh();
       await loadDocuments();
     } catch {
       if (!silent) Alert.alert("Could not refresh", "Check your connection and try again.");
     } finally {
       if (!silent) setRefreshing(false);
     }
-  }, [loadDocuments]);
+  }, [refresh, loadDocuments]);
 
+  // Show the "Store Verified" alert exactly once, when the gate hook's own
+  // `approved` state flips to true — navigation only ever happens from the
+  // alert's own Continue button (see useStoreApprovalGate's "require-pending"
+  // mode doc comment for why this screen must not auto-redirect on its own).
+  const approvedAlertShownRef = useRef(false);
   useEffect(() => {
-    // Check once immediately (don't wait out the first 30s interval tick) —
-    // this is what catches "approved while the app was closed" on a cold
-    // launch, now that useStoreApprovalGate no longer silently redirects.
-    void checkApprovalNow(true);
-    pollRef.current = setInterval(() => {
-      void checkApprovalNow(true);
-    }, 30_000);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [checkApprovalNow]);
+    if (approved && !approvedAlertShownRef.current) {
+      approvedAlertShownRef.current = true;
+      Alert.alert(
+        "Store Verified",
+        "Your documents have been approved. You can now use the app and go online for customers.",
+        [{ text: "Continue", onPress: () => router.replace("/(tabs)/home") }]
+      );
+    }
+  }, [approved]);
 
   const handleLogout = () => {
     Alert.alert("Logout", "Are you sure you want to logout?", [
@@ -141,6 +130,7 @@ export default function PendingVerificationScreen() {
   if (checking) {
     return (
       <SafeAreaView style={styles.safe}>
+        <Stack.Screen options={{ animation: "fade" }} />
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
@@ -153,8 +143,11 @@ export default function PendingVerificationScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
+      <Stack.Screen options={{ animation: "fade" }} />
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeAnim }}>
+          <VerificationNavBar active="status" />
+
           <View style={styles.hero}>
             <View style={styles.heroIcon}>
               <Ionicons name="hourglass-outline" size={34} color={colors.primary} />

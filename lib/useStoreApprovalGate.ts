@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { getSession } from "../session";
 import { isStoreApproved, refreshStoreApproval, type ApprovalStore } from "./storeApproval";
+import { peekStores } from "./appCache";
 import { supabase } from "./supabase";
 
 type GateMode = "require-approved" | "require-pending";
@@ -21,9 +22,16 @@ const POLL_INTERVAL_MS = 30_000;
  *                      see or act on anything.
  */
 export function useStoreApprovalGate(mode: GateMode) {
-  const [checking, setChecking] = useState(true);
-  const [store, setStore] = useState<ApprovalStore | null>(null);
-  const [approved, setApproved] = useState(false);
+  // Seed from the shared store cache (appCache.ts) when warm — e.g. the
+  // shopkeeper already visited Home or another gated screen this session —
+  // so this screen renders real content immediately instead of a blank
+  // spinner while evaluate() refreshes it in the background. Most valuable
+  // now that the verification nav bar makes bouncing between
+  // Details/Status/Documents common.
+  const cachedStore = peekStores()?.[0] ?? null;
+  const [checking, setChecking] = useState(!cachedStore);
+  const [store, setStore] = useState<ApprovalStore | null>(cachedStore);
+  const [approved, setApproved] = useState(isStoreApproved(cachedStore));
 
   // Once we've genuinely confirmed the store is approved, a later transient
   // network error is safe to fail open on (don't kick an active shopkeeper
@@ -32,7 +40,7 @@ export function useStoreApprovalGate(mode: GateMode) {
   // open on an error would let an unapproved shopkeeper straight past the
   // gate on the very first, unconfirmed check. So: fail closed until proven
   // otherwise, fail open only after trust has been established.
-  const hasConfirmedApprovedRef = useRef(false);
+  const hasConfirmedApprovedRef = useRef(isStoreApproved(cachedStore));
 
   const evaluate = useCallback(async () => {
     const session = await getSession();

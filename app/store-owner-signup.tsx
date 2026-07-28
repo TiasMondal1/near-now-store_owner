@@ -11,19 +11,27 @@ import {
   ScrollView,
   ActivityIndicator,
   Pressable,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import MapView, { PROVIDER_GOOGLE, Region } from "react-native-maps";
 import * as Location from "expo-location";
+import * as ImagePicker from "expo-image-picker";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams, router } from "expo-router";
-import { saveSession } from "../session";
+import { Stack, useLocalSearchParams, router } from "expo-router";
+import { getSession, saveSession } from "../session";
 import { config } from "../lib/config";
 import { fetchPlaceAutocomplete, fetchPlaceLatLng, type PlacePrediction } from "../lib/googlePlaces";
 import { coalesceEmail, isPlausibleEmail, normalizeSignupEmail } from "../lib/emailForApi";
 import { isMapsEnabled } from "../lib/maps-env";
 import { normalizeToShopkeeperRole } from "../lib/shopkeeperRole";
 import { colors, radius, spacing } from "../lib/theme";
+import { peekStores, fetchStoresCached, clearStoreCache, type CachedStore } from "../lib/appCache";
+import { uploadOwnerImage } from "../lib/storage";
+import VerificationNavBar from "../components/VerificationNavBar";
+
+const OWNER_IMAGE_KEY = "owner_profile_image_url";
 
 const API_BASE = config.API_BASE;
 const GOOGLE_MAPS_API_KEY = config.GOOGLE_MAPS_API_KEY;
@@ -63,6 +71,95 @@ export default function StoreOwnerSignupScreen() {
   const [locating, setLocating] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
   const [scrollEnabled, setScrollEnabled] = useState(true);
+
+  // Reached via direct navigation (the verification nav bar, or the back
+  // button from documents/pending-verification) rather than fresh off OTP —
+  // unlike the rider app, this app never saves a session before signup
+  // completes (see otp.tsx: no saveSession() call in the mode==="signup"
+  // branch), so a session existing with no `phone` param already means
+  // signup is done. Shows the submitted details read-only instead of the
+  // full editable map/address form.
+  const [viewOnly, setViewOnly] = useState(false);
+  const [loadingExisting, setLoadingExisting] = useState(false);
+  const [existingStore, setExistingStore] = useState<CachedStore | null>(null);
+  const [ownerName2, setOwnerName2] = useState(""); // read-only display copies, kept separate from the editable form's own state above
+  const [ownerPhone, setOwnerPhone] = useState("");
+  const [ownerEmail, setOwnerEmail] = useState("");
+  const [ownerImageUri, setOwnerImageUri] = useState<string | null>(null);
+  const [uploadingOwnerImage, setUploadingOwnerImage] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const savedOwnerImg = await AsyncStorage.getItem(OWNER_IMAGE_KEY);
+      if (savedOwnerImg) setOwnerImageUri(savedOwnerImg);
+
+      if (phone) return; // fresh from OTP verify — editable mode, nothing else to load
+      const session = await getSession();
+      if (!session?.token) return;
+
+      setViewOnly(true);
+      setOwnerName2(session.user?.name || "");
+      setOwnerPhone(session.user?.phone || "");
+      setOwnerEmail(session.user?.email || "");
+
+      setLoadingExisting(true);
+      try {
+        const cached = peekStores();
+        const stores = cached?.length ? cached : await fetchStoresCached(session.token, session.user?.id);
+        if (stores[0]) setExistingStore(stores[0]);
+      } catch {
+        // non-fatal — screen still shows whatever session info it already has
+      } finally {
+        setLoadingExisting(false);
+      }
+    })();
+  }, [phone]);
+
+  const patchExistingStore = async (fields: Record<string, string>) => {
+    if (!existingStore?.id) return;
+    const session = await getSession();
+    if (!session?.token) return;
+    try {
+      await fetch(`${API_BASE}/store-owner/stores/${existingStore.id}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(fields),
+      });
+      clearStoreCache();
+    } catch {
+      /* non-fatal */
+    }
+  };
+
+  const pickOwnerImage = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.85,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const session = await getSession();
+    if (!session?.user?.id) {
+      Alert.alert("Can't upload yet", "Your session is still loading — try again in a moment.");
+      return;
+    }
+    const uri = result.assets[0].uri;
+    setOwnerImageUri(uri);
+    setUploadingOwnerImage(true);
+    try {
+      const res = await uploadOwnerImage(session.user.id, uri);
+      if (res.ok) {
+        await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);
+        setOwnerImageUri(res.url);
+        await patchExistingStore({ owner_image_url: res.url });
+      } else {
+        await AsyncStorage.setItem(OWNER_IMAGE_KEY, uri);
+      }
+    } finally {
+      setUploadingOwnerImage(false);
+    }
+  };
 
   // ── Search state ─────────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState("");
@@ -326,12 +423,105 @@ export default function StoreOwnerSignupScreen() {
     }
   };
 
-  // ── Render ───────────────────────────────────────────────────────────────────
+  // ── Render (view-only, post-signup) ──────────────────────────────────────────
+  if (viewOnly) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <Stack.Screen options={{ animation: "fade" }} />
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={styles.header}>
+            <Text style={styles.tag}>Near&Now · Shopkeeper</Text>
+            <Text style={styles.title}>Your Details</Text>
+            <Text style={styles.subtitle}>Submitted — shown read-only until you&apos;re verified</Text>
+          </View>
+
+          <VerificationNavBar active="details" />
+
+          {loadingExisting ? (
+            <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.xxl }} />
+          ) : (
+            <View style={styles.form}>
+              <View style={{ alignItems: "center", marginBottom: spacing.lg }}>
+                <TouchableOpacity
+                  style={viewOnlyStyles.avatarTouch}
+                  onPress={pickOwnerImage}
+                  disabled={uploadingOwnerImage}
+                  activeOpacity={0.8}
+                >
+                  {uploadingOwnerImage ? (
+                    <View style={viewOnlyStyles.avatar}>
+                      <ActivityIndicator color={colors.primary} />
+                    </View>
+                  ) : ownerImageUri ? (
+                    <Image source={{ uri: ownerImageUri }} style={viewOnlyStyles.avatar} />
+                  ) : (
+                    <View style={viewOnlyStyles.avatar}>
+                      <Ionicons name="person" size={32} color={colors.primary} />
+                    </View>
+                  )}
+                  <View style={viewOnlyStyles.camBadge}>
+                    <Ionicons name="camera" size={12} color="#fff" />
+                  </View>
+                </TouchableOpacity>
+                <Text style={viewOnlyStyles.avatarHint}>
+                  {ownerImageUri ? "Tap to change your photo" : "Tap to add your photo"}
+                </Text>
+              </View>
+
+              <View style={styles.inputBlock}>
+                <Text style={styles.label}>Your name</Text>
+                <View style={styles.readonlyBox}>
+                  <Text style={styles.readonlyText}>{ownerName2 || "—"}</Text>
+                </View>
+              </View>
+              <View style={styles.inputBlock}>
+                <Text style={styles.label}>Store name</Text>
+                <View style={styles.readonlyBox}>
+                  <Text style={styles.readonlyText}>{existingStore?.name || "—"}</Text>
+                </View>
+              </View>
+              <View style={styles.inputBlock}>
+                <Text style={styles.label}>Phone</Text>
+                <View style={styles.readonlyBox}>
+                  <Text style={styles.readonlyText}>{ownerPhone || "—"}</Text>
+                </View>
+              </View>
+              <View style={styles.inputBlock}>
+                <Text style={styles.label}>Email</Text>
+                <View style={styles.readonlyBox}>
+                  <Text style={styles.readonlyText}>{ownerEmail || "—"}</Text>
+                </View>
+              </View>
+              <View style={styles.inputBlock}>
+                <Text style={styles.label}>Store address</Text>
+                <View style={styles.readonlyBox}>
+                  <Text style={styles.readonlyText}>{existingStore?.address || "—"}</Text>
+                </View>
+              </View>
+
+              <View style={viewOnlyStyles.lockNote}>
+                <Ionicons name="lock-closed-outline" size={16} color={colors.primary} />
+                <Text style={viewOnlyStyles.lockNoteText}>
+                  Name, store name, and address can&apos;t be changed here. Once you&apos;re verified, update them from your Profile page.
+                </Text>
+              </View>
+            </View>
+          )}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  // ── Render (fresh signup form) ────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.safeArea}>
+      <Stack.Screen options={{ animation: "fade" }} />
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        // Android already resizes via AndroidManifest's
+        // windowSoftInputMode="adjustResize" — stacking "height" behavior on
+        // top of that double-shrinks the content on Android.
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
       >
         <View style={styles.container}>
@@ -894,4 +1084,44 @@ const styles = StyleSheet.create({
   buttonText: { fontSize: 16, fontWeight: "600", color: colors.surface },
   backRow: { alignItems: "center" },
   backText: { fontSize: 12, color: colors.primary, fontWeight: "500" },
+});
+
+const viewOnlyStyles = StyleSheet.create({
+  avatarTouch: { position: "relative" },
+  avatar: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: colors.primaryBg,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 3,
+    borderColor: colors.surface,
+  },
+  camBadge: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: colors.surface,
+  },
+  avatarHint: { fontSize: 12, color: colors.textTertiary, marginTop: spacing.sm },
+  lockNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    backgroundColor: colors.primaryBg,
+    borderWidth: 1,
+    borderColor: colors.primary + "30",
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+  },
+  lockNoteText: { flex: 1, fontSize: 12, color: colors.textSecondary, lineHeight: 18 },
 });
