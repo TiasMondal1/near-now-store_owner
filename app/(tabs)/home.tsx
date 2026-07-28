@@ -102,6 +102,18 @@ export default function HomeTab() {
     searchDebounceRef.current = setTimeout(() => setDebouncedSearchQuery(text), 200);
   }, []);
 
+  // Clears both the input text and the debounced value that actually drives
+  // filteredStoreProducts, and cancels any pending debounce timer — closing
+  // the search bar with only setStockSearchQuery("") left debouncedSearchQuery
+  // holding the last-typed text, so "Your Stock" stayed invisibly filtered
+  // with no search box visible to explain why.
+  const closeStockSearch = useCallback(() => {
+    if (searchDebounceRef.current) { clearTimeout(searchDebounceRef.current); searchDebounceRef.current = null; }
+    setStockSearchQuery("");
+    setDebouncedSearchQuery("");
+    setStockSearchOpen(false);
+  }, []);
+
   const selectedStore = (selectedStoreId ? stores.find(s => s.id === selectedStoreId) : undefined) ?? stores[0] ?? null;
   const isStoreOnline = !!selectedStore?.is_active;
 
@@ -427,6 +439,21 @@ export default function HomeTab() {
     await AsyncStorage.multiRemove(CACHE_KEYS);
   }, []);
 
+  // A single stray tap on the small trash icon (right next to the
+  // active/off toggle) used to soft-delete a live product with no way to
+  // undo — every other destructive action in this file (going online/
+  // offline) already confirms first, so this now matches that convention.
+  const confirmDeleteProduct = useCallback((product: any) => {
+    setConfirmModal({
+      title: "Remove product?",
+      message: `"${product.name}" will be removed from your store. This can't be undone from here.`,
+      confirmText: "Remove",
+      confirmColor: colors.error,
+      iconName: "trash-outline",
+      onConfirm: () => deleteProduct(product),
+    });
+  }, [deleteProduct]);
+
   if (loading) {
     return (
       <SafeAreaView style={s.safe}>
@@ -527,7 +554,7 @@ export default function HomeTab() {
                 </Text>
               </View>
               <TouchableOpacity
-                onPress={() => { setStockSearchOpen(!stockSearchOpen); if (stockSearchOpen) setStockSearchQuery(""); }}
+                onPress={() => { if (stockSearchOpen) { closeStockSearch(); } else { setStockSearchOpen(true); } }}
                 style={s.stockIconBtn}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
@@ -548,7 +575,7 @@ export default function HomeTab() {
                   autoCorrect={false}
                 />
                 {stockSearchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setStockSearchQuery("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <TouchableOpacity onPress={() => handleStockSearchChange("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                     <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
                   </TouchableOpacity>
                 )}
@@ -593,7 +620,7 @@ export default function HomeTab() {
                           <Text style={isActive ? s.toggleTextOn : s.toggleTextOff}>{isActive ? "Active" : "Off"}</Text>
                         )}
                       </TouchableOpacity>
-                      <TouchableOpacity onPress={() => deleteProduct(p)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <TouchableOpacity onPress={() => confirmDeleteProduct(p)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                         <Ionicons name="trash-outline" size={15} color={colors.error + "80"} />
                       </TouchableOpacity>
                     </View>
