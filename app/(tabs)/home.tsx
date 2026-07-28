@@ -41,6 +41,7 @@ import {
 import { isStoreApproved } from "../../lib/storeApproval";
 import { notificationService } from "../../lib/notifications";
 import { useSmartPoll } from "../../lib/useSmartPoll";
+import { apiClient } from "../../lib/api-client";
 
 const API_BASE = config.API_BASE;
 const SELECTED_STORE_KEY = "selected_store_id";
@@ -70,6 +71,7 @@ export default function HomeTab() {
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [approvedBanner, setApprovedBanner] = useState(false);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const approvedBannerAnim = useRef(new Animated.Value(0)).current;
   const approvalPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -254,6 +256,32 @@ export default function HomeTab() {
     }, [fetchActiveOrderCount])
   );
 
+  const fetchUnreadNotificationCount = useCallback(async () => {
+    if (!session?.token) return;
+    try {
+      const res = await apiClient.get<Array<{ is_read: boolean }>>(
+        "/store-owner/notifications",
+        { Authorization: `Bearer ${session.token}` }
+      );
+      const notifications = Array.isArray(res.data) ? res.data : [];
+      setUnreadNotificationCount(notifications.filter((n) => !n.is_read).length);
+    } catch {
+      // Non-fatal — bell keeps its last known count.
+    }
+  }, [session?.token]);
+
+  useSmartPoll(fetchUnreadNotificationCount, {
+    intervalMs: 15_000,
+    slowIntervalMs: 30_000,
+    enabled: !!session?.token,
+  });
+
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchUnreadNotificationCount();
+    }, [fetchUnreadNotificationCount])
+  );
+
   // Single source of truth for "should we be here at all" — reacts to
   // is_approved flipping to false regardless of what caused the refresh
   // (this poll, the stores realtime subscription, a manual action's own
@@ -418,9 +446,21 @@ export default function HomeTab() {
               <Text style={s.greeting}>Hello, {firstName}</Text>
               <Text style={s.storeName}>{selectedStore?.name || "My Store"}</Text>
             </View>
-            <TouchableOpacity onPress={() => router.push("/profile")} style={s.avatarBtn}>
-              <Text style={s.avatarText}>{firstName.charAt(0).toUpperCase()}</Text>
-            </TouchableOpacity>
+            <View style={s.headerActions}>
+              <TouchableOpacity onPress={() => router.push("/notification-inbox")} style={s.bellBtn}>
+                <Ionicons name="notifications-outline" size={22} color={colors.textPrimary} />
+                {unreadNotificationCount > 0 && (
+                  <View style={s.bellBadge}>
+                    <Text style={s.bellBadgeText}>
+                      {unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => router.push("/profile")} style={s.avatarBtn}>
+                <Text style={s.avatarText}>{firstName.charAt(0).toUpperCase()}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* ── Approval success banner ───────────────────────────── */}
@@ -620,6 +660,21 @@ const s = StyleSheet.create({
     borderWidth: 1.5, borderColor: colors.primary + "25",
   },
   avatarText: { fontSize: 18, fontWeight: "700", color: colors.primary },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  bellBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: colors.primaryBg,
+    alignItems: "center", justifyContent: "center",
+    borderWidth: 1.5, borderColor: colors.primary + "25",
+  },
+  bellBadge: {
+    position: "absolute", top: 4, right: 4,
+    minWidth: 16, height: 16, borderRadius: 8,
+    backgroundColor: colors.error,
+    alignItems: "center", justifyContent: "center",
+    paddingHorizontal: 3,
+  },
+  bellBadgeText: { fontSize: 9, fontWeight: "700", color: "#FFFFFF" },
 
   // Stats
   statsRow: { flexDirection: "row", gap: TILE_GAP, marginBottom: spacing.xl },
