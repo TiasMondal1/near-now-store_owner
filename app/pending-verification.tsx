@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  Animated,
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -51,11 +50,6 @@ export default function PendingVerificationScreen() {
   const { checking, store, approved, refresh } = useStoreApprovalGate("require-pending");
   const [documents, setDocuments] = useState<VerificationDocument[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
-  }, []);
 
   const loadDocuments = useCallback(async () => {
     if (!store?.id) {
@@ -145,7 +139,7 @@ export default function PendingVerificationScreen() {
     <SafeAreaView style={styles.safe}>
       <Stack.Screen options={{ animation: "fade" }} />
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <Animated.View style={{ opacity: fadeAnim }}>
+        <View>
           <VerificationNavBar active="status" />
 
           <View style={styles.hero}>
@@ -261,7 +255,7 @@ export default function PendingVerificationScreen() {
             <Ionicons name="log-out-outline" size={18} color={colors.error} />
             <Text style={styles.logoutText}>Logout</Text>
           </TouchableOpacity>
-        </Animated.View>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );

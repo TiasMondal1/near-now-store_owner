@@ -20,7 +20,8 @@ import * as ImagePicker from "expo-image-picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { Stack, useLocalSearchParams, router } from "expo-router";
-import { getSession, saveSession } from "../session";
+import { clearSession, getSession, saveSession } from "../session";
+import { notificationService } from "../lib/notifications";
 import { config } from "../lib/config";
 import { fetchPlaceAutocomplete, fetchPlaceLatLng, type PlacePrediction } from "../lib/googlePlaces";
 import { coalesceEmail, isPlausibleEmail, normalizeSignupEmail } from "../lib/emailForApi";
@@ -79,14 +80,29 @@ export default function StoreOwnerSignupScreen() {
   // branch), so a session existing with no `phone` param already means
   // signup is done. Shows the submitted details read-only instead of the
   // full editable map/address form.
-  const [viewOnly, setViewOnly] = useState(false);
+  //
+  // `phone` (route param) is available synchronously, so viewOnly is
+  // decided on the very first render instead of waiting on an async session
+  // check — that's what let Documents/Status render instantly while this
+  // screen still sat behind a blank spinner. Seeded from the shared store
+  // cache (appCache.ts's peekStores, already warm if the shopkeeper hit
+  // Documents/Status first this session) the same way, so store name/address
+  // also appear immediately; only the owner's own name/phone/email (session
+  // data, not in that cache) fill in a moment later without blocking the
+  // rest of the page.
+  const cachedStore = !phone ? peekStores()?.[0] ?? null : null;
+  const [viewOnly, setViewOnly] = useState(!phone);
   const [loadingExisting, setLoadingExisting] = useState(false);
-  const [existingStore, setExistingStore] = useState<CachedStore | null>(null);
+  const [existingStore, setExistingStore] = useState<CachedStore | null>(cachedStore);
   const [ownerName2, setOwnerName2] = useState(""); // read-only display copies, kept separate from the editable form's own state above
   const [ownerPhone, setOwnerPhone] = useState("");
   const [ownerEmail, setOwnerEmail] = useState("");
   const [ownerImageUri, setOwnerImageUri] = useState<string | null>(null);
   const [uploadingOwnerImage, setUploadingOwnerImage] = useState(false);
+  // Set only on the fresh (pre-signup) form — there's no account/store yet to
+  // attach the photo to, so the actual upload is deferred until handleNext
+  // succeeds and a real user id exists (see there for the upload call).
+  const [pendingOwnerImageUri, setPendingOwnerImageUri] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -95,24 +111,33 @@ export default function StoreOwnerSignupScreen() {
 
       if (phone) return; // fresh from OTP verify — editable mode, nothing else to load
       const session = await getSession();
-      if (!session?.token) return;
+      if (!session?.token) {
+        setViewOnly(false);
+        return;
+      }
 
       setViewOnly(true);
       setOwnerName2(session.user?.name || "");
       setOwnerPhone(session.user?.phone || "");
       setOwnerEmail(session.user?.email || "");
 
-      setLoadingExisting(true);
+      // Only show a blocking spinner if nothing was available from cache —
+      // otherwise the page already has real content on screen and this call
+      // just refreshes it in the background.
+      if (!cachedStore) setLoadingExisting(true);
       try {
         const cached = peekStores();
         const stores = cached?.length ? cached : await fetchStoresCached(session.token, session.user?.id);
         if (stores[0]) setExistingStore(stores[0]);
       } catch {
-        // non-fatal — screen still shows whatever session info it already has
+        // non-fatal — screen still shows whatever session/cache info it already has
       } finally {
         setLoadingExisting(false);
       }
     })();
+    // `cachedStore` is intentionally read only once at mount to decide
+    // whether to show a spinner, not re-evaluated reactively.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phone]);
 
   const patchExistingStore = async (fields: Record<string, string>) => {
@@ -139,12 +164,22 @@ export default function StoreOwnerSignupScreen() {
       quality: 0.85,
     });
     if (result.canceled || !result.assets[0]) return;
+    const uri = result.assets[0].uri;
+
+    if (!viewOnly) {
+      // Fresh, pre-signup form — no account/store exists yet to upload
+      // against. Just preview it locally; handleNext uploads it for real
+      // once signup succeeds and a user id exists.
+      setPendingOwnerImageUri(uri);
+      setOwnerImageUri(uri);
+      return;
+    }
+
     const session = await getSession();
     if (!session?.user?.id) {
       Alert.alert("Can't upload yet", "Your session is still loading — try again in a moment.");
       return;
     }
-    const uri = result.assets[0].uri;
     setOwnerImageUri(uri);
     setUploadingOwnerImage(true);
     try {
@@ -159,6 +194,21 @@ export default function StoreOwnerSignupScreen() {
     } finally {
       setUploadingOwnerImage(false);
     }
+  };
+
+  const handleLogout = () => {
+    Alert.alert("Logout", "Are you sure you want to logout?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Logout",
+        style: "destructive",
+        onPress: async () => {
+          await notificationService.unregister();
+          await clearSession();
+          router.replace("/landing");
+        },
+      },
+    ]);
   };
 
   // ── Search state ─────────────────────────────────────────────────────────────
@@ -408,6 +458,33 @@ export default function StoreOwnerSignupScreen() {
           email: sessionEmail || undefined,
         },
       });
+
+      // Best-effort, fire-and-forget — a photo picked before the account
+      // existed gets uploaded and attached to the just-created store now
+      // that a real user id/token exists. Doesn't block navigation; if it
+      // fails, the owner can still add it later from Details or Profile.
+      if (pendingOwnerImageUri) {
+        (async () => {
+          try {
+            const uploadRes = await uploadOwnerImage(json.user.id, pendingOwnerImageUri);
+            if (!uploadRes.ok) return;
+            await AsyncStorage.setItem(OWNER_IMAGE_KEY, uploadRes.url);
+            const stores = await fetchStoresCached(json.token, json.user.id);
+            const newStore = stores[0];
+            if (newStore?.id) {
+              await fetch(`${API_BASE}/store-owner/stores/${newStore.id}`, {
+                method: "PATCH",
+                headers: { Authorization: `Bearer ${json.token}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ owner_image_url: uploadRes.url }),
+              });
+              clearStoreCache();
+            }
+          } catch {
+            /* non-fatal */
+          }
+        })();
+      }
+
       router.replace("/registration-success");
     } catch (e: any) {
       const msg = e?.message ?? String(e);
@@ -505,6 +582,11 @@ export default function StoreOwnerSignupScreen() {
                   Name, store name, and address can&apos;t be changed here. Once you&apos;re verified, update them from your Profile page.
                 </Text>
               </View>
+
+              <TouchableOpacity style={viewOnlyStyles.logoutBtn} onPress={handleLogout} activeOpacity={0.85}>
+                <Ionicons name="log-out-outline" size={18} color={colors.error} />
+                <Text style={viewOnlyStyles.logoutText}>Logout</Text>
+              </TouchableOpacity>
             </View>
           )}
         </ScrollView>
@@ -538,6 +620,33 @@ export default function StoreOwnerSignupScreen() {
                 {mapsEnabled
                   ? "Pan the map to drop the pin on your shop entrance, pick a search suggestion, or use the current-location button. Then fill in your address below."
                   : "Enter your store address below. Add EXPO_PUBLIC_GOOGLE_MAPS_API_KEY to your .env (dev) or build env (release) to enable the map, suggestions, and GPS."}
+              </Text>
+            </View>
+
+            <View style={{ alignItems: "center", marginBottom: spacing.lg }}>
+              <TouchableOpacity
+                style={viewOnlyStyles.avatarTouch}
+                onPress={pickOwnerImage}
+                disabled={uploadingOwnerImage}
+                activeOpacity={0.8}
+              >
+                {uploadingOwnerImage ? (
+                  <View style={viewOnlyStyles.avatar}>
+                    <ActivityIndicator color={colors.primary} />
+                  </View>
+                ) : ownerImageUri ? (
+                  <Image source={{ uri: ownerImageUri }} style={viewOnlyStyles.avatar} />
+                ) : (
+                  <View style={viewOnlyStyles.avatar}>
+                    <Ionicons name="person" size={32} color={colors.primary} />
+                  </View>
+                )}
+                <View style={viewOnlyStyles.camBadge}>
+                  <Ionicons name="camera" size={12} color="#fff" />
+                </View>
+              </TouchableOpacity>
+              <Text style={viewOnlyStyles.avatarHint}>
+                {ownerImageUri ? "Tap to change your photo" : "Add your photo (optional)"}
               </Text>
             </View>
 
@@ -1124,4 +1233,17 @@ const viewOnlyStyles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   lockNoteText: { flex: 1, fontSize: 12, color: colors.textSecondary, lineHeight: 18 },
+  logoutBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    borderWidth: 1.5,
+    borderColor: colors.error + "35",
+    borderRadius: radius.lg,
+    paddingVertical: 14,
+    marginTop: spacing.md,
+    backgroundColor: colors.error + "06",
+  },
+  logoutText: { color: colors.error, fontSize: 15, fontWeight: "700" },
 });

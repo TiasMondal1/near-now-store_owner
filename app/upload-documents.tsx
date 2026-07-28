@@ -123,16 +123,7 @@ export default function UploadDocumentsScreen() {
   const [uploadingStoreImage, setUploadingStoreImage] = useState(false);
   const [removingImageId, setRemovingImageId] = useState<string | null>(null);
 
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(20)).current;
   const sheetAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 380, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 380, useNativeDriver: true }),
-    ]).start();
-  }, []);
 
   const loadDocuments = async (authToken: string, targetStoreId: string) => {
     const docs = await fetchVerificationDocuments(authToken, targetStoreId);
@@ -556,16 +547,9 @@ export default function UploadDocumentsScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <Stack.Screen options={{ animation: "fade" }} />
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
-          <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
-        </TouchableOpacity>
-        <Text style={styles.title}>Upload Documents</Text>
-        <View style={{ width: 40 }} />
-      </View>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
+        <View>
           <VerificationNavBar active="documents" />
 
           <View style={styles.infoBanner}>
@@ -811,7 +795,7 @@ export default function UploadDocumentsScreen() {
               </>
             )}
           </TouchableOpacity>
-        </Animated.View>
+        </View>
       </ScrollView>
 
       <Modal
@@ -889,25 +873,6 @@ export default function UploadDocumentsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    backgroundColor: colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.md,
-    backgroundColor: colors.background,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  title: { fontSize: 18, fontWeight: "800", color: colors.textPrimary, letterSpacing: -0.3 },
   scroll: { padding: spacing.lg, paddingBottom: 60 },
 
   infoBanner: {
