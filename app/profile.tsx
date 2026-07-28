@@ -71,6 +71,12 @@ export default function ProfileScreen() {
   // same-screen submit, resolving just after) from clobbering fresher state.
   const pendingChangeRequestRef = useRef<typeof pendingChangeRequest>(null);
   const pendingRequestFetchSeq = useRef(0);
+  // Guards hydrate()'s owner-image reconciliation against a background
+  // store refresh that was issued before a photo upload but resolves after
+  // it — without this, the stale response's (still-empty) owner_image_url
+  // would revert the just-uploaded photo back to null. Set the instant an
+  // upload succeeds; checked against the timestamp a given fetch was issued.
+  const ownerImageUploadedAtRef = useRef(0);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(24)).current;
@@ -102,10 +108,11 @@ export default function ProfileScreen() {
         // Genuinely refetch — fetchStoresCached would just hand back the same
         // cached array while it's still warm (up to 10 min), so a stale
         // name/address shown from cache would never self-correct here.
+        const fetchIssuedAt = Date.now();
         forceFetchStores(s.token, s.user?.id).then(async (fresh) => {
           if (!cancelled && fresh.length) {
             const freshPicked = (selId && fresh.find(s => s.id === selId)) || fresh[0];
-            await hydrate(freshPicked);
+            await hydrate(freshPicked, fetchIssuedAt);
           }
         });
       } else {
@@ -158,10 +165,11 @@ export default function ProfileScreen() {
       if (prev && !nextRequest) {
         clearStoreCache();
         try {
+          const fetchIssuedAt = Date.now();
           const fresh = await fetchStoresCached(s.token, s.user?.id);
           if (seq !== pendingRequestFetchSeq.current) return;
           const fresher = fresh.find((st: any) => st.id === storeId);
-          if (fresher) await hydrate(fresher);
+          if (fresher) await hydrate(fresher, fetchIssuedAt);
         } catch {
           /* non-fatal */
         }
@@ -204,7 +212,14 @@ export default function ProfileScreen() {
     { intervalMs: 20_000, enabled: !!pendingChangeRequest && !!storeInfo?.id }
   );
 
-  const hydrate = async (store: any) => {
+  // fetchIssuedAt: when the store data behind this hydrate() call was
+  // actually fetched (Date.now() captured right before the request went
+  // out), if known. Used to skip the owner-image reconciliation below when
+  // a photo was uploaded more recently than that — otherwise a background
+  // refresh issued before the upload but resolving after it would revert
+  // the just-uploaded photo back to null (the fetch's response reflects the
+  // pre-upload state, not a real removal).
+  const hydrate = async (store: any, fetchIssuedAt?: number) => {
     setStoreInfo(store);
     setStoreName(store.name ?? "");
     setStoreAddress(store.address ?? "");
@@ -213,13 +228,16 @@ export default function ProfileScreen() {
     // in AsyncStorage — the cache is only ever a same-mount-tick optimistic
     // placeholder (set at line ~95, before this runs) and, on a shared
     // device, can otherwise still be a *previous* shopkeeper's photo left
-    // over from before logout. This is the authoritative reconciliation.
-    if (store.owner_image_url) {
-      setOwnerImageUri(store.owner_image_url);
-      AsyncStorage.setItem(OWNER_IMAGE_KEY, store.owner_image_url).catch(() => {});
-    } else {
-      setOwnerImageUri(null);
-      AsyncStorage.removeItem(OWNER_IMAGE_KEY).catch(() => {});
+    // over from before logout. This is the authoritative reconciliation —
+    // unless a newer local upload already supersedes this particular fetch.
+    if (fetchIssuedAt === undefined || ownerImageUploadedAtRef.current <= fetchIssuedAt) {
+      if (store.owner_image_url) {
+        setOwnerImageUri(store.owner_image_url);
+        AsyncStorage.setItem(OWNER_IMAGE_KEY, store.owner_image_url).catch(() => {});
+      } else {
+        setOwnerImageUri(null);
+        AsyncStorage.removeItem(OWNER_IMAGE_KEY).catch(() => {});
+      }
     }
     // Optimistic placeholder only, for the first paint before the real
     // gallery loads — never overwrites an already-loaded list.
@@ -322,6 +340,10 @@ export default function ProfileScreen() {
       return;
     }
     const uri = result.assets[0].uri;
+    // Marked the instant the local preview is set (not just on upload
+    // success) so a background hydrate() already in flight can't revert even
+    // this optimistic state — see ownerImageUploadedAtRef's declaration.
+    ownerImageUploadedAtRef.current = Date.now();
     setOwnerImageUri(uri);
     setUploadingOwnerImage(true);
     try {
