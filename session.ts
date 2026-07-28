@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { clearStoreCache } from "./lib/appCache";
+import { OWNER_IMAGE_KEY } from "./lib/storage";
 import { setShopkeeperAuthToken } from "./lib/supabase";
 
 const SESSION_KEY = "nearandnow_session";
@@ -111,6 +112,11 @@ export async function clearSession() {
       SESSION_KEY,
       "inventory_persisted_state",
       "inventory_products_cache",
+      // Same cross-account leak class as the store cache above: without this,
+      // a different shopkeeper logging in on the same device would see the
+      // previous shopkeeper's cached owner photo rendered as their own
+      // "locked" verification image until the next network refetch.
+      OWNER_IMAGE_KEY,
     ]),
   ]);
 }
@@ -132,7 +138,7 @@ export async function guardFreshInstall(): Promise<void> {
       // SecureStore/Keychain data can outlive an app's own AsyncStorage wipe).
       await Promise.all([
         SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {}),
-        AsyncStorage.multiRemove([SESSION_KEY, "inventory_persisted_state", "inventory_products_cache"]),
+        AsyncStorage.multiRemove([SESSION_KEY, "inventory_persisted_state", "inventory_products_cache", OWNER_IMAGE_KEY]),
       ]);
       _memSession = null;
       setShopkeeperAuthToken(null);

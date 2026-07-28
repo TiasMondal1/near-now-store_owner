@@ -121,6 +121,18 @@ export default function StoreOwnerSignupScreen() {
       if (stores[0]) {
         setExistingStore(stores[0]);
         await persistStores(stores);
+        // Always prefer the server's own owner_image_url over whatever's
+        // cached in AsyncStorage from line ~134 above — that read is only a
+        // same-mount-tick optimistic placeholder and, on a shared device,
+        // can otherwise still be a *previous* shopkeeper's photo left over
+        // from before logout. This is the authoritative reconciliation.
+        if (stores[0].owner_image_url) {
+          setOwnerImageUri(stores[0].owner_image_url);
+          AsyncStorage.setItem(OWNER_IMAGE_KEY, stores[0].owner_image_url).catch(() => {});
+        } else {
+          setOwnerImageUri(null);
+          AsyncStorage.removeItem(OWNER_IMAGE_KEY).catch(() => {});
+        }
       } else {
         setStoreLoadFailed(true);
       }

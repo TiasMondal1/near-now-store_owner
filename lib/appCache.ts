@@ -17,6 +17,7 @@ export type CachedStore = {
   delivery_radius_km: number;
   is_active: boolean;
   is_approved?: boolean;
+  owner_image_url?: string | null;
 };
 
 let _mem: { stores: CachedStore[]; ts: number } | null = null;

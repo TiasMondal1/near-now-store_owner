@@ -23,13 +23,12 @@ import { notificationService } from "../lib/notifications";
 import { colors, radius, spacing, shadows } from "../lib/theme";
 import { fetchStoresCached, forceFetchStores, peekStores, clearStoreCache } from "../lib/appCache";
 import { config } from "../lib/config";
-import { uploadStoreImage, uploadOwnerImage } from "../lib/storage";
+import { uploadStoreImage, uploadOwnerImage, OWNER_IMAGE_KEY } from "../lib/storage";
 import { useRequireStoreApproval } from "../lib/useRequireStoreApproval";
 import { fetchVerificationDocuments, REQUIRED_DOC_KEYS } from "../lib/verificationDocuments";
 import { useSmartPoll } from "../lib/useSmartPoll";
 
 const API_BASE = config.API_BASE;
-const OWNER_IMAGE_KEY = "owner_profile_image_url";
 const MAX_STORE_IMAGES = 5;
 
 export default function ProfileScreen() {
@@ -210,6 +209,18 @@ export default function ProfileScreen() {
     setStoreName(store.name ?? "");
     setStoreAddress(store.address ?? "");
     setStorePhone(store.phone ?? "");
+    // Always prefer the server's own owner_image_url over whatever's cached
+    // in AsyncStorage — the cache is only ever a same-mount-tick optimistic
+    // placeholder (set at line ~95, before this runs) and, on a shared
+    // device, can otherwise still be a *previous* shopkeeper's photo left
+    // over from before logout. This is the authoritative reconciliation.
+    if (store.owner_image_url) {
+      setOwnerImageUri(store.owner_image_url);
+      AsyncStorage.setItem(OWNER_IMAGE_KEY, store.owner_image_url).catch(() => {});
+    } else {
+      setOwnerImageUri(null);
+      AsyncStorage.removeItem(OWNER_IMAGE_KEY).catch(() => {});
+    }
     // Optimistic placeholder only, for the first paint before the real
     // gallery loads — never overwrites an already-loaded list.
     if (store.image_url) {
@@ -295,6 +306,10 @@ export default function ProfileScreen() {
   };
 
   const pickOwnerImage = async () => {
+    // Same one-time-lock as store-owner-signup.tsx/billing-info.tsx — this is
+    // a KYC/identity photo, not an ordinary profile picture, and should never
+    // be silently replaceable post-verification from any screen.
+    if (ownerImageUri) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsEditing: true,
@@ -475,9 +490,9 @@ export default function ProfileScreen() {
             {/* Owner avatar pinned to bottom-left of banner */}
             <View style={styles.ownerAvatarAnchor}>
               <TouchableOpacity
-                activeOpacity={editing ? 0.7 : 1}
+                activeOpacity={editing && !ownerImageUri ? 0.7 : 1}
                 onPress={editing ? pickOwnerImage : undefined}
-                disabled={uploadingOwnerImage}
+                disabled={uploadingOwnerImage || !!ownerImageUri}
                 style={styles.ownerAvatarTouch}
               >
                 {uploadingOwnerImage ? (
@@ -491,7 +506,11 @@ export default function ProfileScreen() {
                     <Text style={styles.ownerAvatarText}>{ownerInitial}</Text>
                   </View>
                 )}
-                {editing && !uploadingOwnerImage && (
+                {/* Camera badge only shows before the photo is first set —
+                    once uploaded it's a locked KYC photo, same as
+                    store-owner-signup.tsx/billing-info.tsx, so no edit
+                    affordance is shown here at all afterward. */}
+                {editing && !uploadingOwnerImage && !ownerImageUri && (
                   <View style={styles.ownerCamBadge}>
                     <Ionicons name="camera" size={11} color="#fff" />
                   </View>
