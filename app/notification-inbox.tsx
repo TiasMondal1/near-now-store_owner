@@ -166,7 +166,7 @@ export default function NotificationInboxScreen() {
           loadError ? (
             <View style={st.empty}>
               <Ionicons name="alert-circle-outline" size={48} color={colors.error} />
-              <Text style={st.emptyTitle}>Couldn't load notifications</Text>
+              <Text style={st.emptyTitle}>Couldn&apos;t load notifications</Text>
               <Text style={st.emptyText}>Check your connection and try again.</Text>
               <TouchableOpacity
                 style={st.retryBtn}
