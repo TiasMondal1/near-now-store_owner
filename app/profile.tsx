@@ -455,7 +455,13 @@ export default function ProfileScreen() {
   }
 
   const ownerInitial = (session?.user?.name || "?").charAt(0).toUpperCase();
-  const docsComplete = uploadedDocCount >= REQUIRED_DOC_KEYS.length;
+  // Store photos count toward the same "required for verification" total as
+  // the 7 business documents — see the matching fix in upload-documents.tsx
+  // and pending-verification.tsx (this screen already loads `storeImages`
+  // for its own gallery, so no extra fetch is needed here).
+  const TOTAL_REQUIRED = REQUIRED_DOC_KEYS.length + MAX_STORE_IMAGES;
+  const uploadedCount = uploadedDocCount + storeImages.length;
+  const docsComplete = uploadedCount >= TOTAL_REQUIRED;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -644,14 +650,14 @@ export default function ProfileScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.docNavTitle}>Upload Shop Documents</Text>
                   <Text style={styles.docNavDesc}>
-                    Aadhaar (front/back), PAN (front/back), Trade License, GST & FSSAI
+                    Aadhaar (front/back), PAN (front/back), Trade License, GST, FSSAI & store photos
                   </Text>
                 </View>
               </View>
               <View style={styles.docNavRight}>
                 <View style={[styles.docCountBadge, docsComplete && styles.docCountBadgeComplete]}>
                   <Text style={[styles.docCountText, docsComplete && styles.docCountTextComplete]}>
-                    {uploadedDocCount}/{REQUIRED_DOC_KEYS.length}
+                    {uploadedCount}/{TOTAL_REQUIRED}
                   </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />

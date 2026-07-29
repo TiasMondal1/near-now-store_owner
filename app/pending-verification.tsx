@@ -15,6 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { clearSession, getSession } from "../session";
 import { notificationService } from "../lib/notifications";
 import { colors, radius, spacing, shadows } from "../lib/theme";
+import { config } from "../lib/config";
 import { useStoreApprovalGate } from "../lib/useStoreApprovalGate";
 import {
   fetchVerificationDocuments,
@@ -22,6 +23,13 @@ import {
   type VerificationDocument,
 } from "../lib/verificationDocuments";
 import VerificationNavBar from "../components/VerificationNavBar";
+
+const API_BASE = config.API_BASE;
+// Keep in sync with MAX_STORE_IMAGES in app/upload-documents.tsx — this
+// screen's "required documents" count previously only tallied the 7
+// business documents, so it kept reading "7/7" even when the shopkeeper
+// still hadn't added any of their 5 required store photos.
+const MAX_STORE_IMAGES = 5;
 
 const DOC_LABELS: Record<(typeof REQUIRED_DOC_KEYS)[number], string> = {
   aadhaar_front: "Aadhaar Card (Front)",
@@ -49,6 +57,7 @@ export default function PendingVerificationScreen() {
   // the hook's own `refresh`/`approved` so there's exactly one fetch path.
   const { checking, store, approved, refresh } = useStoreApprovalGate("require-pending");
   const [documents, setDocuments] = useState<VerificationDocument[]>([]);
+  const [storeImageCount, setStoreImageCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadDocuments = useCallback(async () => {
@@ -66,16 +75,40 @@ export default function PendingVerificationScreen() {
     }
   }, [store?.id]);
 
+  // Same store_images table/endpoint app/upload-documents.tsx's gallery
+  // uses — this screen only needs the count, not the photos themselves.
+  const loadStoreImageCount = useCallback(async () => {
+    if (!store?.id) {
+      setStoreImageCount(0);
+      return;
+    }
+    try {
+      const session = await getSession();
+      if (!session?.token) return;
+      const res = await fetch(`${API_BASE}/store-owner/stores/${store.id}/images`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.success) {
+        setStoreImageCount((json.images ?? []).length);
+      }
+    } catch {
+      /* non-fatal — keep showing whatever we last had */
+    }
+  }, [store?.id]);
+
   // Re-fetch on mount and every time this screen regains focus (e.g. coming
   // back from upload-documents after a re-upload), instead of waiting up to
   // 30s for the poll — a just-fixed rejection should clear immediately.
   useFocusEffect(
     useCallback(() => {
       void loadDocuments();
-    }, [loadDocuments])
+      void loadStoreImageCount();
+    }, [loadDocuments, loadStoreImageCount])
   );
 
-  const uploadedCount = documents.filter((d) => !!d.url).length;
+  const TOTAL_REQUIRED = REQUIRED_DOC_KEYS.length + MAX_STORE_IMAGES;
+  const uploadedCount = documents.filter((d) => !!d.url).length + storeImageCount;
   const rejectedDocs = documents.filter((d) => d.status === "rejected");
 
   const checkApprovalNow = useCallback(async (silent = false) => {
@@ -83,12 +116,13 @@ export default function PendingVerificationScreen() {
     try {
       await refresh();
       await loadDocuments();
+      await loadStoreImageCount();
     } catch {
       if (!silent) Alert.alert("Could not refresh", "Check your connection and try again.");
     } finally {
       if (!silent) setRefreshing(false);
     }
-  }, [refresh, loadDocuments]);
+  }, [refresh, loadDocuments, loadStoreImageCount]);
 
   // Show the "Store Verified" alert exactly once, when the gate hook's own
   // `approved` state flips to true — navigation only ever happens from the
@@ -132,7 +166,7 @@ export default function PendingVerificationScreen() {
     );
   }
 
-  const docsComplete = uploadedCount >= REQUIRED_DOC_KEYS.length;
+  const docsComplete = uploadedCount >= TOTAL_REQUIRED;
   const currentStep = docsComplete ? 1 : 0;
 
   return (
@@ -185,7 +219,7 @@ export default function PendingVerificationScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.stepLabel, active && styles.stepLabelActive]}>{step.label}</Text>
                     {active && step.key === "upload" && (
-                      <Text style={styles.stepHint}>Upload all 7 required shop documents</Text>
+                      <Text style={styles.stepHint}>Upload all {TOTAL_REQUIRED} required items — documents and store photos</Text>
                     )}
                     {active && step.key === "review" && (
                       <Text style={styles.stepHint}>Our admins are reviewing your submission</Text>
@@ -201,12 +235,12 @@ export default function PendingVerificationScreen() {
               <Text style={styles.sectionTitle}>Required documents</Text>
               <View style={[styles.countBadge, docsComplete && styles.countBadgeDone]}>
                 <Text style={[styles.countText, docsComplete && styles.countTextDone]}>
-                  {uploadedCount}/{REQUIRED_DOC_KEYS.length}
+                  {uploadedCount}/{TOTAL_REQUIRED}
                 </Text>
               </View>
             </View>
             <Text style={styles.docsDesc}>
-              Upload Aadhaar (front & back), PAN (front & back), Trade License, GST Certificate, and FSSAI License to continue verification.
+              Upload Aadhaar (front & back), PAN (front & back), Trade License, GST Certificate, FSSAI License, and {MAX_STORE_IMAGES} store photos to continue verification.
             </Text>
 
             {rejectedDocs.map((doc) => (

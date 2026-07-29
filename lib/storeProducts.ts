@@ -35,12 +35,12 @@ export async function getStoreProductsFromDb(
 
 /** Fetch master_products from DB (for names and units). Falls back to empty if not available. */
 export async function getMasterProductsFromDb(): Promise<
-  Array<{ id: string; name: string; unit?: string }>
+  Array<{ id: string; name: string; unit?: string; is_loose?: boolean }>
 > {
   if (!supabase) return [];
-  const { data, error } = await supabase.from("master_products").select("id, name, unit");
+  const { data, error } = await supabase.from("master_products").select("id, name, unit, is_loose");
   if (error) return [];
-  return (data ?? []) as Array<{ id: string; name: string; unit?: string }>;
+  return (data ?? []) as Array<{ id: string; name: string; unit?: string; is_loose?: boolean }>;
 }
 
 // Cached join select — avoids re-probing both variants on every call.
@@ -54,8 +54,9 @@ function mapJoinRows(rows: any[], select: string): StoreProductWithName[] {
     const fromMaster = rel?.name ?? (rel && (rel as any).name);
     const resolvedName = (fromMaster && String(fromMaster).trim()) || row.name || "Product";
     const unitFromMaster = rel?.unit ? String(rel.unit) : "";
+    const isLoose = rel?.is_loose === true;
     const { master_products, master_product, ...rest } = row;
-    return { ...rest, name: resolvedName, unit: unitFromMaster } as StoreProductWithName;
+    return { ...rest, name: resolvedName, unit: unitFromMaster, is_loose: isLoose } as StoreProductWithName;
   });
 }
 
@@ -69,8 +70,8 @@ export async function getStoreProductsWithNames(
   if (!supabase) return [];
 
   const allSelects = [
-    "id, store_id, master_product_id, is_active, name, phone, master_products(name, unit)",
-    "id, store_id, master_product_id, is_active, name, phone, master_product(name, unit)",
+    "id, store_id, master_product_id, is_active, name, phone, master_products(name, unit, is_loose)",
+    "id, store_id, master_product_id, is_active, name, phone, master_product(name, unit, is_loose)",
   ];
   // Put the cached winner first so we skip the probe on warm calls
   const toTry = _workingJoinSelect
@@ -97,11 +98,13 @@ export async function getStoreProductsWithNames(
   ]);
   const nameByMasterId: Record<string, string> = {};
   const unitByMasterId: Record<string, string> = {};
+  const isLooseByMasterId: Record<string, boolean> = {};
   masterList.forEach((m) => {
     const n = (m as any).name ?? (m as any).product_name;
     const nameStr = n && String(n).trim() ? String(n).trim() : "";
     if (nameStr) nameByMasterId[String(m.id)] = nameStr;
     if (m.unit && String(m.unit).trim()) unitByMasterId[String(m.id)] = String(m.unit).trim();
+    isLooseByMasterId[String(m.id)] = m.is_loose === true;
   });
   return storeRows.map((row) => {
     const key = String(row.master_product_id);
@@ -112,14 +115,15 @@ export async function getStoreProductsWithNames(
       ...row,
       name: name && String(name).trim() ? String(name).trim() : "Product",
       unit: unitByMasterId[key] || "",
+      is_loose: isLooseByMasterId[key] === true,
     } as StoreProductWithName;
   });
 }
 
-/** Your stock list: id, name, unit, is_active for main page */
+/** Your stock list: id, name, unit, is_active, is_loose for main page */
 export async function getStockListFromDb(
   storeId: string
-): Promise<Array<{ id: string; name: string; unit: string; storeProductId: string; is_active: boolean; quantity: number }>> {
+): Promise<Array<{ id: string; name: string; unit: string; storeProductId: string; is_active: boolean; quantity: number; is_loose: boolean }>> {
   const rows = await getStoreProductsWithNames(storeId);
   return rows.map((r) => {
     const rawName = r.name ?? (r as any).product_name;
@@ -131,6 +135,7 @@ export async function getStockListFromDb(
       unit: (r as any).unit || "",
       is_active: r.is_active !== false,
       quantity: r.quantity ?? 0,
+      is_loose: (r as any).is_loose === true,
     };
   });
 }

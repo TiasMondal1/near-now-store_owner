@@ -119,7 +119,15 @@ export default function UploadDocumentsScreen() {
   // hero banner already uses; kept editable in both places (per explicit
   // instruction) rather than moved, so a shopkeeper can manage it from
   // whichever screen they're already on.
+  //
+  // Picked photos are staged in pendingStoreImages (local uris only) instead
+  // of uploading immediately — this mirrors how document files work
+  // (pendingFiles + saveOne), gives the gallery a genuine "Ready to save"
+  // state before the shopkeeper commits, and means the "Save" button below
+  // actually does something for photos instead of them silently having
+  // already been persisted with no on-screen confirmation either way.
   const [storeImages, setStoreImages] = useState<{ id: string; url: string }[]>([]);
+  const [pendingStoreImages, setPendingStoreImages] = useState<string[]>([]);
   const [uploadingStoreImage, setUploadingStoreImage] = useState(false);
   const [removingImageId, setRemovingImageId] = useState<string | null>(null);
 
@@ -158,7 +166,7 @@ export default function UploadDocumentsScreen() {
       Alert.alert("Can't upload yet", "Store info is still loading — try again in a moment.");
       return;
     }
-    if (storeImages.length >= MAX_STORE_IMAGES) {
+    if (storeImages.length + pendingStoreImages.length >= MAX_STORE_IMAGES) {
       Alert.alert("Gallery full", `A store can have at most ${MAX_STORE_IMAGES} photos. Remove one before adding another.`);
       return;
     }
@@ -170,27 +178,44 @@ export default function UploadDocumentsScreen() {
     });
     if (result.canceled || !result.assets[0]) return;
 
-    const uri = result.assets[0].uri;
+    // Stage only — the actual upload + save happens when "Save Documents &
+    // Photos" is pressed (see saveStoreImages), so the gallery gets a real
+    // "Ready to save" state instead of the photo silently already being
+    // persisted the moment it's picked.
+    setPendingStoreImages((prev) => [...prev, result.assets[0].uri]);
+  };
+
+  const removePendingStoreImage = (index: number) => {
+    setPendingStoreImages((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  /** Uploads + saves every staged photo. Returns false (with an alert already shown) on failure. */
+  const saveStoreImages = async (): Promise<boolean> => {
+    if (!storeId || pendingStoreImages.length === 0) return true;
     setUploadingStoreImage(true);
     try {
-      const res = await uploadStoreImage(storeId, uri);
-      if (!res.ok) {
-        Alert.alert("Upload failed", res.error);
-        return;
-      }
       const session = await getSession();
-      if (!session?.token) return;
-      const addRes = await fetch(`${API_BASE}/store-owner/stores/${storeId}/images`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ url: res.url }),
-      });
-      const addJson = await addRes.json().catch(() => null);
-      if (!addRes.ok || !addJson?.success) {
-        Alert.alert("Error", addJson?.error || "Photo uploaded but couldn't be added to your gallery.");
-        return;
+      if (!session?.token) return false;
+      for (const uri of pendingStoreImages) {
+        const res = await uploadStoreImage(storeId, uri);
+        if (!res.ok) {
+          Alert.alert("Upload failed", res.error);
+          return false;
+        }
+        const addRes = await fetch(`${API_BASE}/store-owner/stores/${storeId}/images`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ url: res.url }),
+        });
+        const addJson = await addRes.json().catch(() => null);
+        if (!addRes.ok || !addJson?.success) {
+          Alert.alert("Error", addJson?.error || "Photo uploaded but couldn't be added to your gallery.");
+          return false;
+        }
       }
+      setPendingStoreImages([]);
       await loadStoreImages(storeId);
+      return true;
     } finally {
       setUploadingStoreImage(false);
     }
@@ -489,14 +514,30 @@ export default function UploadDocumentsScreen() {
         showSuspendedNotice();
         return;
       }
-      const allApproved = DOCUMENT_SECTIONS.every((s) => results[s.key]?.status === "approved");
-      const anySubmitted = DOCUMENT_SECTIONS.every((s) => !!results[s.key]?.url);
+
+      // storeImages/pendingStoreImages below are captured from this render's
+      // closure — setState calls inside saveStoreImages() won't be reflected
+      // in these variables until the next render, so the post-save total is
+      // computed from what we know *will* be true on success (old saved
+      // count + however many were staged), not by re-reading state.
+      const pendingCountBeforeSave = pendingStoreImages.length;
+      const imagesOk = await saveStoreImages();
+      if (!imagesOk) return; // alert already shown inside saveStoreImages
+
+      const allDocsApproved = DOCUMENT_SECTIONS.every((s) => results[s.key]?.status === "approved");
+      const allDocsSubmitted = DOCUMENT_SECTIONS.every((s) => !!results[s.key]?.url);
+      const totalImagesAfterSave = storeImages.length + pendingCountBeforeSave;
+      const imagesRemaining = MAX_STORE_IMAGES - totalImagesAfterSave;
+      const imagesComplete = imagesRemaining <= 0;
+
       Alert.alert(
         "Saved",
-        allApproved
-          ? "All documents are approved."
-          : anySubmitted
-            ? "Your documents have been submitted. Our team will verify them before your shop goes live."
+        allDocsApproved && imagesComplete
+          ? "All documents and store photos are saved."
+          : allDocsSubmitted
+            ? imagesComplete
+              ? "Your documents have been submitted. Our team will verify them before your shop goes live."
+              : `Your documents have been submitted. Add ${imagesRemaining} more store photo${imagesRemaining !== 1 ? "s" : ""} to complete your gallery.`
             : "Upload the remaining documents to complete verification."
       );
     } catch {
@@ -506,9 +547,21 @@ export default function UploadDocumentsScreen() {
     }
   };
 
-  const uploadedCount = DOCUMENT_SECTIONS.filter((d) => serverDocs[d.key]?.url).length;
+  const TOTAL_REQUIRED = DOCUMENT_SECTIONS.length + MAX_STORE_IMAGES;
+  const uploadedCount = DOCUMENT_SECTIONS.filter((d) => serverDocs[d.key]?.url).length + storeImages.length;
 
   type StatusBadge = { icon: React.ComponentProps<typeof Ionicons>["name"]; text: string; color: string };
+
+  // Mirrors computeGroupStatus below: a picked-but-unsaved photo shows
+  // "Ready to save" (same as an unsaved document file), and once every
+  // photo is confirmed on the server it flips to "Saved" — previously this
+  // section had no status indicator of either kind.
+  const computeImagesStatus = (): StatusBadge | null => {
+    if (pendingStoreImages.length > 0) return { icon: "checkmark-circle-outline", text: "Ready to save", color: colors.primary };
+    if (storeImages.length > 0) return { icon: "checkmark-circle", text: "Saved", color: colors.success };
+    return null;
+  };
+  const imagesStatus = computeImagesStatus();
 
   const computeGroupStatus = (group: DocGroup): StatusBadge | null => {
     const rejectedAny = group.members.some(
@@ -559,7 +612,7 @@ export default function UploadDocumentsScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.infoTitle}>Shop verification</Text>
               <Text style={styles.infoText}>
-                Upload clear documents. {uploadedCount} of {DOCUMENT_SECTIONS.length} submitted.
+                Upload clear documents and store photos. {uploadedCount} of {TOTAL_REQUIRED} submitted.
               </Text>
             </View>
           </View>
@@ -571,8 +624,18 @@ export default function UploadDocumentsScreen() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.sectionTitle}>Store Images</Text>
-                <Text style={styles.sectionSubtitle}>{storeImages.length}/{MAX_STORE_IMAGES} added — shown to customers</Text>
+                <Text style={styles.sectionSubtitle}>
+                  {imagesStatus ? imagesStatus.text : `${storeImages.length}/${MAX_STORE_IMAGES} added — shown to customers`}
+                </Text>
               </View>
+              {imagesStatus && (
+                <View style={[styles.statusBadge, { backgroundColor: imagesStatus.color + "12" }]}>
+                  <Ionicons name={imagesStatus.icon} size={14} color={imagesStatus.color} />
+                  <Text style={[styles.statusBadgeText, { color: imagesStatus.color }]}>
+                    {imagesStatus.text}
+                  </Text>
+                </View>
+              )}
             </View>
             <View style={styles.sectionBody}>
               <View style={styles.galleryStrip}>
@@ -597,7 +660,22 @@ export default function UploadDocumentsScreen() {
                     </TouchableOpacity>
                   </View>
                 ))}
-                {storeImages.length < MAX_STORE_IMAGES && (
+                {pendingStoreImages.map((uri, idx) => (
+                  <View key={`pending-${uri}`} style={styles.galleryThumbWrap}>
+                    <Image source={{ uri }} style={[styles.galleryThumb, styles.galleryThumbPending]} />
+                    <View style={styles.galleryPendingBadge}>
+                      <Text style={styles.galleryPendingBadgeText}>Ready to save</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.galleryRemoveBadge}
+                      onPress={() => removePendingStoreImage(idx)}
+                      disabled={uploadingStoreImage}
+                    >
+                      <Ionicons name="close" size={12} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                {storeImages.length + pendingStoreImages.length < MAX_STORE_IMAGES && (
                   <TouchableOpacity
                     style={styles.galleryAddBtn}
                     onPress={pickStoreImage}
@@ -615,7 +693,11 @@ export default function UploadDocumentsScreen() {
                   </TouchableOpacity>
                 )}
               </View>
-              <Text style={styles.formatHintText}>You can also manage these from your Profile page.</Text>
+              <Text style={styles.formatHintText}>
+                {pendingStoreImages.length > 0
+                  ? "Tap \"Save Documents & Photos\" below to upload these photos."
+                  : "You can also manage these from your Profile page."}
+              </Text>
             </View>
           </View>
 
@@ -791,7 +873,7 @@ export default function UploadDocumentsScreen() {
             ) : (
               <>
                 <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                <Text style={styles.saveBtnText}>Save Documents</Text>
+                <Text style={styles.saveBtnText}>Save Documents & Photos</Text>
               </>
             )}
           </TouchableOpacity>
@@ -994,6 +1076,19 @@ const styles = StyleSheet.create({
     paddingVertical: 1,
   },
   galleryCoverBadgeText: { color: "#fff", fontSize: 9, fontWeight: "700" },
+  galleryThumbPending: { opacity: 0.55 },
+  galleryPendingBadge: {
+    position: "absolute",
+    bottom: 4,
+    left: 4,
+    right: 4,
+    backgroundColor: colors.primary,
+    borderRadius: radius.xs,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    alignItems: "center",
+  },
+  galleryPendingBadgeText: { color: "#fff", fontSize: 8, fontWeight: "700" },
   galleryRemoveBadge: {
     position: "absolute",
     top: -6,

@@ -42,6 +42,17 @@ export function useStoreApprovalGate(mode: GateMode) {
   // otherwise, fail open only after trust has been established.
   const hasConfirmedApprovedRef = useRef(isStoreApproved(cachedStore));
 
+  // supabase.channel(topic) returns the SAME channel object if one with that
+  // topic already exists (see RealtimeClient.channel() in @supabase/realtime-js).
+  // This hook is mounted by every tab screen (home, settings, orders,
+  // pending-verification, ...), and Expo Router keeps prior stack screens
+  // mounted underneath — so topic'ing purely by store.id let a second mounted
+  // screen's effect fetch back the first screen's already-subscribed channel
+  // and call `.on()` on it, which throws "cannot add postgres_changes
+  // callbacks ... after subscribe()". A per-instance id keeps every mounted
+  // screen's channel topic unique so they never collide.
+  const instanceIdRef = useRef(Math.random().toString(36).slice(2));
+
   const evaluate = useCallback(async () => {
     const session = await getSession();
     if (!session?.token) {
@@ -126,7 +137,7 @@ export function useStoreApprovalGate(mode: GateMode) {
   useEffect(() => {
     if (!store?.id || !supabase) return;
     const channel = supabase
-      .channel(`store-approval-gate:${store.id}`)
+      .channel(`store-approval-gate:${store.id}:${instanceIdRef.current}`)
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${store.id}` },

@@ -54,6 +54,86 @@ const TILE_WIDTH = (Dimensions.get("window").width - spacing.lg * 2 - TILE_GAP) 
 
 type StoreRow = CachedStore;
 
+type StockProduct = { id: string; name: string; unit?: string; storeProductId?: string; is_active?: boolean; quantity?: number; is_loose?: boolean };
+
+/** One of the two "Your Stock" boxes — packaged/branded products, or loose products. */
+function StockSection({
+  title,
+  icon,
+  products,
+  togglingProductId,
+  storeActive,
+  onToggle,
+  onDeleteOne,
+  onDeleteAll,
+  emptyText,
+}: {
+  title: string;
+  icon: React.ComponentProps<typeof Ionicons>["name"];
+  products: StockProduct[];
+  togglingProductId: string | null;
+  storeActive: boolean;
+  onToggle: (p: StockProduct) => void;
+  onDeleteOne: (p: StockProduct) => void;
+  onDeleteAll: () => void;
+  emptyText: string;
+}) {
+  return (
+    <View style={s.stockSection}>
+      <View style={s.stockSectionHeader}>
+        <View style={s.stockSectionTitleRow}>
+          <Ionicons name={icon} size={14} color={colors.textSecondary} />
+          <Text style={s.stockSectionTitle}>{title}</Text>
+          <View style={s.stockSectionBadge}>
+            <Text style={s.stockSectionBadgeText}>{products.length}</Text>
+          </View>
+        </View>
+        {products.length > 0 && (
+          <TouchableOpacity onPress={onDeleteAll} style={s.stockSectionDeleteAllBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="trash-outline" size={13} color={colors.error} />
+            <Text style={s.stockSectionDeleteAllText}>Delete all</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      {products.length === 0 ? (
+        <Text style={s.stockSectionEmptyText}>{emptyText}</Text>
+      ) : (
+        <FlatList
+          data={products}
+          keyExtractor={(p) => p.id}
+          scrollEnabled={false}
+          contentContainerStyle={{ gap: spacing.sm }}
+          renderItem={({ item: p }) => {
+            const isActive = p.is_active !== false;
+            return (
+              <View style={s.productRow}>
+                <View style={[s.productDot, { backgroundColor: isActive ? colors.success : colors.border }]} />
+                <Text style={s.productName} numberOfLines={1}>{p.name}</Text>
+                {p.unit ? <Text style={s.productUnit}>{p.unit}</Text> : null}
+                <TouchableOpacity
+                  style={[s.toggleBtn, isActive ? s.toggleBtnOn : s.toggleBtnOff]}
+                  onPress={() => onToggle(p)}
+                  disabled={togglingProductId === p.id || !storeActive}
+                  activeOpacity={0.75}
+                >
+                  {togglingProductId === p.id ? (
+                    <ActivityIndicator size="small" color={isActive ? "#fff" : colors.textTertiary} />
+                  ) : (
+                    <Text style={isActive ? s.toggleTextOn : s.toggleTextOff}>{isActive ? "Active" : "Off"}</Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => onDeleteOne(p)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="trash-outline" size={15} color={colors.error + "80"} />
+                </TouchableOpacity>
+              </View>
+            );
+          }}
+        />
+      )}
+    </View>
+  );
+}
+
 /* ─── Quick-action tile data ─────────────────────────────────────────────── */
 const TILES = [
   { key: "orders", label: "Orders", desc: "View & manage", icon: "receipt-outline" as const, route: "/(tabs)/previous-orders" },
@@ -77,7 +157,7 @@ export default function HomeTab() {
   const approvalPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [storeProducts, setStoreProducts] = useState<
-    Array<{ id: string; name: string; unit?: string; storeProductId?: string; is_active?: boolean; quantity?: number }>
+    Array<{ id: string; name: string; unit?: string; storeProductId?: string; is_active?: boolean; quantity?: number; is_loose?: boolean }>
   >([]);
   const [storeProductsLoading, setStoreProductsLoading] = useState(true);
   const [togglingProductId, setTogglingProductId] = useState<string | null>(null);
@@ -124,6 +204,12 @@ export default function HomeTab() {
   }, [storeProducts, debouncedSearchQuery]);
 
   const activeProductCount = useMemo(() => storeProducts.filter((p) => p.is_active !== false).length, [storeProducts]);
+
+  const packagedProducts = useMemo(() => filteredStoreProducts.filter((p) => !p.is_loose), [filteredStoreProducts]);
+  const looseProducts = useMemo(() => filteredStoreProducts.filter((p) => p.is_loose), [filteredStoreProducts]);
+  const searchActive = debouncedSearchQuery.trim().length > 0;
+  const packagedEmptyText = searchActive ? `No packaged products match "${stockSearchQuery.trim()}"` : "No packaged products yet";
+  const looseEmptyText = searchActive ? `No loose products match "${stockSearchQuery.trim()}"` : "No loose products added yet";
   // Was hardcoded to 0 — the dashboard always showed "Waiting for orders..."
   // even with real orders in progress. "Active" here means accepted-but-not-yet-
   // handed-off allocations, matching previous-orders.tsx's own activeAllocations
@@ -378,7 +464,7 @@ export default function HomeTab() {
     try {
       const fromDb = await getStockListFromDb(selectedStore.id);
       if (Array.isArray(fromDb) && fromDb.length > 0) {
-        setStoreProducts(fromDb.map((item: any) => ({ id: item.id, name: (item.name || item.product_name || "").trim() || "Product", unit: item.unit || "", storeProductId: item.storeProductId, is_active: item.is_active !== false })));
+        setStoreProducts(fromDb.map((item: any) => ({ id: item.id, name: (item.name || item.product_name || "").trim() || "Product", unit: item.unit || "", storeProductId: item.storeProductId, is_active: item.is_active !== false, is_loose: item.is_loose === true })));
         return;
       }
       setStoreProducts([]);
@@ -453,6 +539,29 @@ export default function HomeTab() {
       onConfirm: () => deleteProduct(product),
     });
   }, [deleteProduct]);
+
+  const deleteAllInSection = useCallback(async (section: Array<{ id: string; storeProductId?: string }>) => {
+    if (!supabase) return;
+    const ids = section.map((p) => p.storeProductId).filter(Boolean) as string[];
+    if (ids.length === 0) return;
+    const { error } = await supabase.from("products").update({ deleted_at: new Date().toISOString() }).in("id", ids);
+    if (error) { Alert.alert("Error", "Failed to remove products."); return; }
+    const removedIds = new Set(section.map((p) => p.id));
+    setStoreProducts((prev) => prev.filter((p) => !removedIds.has(p.id)));
+    await AsyncStorage.multiRemove(CACHE_KEYS);
+  }, []);
+
+  const confirmDeleteAllInSection = useCallback((section: Array<{ id: string; storeProductId?: string }>, sectionLabel: string) => {
+    if (section.length === 0) return;
+    setConfirmModal({
+      title: `Delete all ${sectionLabel.toLowerCase()}?`,
+      message: `${section.length} product${section.length !== 1 ? "s" : ""} will be removed from your store. This can't be undone from here.`,
+      confirmText: "Delete All",
+      confirmColor: colors.error,
+      iconName: "trash-outline",
+      onConfirm: () => deleteAllInSection(section),
+    });
+  }, [deleteAllInSection]);
 
   if (loading) {
     return (
@@ -593,40 +702,31 @@ export default function HomeTab() {
                 </Text>
               </View>
             ) : (
-              <FlatList
-                data={filteredStoreProducts}
-                keyExtractor={(p) => p.id}
-                scrollEnabled={false}
-                contentContainerStyle={{ gap: spacing.sm }}
-                ListEmptyComponent={
-                  <Text style={s.noMatchText}>No products match "{stockSearchQuery.trim()}"</Text>
-                }
-                renderItem={({ item: p }) => {
-                  const isActive = p.is_active !== false;
-                  return (
-                    <View style={s.productRow}>
-                      <View style={[s.productDot, { backgroundColor: isActive ? colors.success : colors.border }]} />
-                      <Text style={s.productName} numberOfLines={1}>{p.name}</Text>
-                      {p.unit ? <Text style={s.productUnit}>{p.unit}</Text> : null}
-                      <TouchableOpacity
-                        style={[s.toggleBtn, isActive ? s.toggleBtnOn : s.toggleBtnOff]}
-                        onPress={() => toggleProductActive(p)}
-                        disabled={togglingProductId === p.id || !selectedStore?.is_active}
-                        activeOpacity={0.75}
-                      >
-                        {togglingProductId === p.id ? (
-                          <ActivityIndicator size="small" color={isActive ? "#fff" : colors.textTertiary} />
-                        ) : (
-                          <Text style={isActive ? s.toggleTextOn : s.toggleTextOff}>{isActive ? "Active" : "Off"}</Text>
-                        )}
-                      </TouchableOpacity>
-                      <TouchableOpacity onPress={() => confirmDeleteProduct(p)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                        <Ionicons name="trash-outline" size={15} color={colors.error + "80"} />
-                      </TouchableOpacity>
-                    </View>
-                  );
-                }}
-              />
+              <>
+                <StockSection
+                  title="Packaged Products"
+                  icon="pricetag-outline"
+                  products={packagedProducts}
+                  togglingProductId={togglingProductId}
+                  storeActive={!!selectedStore?.is_active}
+                  onToggle={toggleProductActive}
+                  onDeleteOne={confirmDeleteProduct}
+                  onDeleteAll={() => confirmDeleteAllInSection(packagedProducts, "packaged products")}
+                  emptyText={packagedEmptyText}
+                />
+                <View style={s.stockSectionDivider} />
+                <StockSection
+                  title="Loose Products"
+                  icon="scale-outline"
+                  products={looseProducts}
+                  togglingProductId={togglingProductId}
+                  storeActive={!!selectedStore?.is_active}
+                  onToggle={toggleProductActive}
+                  onDeleteOne={confirmDeleteProduct}
+                  onDeleteAll={() => confirmDeleteAllInSection(looseProducts, "loose products")}
+                  emptyText={looseEmptyText}
+                />
+              </>
             )}
           </View>
 
@@ -762,6 +862,21 @@ const s = StyleSheet.create({
   },
   searchInput: { flex: 1, paddingVertical: 10, fontSize: 14, color: colors.textPrimary },
 
+  // Stock sections (Packaged / Loose boxes)
+  stockSection: { gap: spacing.sm },
+  stockSectionDivider: { height: 1, backgroundColor: colors.borderLight, marginVertical: spacing.lg },
+  stockSectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.xs },
+  stockSectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1 },
+  stockSectionTitle: { fontSize: 13, fontWeight: "700", color: colors.textPrimary },
+  stockSectionBadge: {
+    backgroundColor: colors.background, borderRadius: radius.full,
+    paddingHorizontal: 7, paddingVertical: 1, borderWidth: 1, borderColor: colors.border,
+  },
+  stockSectionBadgeText: { fontSize: 10, fontWeight: "700", color: colors.textSecondary },
+  stockSectionDeleteAllBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4 },
+  stockSectionDeleteAllText: { fontSize: 11, fontWeight: "600", color: colors.error },
+  stockSectionEmptyText: { fontSize: 13, color: colors.textTertiary, paddingVertical: spacing.md },
+
   // Product list
   productRow: {
     flexDirection: "row", alignItems: "center", gap: spacing.sm,
@@ -781,7 +896,6 @@ const s = StyleSheet.create({
   emptyStock: { alignItems: "center", paddingVertical: spacing.xxl, gap: spacing.sm },
   emptyStockTitle: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
   emptyStockText: { fontSize: 13, color: colors.textTertiary, textAlign: "center" },
-  noMatchText: { fontSize: 13, color: colors.textTertiary, textAlign: "center", paddingVertical: spacing.lg },
 
   // Modal
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },

@@ -100,6 +100,8 @@ export default function InventoryScreen() {
   const [allCategories, setAllCategories] = useState<string[]>([]);
   const categoryScrollRef = useRef<ScrollView>(null);
   const categoryOffsetsRef = useRef<Record<number, number>>({});
+  const listRef = useRef<FlatList>(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
 
   useEffect(() => {
     getMasterProductCategories().then((cats) => {
@@ -539,6 +541,7 @@ export default function InventoryScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <FlatList
+        ref={listRef}
         data={sorted}
         renderItem={renderItem}
         keyExtractor={keyExtractor}
@@ -551,7 +554,19 @@ export default function InventoryScreen() {
         updateCellsBatchingPeriod={50}
         initialNumToRender={15}
         windowSize={10}
+        onScroll={(e) => setShowScrollTop(e.nativeEvent.contentOffset.y > 400)}
+        scrollEventThrottle={16}
       />
+      {showScrollTop && (
+        <TouchableOpacity
+          style={styles.scrollTopBtn}
+          onPress={() => listRef.current?.scrollToOffset({ offset: 0, animated: true })}
+          activeOpacity={0.85}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="arrow-up" size={20} color={colors.surface} />
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 }
@@ -559,6 +574,22 @@ export default function InventoryScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   container: { padding: spacing.lg },
+  scrollTopBtn: {
+    position: "absolute",
+    right: spacing.lg,
+    bottom: spacing.xl,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 5,
+  },
   headerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
   backBtn: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 8, paddingRight: 12 },
   backBtnText: { color: colors.primary, fontSize: 15, fontWeight: "600" },
