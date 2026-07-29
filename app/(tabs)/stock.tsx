@@ -732,7 +732,17 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
                 <Ionicons name="images" size={16} color="#fff" />
                 <Text style={styles.addCustomImgOverlayText}>Gallery</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.addCustomImgOverlayBtn, styles.addCustomImgOverlayBtnDanger]} onPress={() => { setImageUri(null); setImageBase64(null); }}>
+              <TouchableOpacity
+                style={[styles.addCustomImgOverlayBtn, styles.addCustomImgOverlayBtnDanger]}
+                onPress={() => Alert.alert(
+                  "Remove photo?",
+                  "You'll need to retake or pick another photo to continue.",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Remove", style: "destructive", onPress: () => { setImageUri(null); setImageBase64(null); } },
+                  ],
+                )}
+              >
                 <Ionicons name="trash" size={16} color="#fff" />
                 <Text style={styles.addCustomImgOverlayText}>Remove</Text>
               </TouchableOpacity>

@@ -47,6 +47,7 @@ export default function NotificationInboxScreen() {
   const [notifications, setNotifications] = useState<AppNotification[]>(cachedNotifications ?? []);
   const [loading, setLoading] = useState(!cachedNotifications);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   const fetchNotifications = useCallback(async (authToken: string, silent = false) => {
     try {
@@ -54,14 +55,20 @@ export default function NotificationInboxScreen() {
       const res = await fetch(`${config.API_BASE}/store-owner/notifications`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
+      if (!res.ok) throw new Error(`Notifications fetch failed: ${res.status}`);
       const data = await res.json();
-      const list: AppNotification[] = Array.isArray(data) ? data : [];
-      setNotifications(list);
-      await persistNotifications(list);
+      if (!Array.isArray(data)) throw new Error('Notifications fetch returned an unexpected shape');
+      setNotifications(data);
+      setLoadError(false);
+      await persistNotifications(data);
     } catch {
       // Non-fatal when we already have cached data showing — only clobber
-      // to empty on a genuinely cold, cache-less first load.
+      // to empty on a genuinely cold, cache-less first load. Either way,
+      // flag the failure so the empty state can tell "nothing to show" apart
+      // from "couldn't load" and offer a retry instead of looking identical
+      // to a genuinely empty inbox.
       if (!cachedNotifications) setNotifications([]);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -156,11 +163,25 @@ export default function NotificationInboxScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
         }
         ListEmptyComponent={
-          <View style={st.empty}>
-            <Ionicons name="notifications-outline" size={48} color={colors.textTertiary} />
-            <Text style={st.emptyTitle}>No notifications yet</Text>
-            <Text style={st.emptyText}>New order alerts will appear here</Text>
-          </View>
+          loadError ? (
+            <View style={st.empty}>
+              <Ionicons name="alert-circle-outline" size={48} color={colors.error} />
+              <Text style={st.emptyTitle}>Couldn't load notifications</Text>
+              <Text style={st.emptyText}>Check your connection and try again.</Text>
+              <TouchableOpacity
+                style={st.retryBtn}
+                onPress={() => token && fetchNotifications(token)}
+              >
+                <Text style={st.retryBtnText}>Try Again</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={st.empty}>
+              <Ionicons name="notifications-outline" size={48} color={colors.textTertiary} />
+              <Text style={st.emptyTitle}>No notifications yet</Text>
+              <Text style={st.emptyText}>New order alerts will appear here</Text>
+            </View>
+          )
         }
         renderItem={({ item }) => (
           <TouchableOpacity
@@ -219,4 +240,9 @@ const st = StyleSheet.create({
   empty: { marginTop: 80, alignItems: 'center', gap: 10, padding: 32 },
   emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
   emptyText: { fontSize: 13, color: colors.textSecondary, textAlign: 'center' },
+  retryBtn: {
+    backgroundColor: colors.error, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+    marginTop: spacing.md, borderRadius: radius.md,
+  },
+  retryBtnText: { color: '#fff', fontWeight: '600' },
 });
