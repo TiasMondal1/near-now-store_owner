@@ -4,25 +4,28 @@ import { config } from "./config";
 
 const POLL_MS = 20_000;
 
-export type ProfileChangeOutcome = {
+export type ReviewOutcome = {
   notificationId: string;
+  kind: "profile_change" | "product_submission";
   approved: boolean;
   rejectionReason: string | null;
+  productName?: string;
 };
 
 /**
- * Surfaces the outcome of an admin-reviewed profile-change request as a
- * blocking, app-wide acknowledgment — not just a banner on the Profile
- * screen. Approving/rejecting a request already persists an unread
- * `profile_change_reviewed` row to the shared `notifications` table (see
- * notification.service.ts); this polls that same store, independent of
- * whatever screen is currently focused, so the shopkeeper can't miss the
- * outcome by being on Home/Orders/Settings when the admin reviews it.
+ * Surfaces the outcome of an admin-reviewed request as a blocking, app-wide
+ * acknowledgment — not just a banner on whichever screen triggered it.
+ * Started as profile-change-only (store name/address/phone edits); now also
+ * covers custom-product submissions (add.product.tsx / stock.tsx), since
+ * both persist an unread `*_reviewed` row to the shared `notifications`
+ * table the same way (see notification.service.ts's
+ * notifyProfileChangeReviewed / notifyProductSubmissionReviewed) and both
+ * need the same "can't miss it by being on a different tab" guarantee.
  * Marking the notification read (via dismiss()) is what "acknowledging"
  * means here — until then, the same outcome keeps reappearing on every poll.
  */
-export function useProfileChangeOutcomeGate() {
-  const [outcome, setOutcome] = useState<ProfileChangeOutcome | null>(null);
+export function useReviewOutcomeGate() {
+  const [outcome, setOutcome] = useState<ReviewOutcome | null>(null);
   const dismissingRef = useRef(false);
 
   useEffect(() => {
@@ -38,12 +41,26 @@ export function useProfileChangeOutcomeGate() {
         });
         const data = await res.json().catch(() => null);
         if (cancelled || !Array.isArray(data)) return;
-        const next = data.find((n: any) => n.type === "profile_change_reviewed");
-        if (next) {
+
+        const profileChange = data.find((n: any) => n.type === "profile_change_reviewed");
+        const productSubmission = data.find((n: any) => n.type === "product_submission_reviewed");
+        const next = profileChange ?? productSubmission;
+        if (!next) return;
+
+        if (next === profileChange) {
           setOutcome({
             notificationId: next.id,
+            kind: "profile_change",
             approved: !!next.data?.approved,
             rejectionReason: next.data?.rejectionReason ?? null,
+          });
+        } else {
+          setOutcome({
+            notificationId: next.id,
+            kind: "product_submission",
+            approved: !!next.data?.approved,
+            rejectionReason: next.data?.rejectionReason ?? null,
+            productName: next.data?.productName,
           });
         }
       } catch {

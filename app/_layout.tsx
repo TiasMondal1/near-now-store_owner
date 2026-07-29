@@ -3,8 +3,8 @@ import { Text, View, TouchableOpacity, StyleSheet } from "react-native";
 import { Stack } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { errorHandler, wrapRootComponent } from "../lib/error-handler";
-import { useProfileChangeOutcomeGate } from "../lib/useProfileChangeOutcomeGate";
-import ProfileChangeOutcomeModal from "../components/ProfileChangeOutcomeModal";
+import { useReviewOutcomeGate } from "../lib/useReviewOutcomeGate";
+import ReviewOutcomeModal from "../components/ReviewOutcomeModal";
 
 // ─── Crash/error monitoring (Sentry) ──────────────────────────────────────────
 // Safe no-op when EXPO_PUBLIC_SENTRY_DSN is not configured.
@@ -103,7 +103,7 @@ function RootLayout() {
   // profile-change outcome is surfaced no matter which tab/screen the
   // shopkeeper happens to be on when the admin reviews it — a screen-local
   // banner would only ever be seen if they happened to be on that screen.
-  const { outcome, dismiss } = useProfileChangeOutcomeGate();
+  const { outcome, dismiss } = useReviewOutcomeGate();
 
   return (
     <SafeAreaProvider>
@@ -116,7 +116,7 @@ function RootLayout() {
             gestureEnabled: route.name !== "(tabs)",
           })}
         />
-        <ProfileChangeOutcomeModal outcome={outcome} onDismiss={dismiss} />
+        <ReviewOutcomeModal outcome={outcome} onDismiss={dismiss} />
       </ErrorBoundary>
     </SafeAreaProvider>
   );

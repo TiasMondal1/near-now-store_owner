@@ -500,9 +500,15 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
   const [discountedPrice, setDiscountedPrice] = useState("");
   const [minQty, setMinQty] = useState("");
   const [maxQty, setMaxQty] = useState("");
-  const [isActive, setIsActive] = useState(true);
-  const [rating, setRating] = useState("");
   const [saving, setSaving] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const s: any = await getSession();
+      setToken(s?.token ?? null);
+    })();
+  }, []);
 
   const UNITS = ["kg", "g", "l", "ml", "pcs", "units", "bunch", "pack"];
 
@@ -587,41 +593,37 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
       return;
     }
 
-    let ratingVal = 4;
-    if (rating.trim() !== "") {
-      ratingVal = Number(String(rating).replace(/,/g, "").trim());
-      if (!Number.isFinite(ratingVal) || ratingVal < 0 || ratingVal > 5) {
-        Alert.alert("Rating", "Rating must be between 0 and 5.");
-        return;
-      }
+    if (!token) {
+      Alert.alert("Not signed in", "Please log in again.");
+      return;
     }
 
     try {
       setSaving(true);
-      const result = await addCustomMasterProduct({
-        name: name.trim(),
-        brand,
-        category,
-        description: description.trim() || null,
-        image_url: imageUrl,
-        unit: unitStr,
-        base_price: base,
-        discounted_price: disc,
-        is_loose: isLoose,
-        min_quantity: minParsed,
-        max_quantity: maxParsed,
-        is_active: isActive,
-        rating: ratingVal,
-        rating_count: 0,
-      });
+      const result = await addCustomMasterProduct(
+        {
+          name: name.trim(),
+          brand,
+          category,
+          description: description.trim() || null,
+          image_url: imageUrl,
+          unit: unitStr,
+          base_price: base,
+          discounted_price: disc,
+          is_loose: isLoose,
+          min_quantity: minParsed,
+          max_quantity: maxParsed,
+        },
+        token
+      );
       if (!result.success) {
-        Alert.alert("Error", result.error || "Failed to add product.");
+        Alert.alert("Error", result.error || "Failed to submit product.");
         return;
       }
       onAdded?.();
       Alert.alert(
-        "Success",
-        "Product added to the catalog. Add it to your store from the Inventory tab when ready."
+        "Submitted for review",
+        "Your product has been sent to the admin team for review. You'll be notified once it's approved and it'll be added to your store automatically."
       );
       setName("");
       setBrand("");
@@ -638,8 +640,6 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
       setDiscountedPrice("");
       setMinQty("");
       setMaxQty("");
-      setIsActive(true);
-      setRating("");
     } finally {
       setSaving(false);
     }
@@ -654,7 +654,7 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.addCustomTitle}>Add Custom Product</Text>
-          <Text style={styles.addCustomSubtitle}>Adds to catalog. Use Inventory to add it to your store.</Text>
+          <Text style={styles.addCustomSubtitle}>Submitted for admin review before it's added to your store.</Text>
         </View>
       </View>
 
@@ -837,18 +837,6 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
         </View>
       </View>
 
-      {/* Section 6: Settings */}
-      <View style={[styles.addCustomSection, { marginBottom: 0 }]}>
-        <Text style={styles.addCustomSectionLabel}>SETTINGS</Text>
-        <View style={styles.addCustomSwitchRow}>
-          <View style={styles.addCustomSwitchTextCol}>
-            <Text style={styles.addCustomSwitchLabel}>Active on launch</Text>
-            <Text style={styles.addCustomSwitchHint}>Product will be visible to customers when your store is online.</Text>
-          </View>
-          <Switch value={isActive} onValueChange={setIsActive} trackColor={{ false: colors.border, true: colors.primary }} />
-        </View>
-      </View>
-
       <TouchableOpacity
         style={[styles.addCustomSubmit, saving && styles.addCustomSubmitDisabled]}
         onPress={addCustom}
@@ -860,7 +848,7 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
         ) : (
           <>
             <Ionicons name="checkmark-circle" size={18} color={colors.surface} />
-            <Text style={styles.addCustomSubmitText}>Add to Catalog</Text>
+            <Text style={styles.addCustomSubmitText}>Submit for Review</Text>
           </>
         )}
       </TouchableOpacity>

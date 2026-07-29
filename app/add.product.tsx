@@ -42,14 +42,17 @@ export default function AddCustomProductScreen() {
   const [discountedPrice, setDiscountedPrice] = useState("");
   const [minQty, setMinQty] = useState("");
   const [maxQty, setMaxQty] = useState("");
-  const [isActive, setIsActive] = useState(true);
-  const [rating, setRating] = useState("");
   const [saving, setSaving] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       const s: any = await getSession();
-      if (!s?.token) router.replace("/landing");
+      if (!s?.token) {
+        router.replace("/landing");
+        return;
+      }
+      setToken(s.token);
     })();
   }, []);
 
@@ -140,43 +143,39 @@ export default function AddCustomProductScreen() {
       return;
     }
 
-    let ratingVal = 4;
-    if (rating.trim() !== "") {
-      ratingVal = Number(String(rating).replace(/,/g, "").trim());
-      if (!Number.isFinite(ratingVal) || ratingVal < 0 || ratingVal > 5) {
-        Alert.alert("Rating", "Rating must be between 0 and 5.");
-        return;
-      }
+    if (!token) {
+      Alert.alert("Not signed in", "Please log in again.");
+      return;
     }
 
     try {
       setSaving(true);
 
-      const result = await addCustomMasterProduct({
-        name: name.trim(),
-        brand,
-        category,
-        description: description.trim() || null,
-        image_url: imageUrl,
-        unit: unitStr,
-        base_price: base,
-        discounted_price: disc,
-        is_loose: isLoose,
-        min_quantity: minParsed,
-        max_quantity: maxParsed,
-        is_active: isActive,
-        rating: ratingVal,
-        rating_count: 0,
-      });
+      const result = await addCustomMasterProduct(
+        {
+          name: name.trim(),
+          brand,
+          category,
+          description: description.trim() || null,
+          image_url: imageUrl,
+          unit: unitStr,
+          base_price: base,
+          discounted_price: disc,
+          is_loose: isLoose,
+          min_quantity: minParsed,
+          max_quantity: maxParsed,
+        },
+        token
+      );
 
       if (!result.success) {
-        Alert.alert("Error", result.error || "Failed to add product.");
+        Alert.alert("Error", result.error || "Failed to submit product.");
         return;
       }
 
       Alert.alert(
-        "Success",
-        "Product added to the catalog. Add it to your store from Inventory when you are ready."
+        "Submitted for review",
+        "Your product has been sent to the admin team for review. You'll be notified once it's approved and it'll be added to your store automatically."
       );
       setName("");
       setBrand("");
@@ -193,8 +192,6 @@ export default function AddCustomProductScreen() {
       setDiscountedPrice("");
       setMinQty("");
       setMaxQty("");
-      setIsActive(true);
-      setRating("");
     } finally {
       setSaving(false);
     }
@@ -208,8 +205,11 @@ export default function AddCustomProductScreen() {
         </TouchableOpacity>
         <View style={styles.headerText}>
           <Text style={styles.title}>Add Custom Product</Text>
-          <Text style={styles.subtitle}>Adds to catalog only — link to your store from Inventory</Text>
+          <Text style={styles.subtitle}>Submitted for admin review before it's added to your store</Text>
         </View>
+        <TouchableOpacity onPress={() => router.push("/product-submissions")} style={styles.myRequestsBtn}>
+          <Text style={styles.myRequestsBtnText}>My Submissions</Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -377,7 +377,7 @@ export default function AddCustomProductScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Order limits & visibility</Text>
+          <Text style={styles.cardTitle}>Order limits</Text>
           <Field
             label="Min quantity (optional)"
             value={minQty}
@@ -392,21 +392,6 @@ export default function AddCustomProductScreen() {
             keyboardType="decimal-pad"
             placeholder="Default 100"
           />
-          <Field
-            label="Rating (optional)"
-            value={rating}
-            onChange={setRating}
-            keyboardType="decimal-pad"
-            placeholder="0–5, default 4"
-          />
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>Product active</Text>
-            <Switch
-              value={isActive}
-              onValueChange={setIsActive}
-              trackColor={{ false: colors.border, true: colors.primary }}
-            />
-          </View>
         </View>
 
         <View style={{ height: 20 }} />
@@ -420,7 +405,7 @@ export default function AddCustomProductScreen() {
         {saving ? (
           <ActivityIndicator color={colors.surface} />
         ) : (
-          <Text style={styles.submitBtnText}>Add Custom Product</Text>
+          <Text style={styles.submitBtnText}>Submit for Review</Text>
         )}
       </TouchableOpacity>
     </SafeAreaView>
@@ -494,6 +479,15 @@ const styles = StyleSheet.create({
   headerText: { flex: 1 },
   title: { color: colors.textPrimary, fontSize: 20, fontWeight: "700" },
   subtitle: { color: colors.textTertiary, fontSize: 12, marginTop: 2 },
+  myRequestsBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceVariant,
+  },
+  myRequestsBtnText: { color: colors.textPrimary, fontSize: 12, fontWeight: "600" },
 
   scrollContent: { padding: spacing.lg },
 

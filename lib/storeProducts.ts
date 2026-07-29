@@ -205,40 +205,6 @@ export async function upsertStoreProduct(
   return { error: "No id returned after insert" };
 }
 
-const PG_UNIQUE_VIOLATION = "23505";
-
-/**
- * Ensures a row exists in public.categories (FK target for master_products.category).
- */
-export async function ensureCategoryExists(
-  categoryName: string
-): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
-  if (!supabase) return { ok: false, error: "Supabase not configured" };
-  const name = categoryName.trim();
-  if (!name) return { ok: false, error: "Category is required" };
-
-  const { data: existing, error: selErr } = await supabase
-    .from("categories")
-    .select("name")
-    .eq("name", name)
-    .maybeSingle();
-
-  if (selErr) return { ok: false, error: selErr.message };
-  if (existing?.name) return { ok: true, name: String(existing.name) };
-
-  const { error: insErr } = await supabase.from("categories").insert({
-    name,
-    display_order: 0,
-  });
-
-  if (insErr) {
-    if (insErr.code === PG_UNIQUE_VIOLATION) return { ok: true, name };
-    return { ok: false, error: insErr.message };
-  }
-
-  return { ok: true, name };
-}
-
 export type AddCustomMasterProductInput = {
   name: string;
   brand?: string;
@@ -253,10 +219,6 @@ export type AddCustomMasterProductInput = {
   is_loose: boolean;
   min_quantity?: number;
   max_quantity?: number;
-  is_active?: boolean;
-  /** 0–5; defaults to 4 if omitted */
-  rating?: number;
-  rating_count?: number;
 };
 
 /** Fallback if is_loose but unit is missing (use unitForLoosePricingBasis from the form when possible). */
@@ -282,17 +244,21 @@ export function formatMasterProductUnit(amount: number, unitSuffix: string): str
 }
 
 export type AddCustomMasterProductResult =
-  | { success: true; masterProductId: string }
+  | { success: true; submissionId: string }
   | { success: false; error: string };
 
 /**
- * Inserts public.master_products only (and creates category if missing).
- * Does not write to products — add to store inventory separately.
+ * Submits a custom product for admin review (public.product_submissions) via
+ * the backend — it is NOT written to master_products directly. An admin must
+ * approve it (supplying the HSN/GST fields this form never collects) before
+ * it becomes a real master_products row and is linked into this store's
+ * products. See backend/src/controllers/productSubmissions.controller.ts.
  */
 export async function addCustomMasterProduct(
-  input: AddCustomMasterProductInput
+  input: AddCustomMasterProductInput,
+  token: string
 ): Promise<AddCustomMasterProductResult> {
-  if (!supabase) return { success: false, error: "Supabase not configured" };
+  if (!token) return { success: false, error: "Not signed in" };
 
   const productName = input.name.trim();
   let unit = input.unit.trim();
@@ -335,23 +301,16 @@ export async function addCustomMasterProduct(
     return { success: false, error: "Max quantity must be ≥ min quantity" };
   }
 
-  let rating = input.rating ?? 4;
-  if (!Number.isFinite(rating) || rating < 0 || rating > 5) {
-    return { success: false, error: "Rating must be between 0 and 5" };
+  const category = input.category.trim();
+  if (!category) {
+    return { success: false, error: "Category is required" };
   }
-  const ratingCount =
-    input.rating_count !== undefined && Number.isFinite(input.rating_count)
-      ? Math.max(0, Math.floor(input.rating_count))
-      : 0;
-
-  const cat = await ensureCategoryExists(input.category);
-  if (!cat.ok) return { success: false, error: cat.error };
 
   const brandTrim = input.brand?.trim() ?? "";
   const descTrim = input.description?.trim() ?? "";
-  const insertRow = {
+  const submissionPayload = {
     name: productName,
-    category: cat.name,
+    category,
     brand: brandTrim || null,
     description: descTrim || null,
     image_url: img,
@@ -361,29 +320,25 @@ export async function addCustomMasterProduct(
     is_loose: Boolean(input.is_loose),
     min_quantity: minQ,
     max_quantity: maxQ,
-    rating,
-    rating_count: ratingCount,
-    is_active: input.is_active !== false,
   };
 
-  const { data: masterRow, error: masterErr } = await supabase
-    .from("master_products")
-    .insert(insertRow)
-    .select("id")
-    .single();
-
-  if (masterErr || !masterRow?.id) {
-    return {
-      success: false,
-      error: masterErr?.message ?? "Failed to create master product",
-    };
+  try {
+    const res = await fetch(`${config.API_BASE}/shopkeeper/product-submissions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(submissionPayload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.success) {
+      return { success: false, error: data?.error || "Failed to submit product for review" };
+    }
+    return { success: true, submissionId: String(data.submission.id) };
+  } catch (e: any) {
+    return { success: false, error: e?.message || "Network error while submitting product" };
   }
-
-  const masterId = String(masterRow.id);
-  return {
-    success: true,
-    masterProductId: masterId,
-  };
 }
 
 /**

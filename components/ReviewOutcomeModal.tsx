@@ -2,21 +2,38 @@ import React from "react";
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, radius, spacing } from "../lib/theme";
-import { ProfileChangeOutcome } from "../lib/useProfileChangeOutcomeGate";
+import { ReviewOutcome } from "../lib/useReviewOutcomeGate";
 
 interface Props {
-  outcome: ProfileChangeOutcome | null;
+  outcome: ReviewOutcome | null;
   onDismiss: () => void;
 }
 
+function titleFor(outcome: ReviewOutcome): string {
+  if (outcome.kind === "profile_change") {
+    return outcome.approved ? "Profile Change Approved" : "Profile Change Rejected";
+  }
+  return outcome.approved ? "Product Approved" : "Product Rejected";
+}
+
+function bodyFor(outcome: ReviewOutcome): string {
+  if (outcome.kind === "profile_change") {
+    return outcome.approved
+      ? "Your requested store profile changes have been approved and are now live."
+      : `Your requested changes were rejected${outcome.rejectionReason ? `: ${outcome.rejectionReason}` : "."}`;
+  }
+  const name = outcome.productName ? `"${outcome.productName}"` : "Your product";
+  return outcome.approved
+    ? `${name} was approved and is now live in your store.`
+    : `${name} was rejected${outcome.rejectionReason ? `: ${outcome.rejectionReason}` : "."}`;
+}
+
 /**
- * Blocking acknowledgment for a reviewed profile-change request. No backdrop
- * dismiss and a no-op `onRequestClose` (Android back button) — the whole
- * point is the shopkeeper can't just swipe/back past it without tapping
- * "Got it," per explicit requirement that they see this before doing
- * anything else in the app.
+ * Blocking acknowledgment for a reviewed profile-change or product-submission
+ * request. No backdrop dismiss and a no-op `onRequestClose` (Android back
+ * button) — the shopkeeper can't swipe/back past it without tapping "Got it."
  */
-export default function ProfileChangeOutcomeModal({ outcome, onDismiss }: Props) {
+export default function ReviewOutcomeModal({ outcome, onDismiss }: Props) {
   if (!outcome) return null;
 
   const approved = outcome.approved;
@@ -32,12 +49,8 @@ export default function ProfileChangeOutcomeModal({ outcome, onDismiss }: Props)
               color={approved ? colors.success : colors.error}
             />
           </View>
-          <Text style={st.title}>{approved ? "Profile Change Approved" : "Profile Change Rejected"}</Text>
-          <Text style={st.body}>
-            {approved
-              ? "Your requested store profile changes have been approved and are now live."
-              : `Your requested changes were rejected${outcome.rejectionReason ? `: ${outcome.rejectionReason}` : "."}`}
-          </Text>
+          <Text style={st.title}>{titleFor(outcome)}</Text>
+          <Text style={st.body}>{bodyFor(outcome)}</Text>
           <TouchableOpacity style={st.btn} onPress={onDismiss} activeOpacity={0.8}>
             <Text style={st.btnText}>Got it</Text>
           </TouchableOpacity>
