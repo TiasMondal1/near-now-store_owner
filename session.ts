@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { clearStoreCache } from "./lib/appCache";
+import { clearNotificationsCache } from "./lib/notificationsCache";
 import { OWNER_IMAGE_KEY } from "./lib/storage";
 import { setShopkeeperAuthToken } from "./lib/supabase";
 
@@ -106,6 +107,10 @@ export async function clearSession() {
   // different shopkeeper logging in within the cache's TTL would see the
   // previous shopkeeper's stores until it naturally expired.
   clearStoreCache();
+  // Same cross-account leak class as the store cache above — without this, a
+  // different shopkeeper logging in on the same device would see the
+  // previous shopkeeper's cached notification list until the next refetch.
+  clearNotificationsCache();
   await Promise.all([
     SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {}),
     AsyncStorage.multiRemove([
@@ -136,6 +141,7 @@ export async function guardFreshInstall(): Promise<void> {
       // No install token → truly fresh data directory → wipe any stale session
       // (both the AsyncStorage metadata and the SecureStore token, if present —
       // SecureStore/Keychain data can outlive an app's own AsyncStorage wipe).
+      clearNotificationsCache();
       await Promise.all([
         SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {}),
         AsyncStorage.multiRemove([SESSION_KEY, "inventory_persisted_state", "inventory_products_cache", OWNER_IMAGE_KEY]),

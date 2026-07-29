@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Animated, Easing, Image, Dimensions } from "rea
 import { useRouter } from "expo-router";
 import { getSession, isJustLoggedIn, guardFreshInstall } from "../session";
 import { hydrateStoreCache } from "../lib/appCache";
+import { hydrateNotificationsCache } from "../lib/notificationsCache";
 import { resolveAuthenticatedRoute } from "../lib/storeApproval";
 import { colors, spacing, radius, shadows } from "../lib/theme";
 
@@ -62,7 +63,7 @@ export default function SplashScreen() {
     (async () => {
       try {
         await guardFreshInstall();
-        const [session] = await Promise.all([getSession(), hydrateStoreCache()]);
+        const [session] = await Promise.all([getSession(), hydrateStoreCache(), hydrateNotificationsCache()]);
         if (cancelled) return;
         const elapsed = Date.now() - startMs;
         await new Promise<void>((r) => setTimeout(r, Math.max(0, MIN_SPLASH_MS - elapsed)));

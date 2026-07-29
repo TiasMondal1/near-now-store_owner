@@ -51,6 +51,10 @@ const INVENTORY_CACHE_KEY = "inventory_products_cache";
 const CACHE_KEYS = [INVENTORY_PERSISTED_KEY, INVENTORY_CACHE_KEY];
 const TILE_GAP = 10;
 const TILE_WIDTH = (Dimensions.get("window").width - spacing.lg * 2 - TILE_GAP) / 2;
+// Width of one "Your Stock" swipeable page — screen width minus the outer
+// scroll's own padding (s.scroll) and the stock card's own padding (s.stockCard),
+// both spacing.lg on each side.
+const STOCK_PAGE_WIDTH = Dimensions.get("window").width - spacing.lg * 4;
 
 type StoreRow = CachedStore;
 
@@ -58,8 +62,6 @@ type StockProduct = { id: string; name: string; unit?: string; storeProductId?: 
 
 /** One of the two "Your Stock" boxes — packaged/branded products, or loose products. */
 function StockSection({
-  title,
-  icon,
   products,
   togglingProductId,
   storeActive,
@@ -68,8 +70,6 @@ function StockSection({
   onDeleteAll,
   emptyText,
 }: {
-  title: string;
-  icon: React.ComponentProps<typeof Ionicons>["name"];
   products: StockProduct[];
   togglingProductId: string | null;
   storeActive: boolean;
@@ -80,21 +80,14 @@ function StockSection({
 }) {
   return (
     <View style={s.stockSection}>
-      <View style={s.stockSectionHeader}>
-        <View style={s.stockSectionTitleRow}>
-          <Ionicons name={icon} size={14} color={colors.textSecondary} />
-          <Text style={s.stockSectionTitle}>{title}</Text>
-          <View style={s.stockSectionBadge}>
-            <Text style={s.stockSectionBadgeText}>{products.length}</Text>
-          </View>
-        </View>
-        {products.length > 0 && (
+      {products.length > 0 && (
+        <View style={s.stockSectionHeader}>
           <TouchableOpacity onPress={onDeleteAll} style={s.stockSectionDeleteAllBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Ionicons name="trash-outline" size={13} color={colors.error} />
             <Text style={s.stockSectionDeleteAllText}>Delete all</Text>
           </TouchableOpacity>
-        )}
-      </View>
+        </View>
+      )}
       {products.length === 0 ? (
         <Text style={s.stockSectionEmptyText}>{emptyText}</Text>
       ) : (
@@ -166,6 +159,16 @@ export default function HomeTab() {
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // "Your Stock" tab bar (Packaged/Loose) — swipeable pager plus tap-to-jump
+  // buttons, matching the segmented-control pattern already used for
+  // Inventory/Add Custom in app/(tabs)/stock.tsx. Each page's natural height
+  // is measured via onLayout (lines below) since a horizontal ScrollView
+  // nested inside this screen's outer vertical ScrollView has no way to
+  // auto-size to variable-height content otherwise.
+  const [activeStockTab, setActiveStockTab] = useState<"packaged" | "loose">("packaged");
+  const stockPagerRef = useRef<ScrollView>(null);
+  const [stockPageHeights, setStockPageHeights] = useState({ packaged: 0, loose: 0 });
+
   const [confirmModal, setConfirmModal] = useState<{
     title: string;
     message: string;
@@ -192,6 +195,16 @@ export default function HomeTab() {
     setStockSearchQuery("");
     setDebouncedSearchQuery("");
     setStockSearchOpen(false);
+  }, []);
+
+  const selectStockTab = useCallback((tab: "packaged" | "loose") => {
+    setActiveStockTab(tab);
+    stockPagerRef.current?.scrollTo({ x: tab === "packaged" ? 0 : STOCK_PAGE_WIDTH, animated: true });
+  }, []);
+
+  const handleStockPagerScrollEnd = useCallback((e: any) => {
+    const page = Math.round(e.nativeEvent.contentOffset.x / STOCK_PAGE_WIDTH);
+    setActiveStockTab(page === 0 ? "packaged" : "loose");
   }, []);
 
   const selectedStore = (selectedStoreId ? stores.find(s => s.id === selectedStoreId) : undefined) ?? stores[0] ?? null;
@@ -703,29 +716,72 @@ export default function HomeTab() {
               </View>
             ) : (
               <>
-                <StockSection
-                  title="Packaged Products"
-                  icon="pricetag-outline"
-                  products={packagedProducts}
-                  togglingProductId={togglingProductId}
-                  storeActive={!!selectedStore?.is_active}
-                  onToggle={toggleProductActive}
-                  onDeleteOne={confirmDeleteProduct}
-                  onDeleteAll={() => confirmDeleteAllInSection(packagedProducts, "packaged products")}
-                  emptyText={packagedEmptyText}
-                />
-                <View style={s.stockSectionDivider} />
-                <StockSection
-                  title="Loose Products"
-                  icon="scale-outline"
-                  products={looseProducts}
-                  togglingProductId={togglingProductId}
-                  storeActive={!!selectedStore?.is_active}
-                  onToggle={toggleProductActive}
-                  onDeleteOne={confirmDeleteProduct}
-                  onDeleteAll={() => confirmDeleteAllInSection(looseProducts, "loose products")}
-                  emptyText={looseEmptyText}
-                />
+                <View style={s.stockTabRow}>
+                  <TouchableOpacity
+                    style={[s.stockTabBtn, activeStockTab === "packaged" && s.stockTabBtnActive]}
+                    onPress={() => selectStockTab("packaged")}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="pricetag-outline" size={14} color={activeStockTab === "packaged" ? "#fff" : colors.textSecondary} />
+                    <Text style={[s.stockTabBtnText, activeStockTab === "packaged" && s.stockTabBtnTextActive]} numberOfLines={1}>
+                      Packaged ({packagedProducts.length})
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[s.stockTabBtn, activeStockTab === "loose" && s.stockTabBtnActive]}
+                    onPress={() => selectStockTab("loose")}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="scale-outline" size={14} color={activeStockTab === "loose" ? "#fff" : colors.textSecondary} />
+                    <Text style={[s.stockTabBtnText, activeStockTab === "loose" && s.stockTabBtnTextActive]} numberOfLines={1}>
+                      Loose ({looseProducts.length})
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView
+                  ref={stockPagerRef}
+                  horizontal
+                  pagingEnabled
+                  showsHorizontalScrollIndicator={false}
+                  onMomentumScrollEnd={handleStockPagerScrollEnd}
+                  style={{ height: (activeStockTab === "packaged" ? stockPageHeights.packaged : stockPageHeights.loose) || undefined }}
+                >
+                  <View
+                    style={{ width: STOCK_PAGE_WIDTH }}
+                    onLayout={(e) => {
+                      const height = e.nativeEvent.layout.height;
+                      setStockPageHeights((prev) => ({ ...prev, packaged: height }));
+                    }}
+                  >
+                    <StockSection
+                      products={packagedProducts}
+                      togglingProductId={togglingProductId}
+                      storeActive={!!selectedStore?.is_active}
+                      onToggle={toggleProductActive}
+                      onDeleteOne={confirmDeleteProduct}
+                      onDeleteAll={() => confirmDeleteAllInSection(packagedProducts, "packaged products")}
+                      emptyText={packagedEmptyText}
+                    />
+                  </View>
+                  <View
+                    style={{ width: STOCK_PAGE_WIDTH }}
+                    onLayout={(e) => {
+                      const height = e.nativeEvent.layout.height;
+                      setStockPageHeights((prev) => ({ ...prev, loose: height }));
+                    }}
+                  >
+                    <StockSection
+                      products={looseProducts}
+                      togglingProductId={togglingProductId}
+                      storeActive={!!selectedStore?.is_active}
+                      onToggle={toggleProductActive}
+                      onDeleteOne={confirmDeleteProduct}
+                      onDeleteAll={() => confirmDeleteAllInSection(looseProducts, "loose products")}
+                      emptyText={looseEmptyText}
+                    />
+                  </View>
+                </ScrollView>
               </>
             )}
           </View>
@@ -862,17 +918,24 @@ const s = StyleSheet.create({
   },
   searchInput: { flex: 1, paddingVertical: 10, fontSize: 14, color: colors.textPrimary },
 
+  // Stock tab bar (Packaged / Loose swipeable pager)
+  stockTabRow: {
+    flexDirection: "row", gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  stockTabBtn: {
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    paddingVertical: 10, borderRadius: radius.md,
+    backgroundColor: colors.background,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  stockTabBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  stockTabBtnText: { fontSize: 12, fontWeight: "700", color: colors.textSecondary },
+  stockTabBtnTextActive: { color: "#fff" },
+
   // Stock sections (Packaged / Loose boxes)
   stockSection: { gap: spacing.sm },
-  stockSectionDivider: { height: 1, backgroundColor: colors.borderLight, marginVertical: spacing.lg },
-  stockSectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.xs },
-  stockSectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1 },
-  stockSectionTitle: { fontSize: 13, fontWeight: "700", color: colors.textPrimary },
-  stockSectionBadge: {
-    backgroundColor: colors.background, borderRadius: radius.full,
-    paddingHorizontal: 7, paddingVertical: 1, borderWidth: 1, borderColor: colors.border,
-  },
-  stockSectionBadgeText: { fontSize: 10, fontWeight: "700", color: colors.textSecondary },
+  stockSectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", marginBottom: spacing.xs },
   stockSectionDeleteAllBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4 },
   stockSectionDeleteAllText: { fontSize: 11, fontWeight: "600", color: colors.error },
   stockSectionEmptyText: { fontSize: 13, color: colors.textTertiary, paddingVertical: spacing.md },

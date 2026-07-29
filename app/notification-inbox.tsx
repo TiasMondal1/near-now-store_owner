@@ -10,16 +10,13 @@ import { colors, radius, spacing, shadows } from '../lib/theme';
 import { getSession } from '../session';
 import { config } from '../lib/config';
 import { useRequireStoreApproval } from '../lib/useRequireStoreApproval';
+import {
+  peekNotifications,
+  persistNotifications,
+  type CachedNotification,
+} from '../lib/notificationsCache';
 
-interface AppNotification {
-  id: string;
-  type: string;
-  title: string;
-  message: string;
-  data: Record<string, any>;
-  is_read: boolean;
-  created_at: string;
-}
+type AppNotification = CachedNotification;
 
 const TYPE_ICON: Record<string, React.ComponentProps<typeof Ionicons>['name']> = {
   new_order: 'bag-check-outline',
@@ -37,21 +34,34 @@ function timeAgo(iso: string): string {
 
 export default function NotificationInboxScreen() {
   useRequireStoreApproval();
+  // Read fresh on every mount (cheap synchronous in-memory read) — not
+  // module-scoped, since a module-level const would only ever capture
+  // whatever was cached the very first time this route was imported and
+  // never reflect later updates on a subsequent visit within the same
+  // session. Seeds the very first render with whatever
+  // hydrateNotificationsCache() warmed at splash (app/index.tsx), instead of
+  // every visit blocking on getSession() + a network round-trip behind a
+  // blank spinner.
+  const [cachedNotifications] = useState(() => peekNotifications());
   const [token, setToken] = useState<string | null>(null);
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [notifications, setNotifications] = useState<AppNotification[]>(cachedNotifications ?? []);
+  const [loading, setLoading] = useState(!cachedNotifications);
   const [refreshing, setRefreshing] = useState(false);
 
-  const fetchNotifications = useCallback(async (authToken: string, isRefresh = false) => {
+  const fetchNotifications = useCallback(async (authToken: string, silent = false) => {
     try {
-      if (!isRefresh) setLoading(true);
+      if (!silent) setLoading(true);
       const res = await fetch(`${config.API_BASE}/store-owner/notifications`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       const data = await res.json();
-      setNotifications(Array.isArray(data) ? data : []);
+      const list: AppNotification[] = Array.isArray(data) ? data : [];
+      setNotifications(list);
+      await persistNotifications(list);
     } catch {
-      setNotifications([]);
+      // Non-fatal when we already have cached data showing — only clobber
+      // to empty on a genuinely cold, cache-less first load.
+      if (!cachedNotifications) setNotifications([]);
     } finally {
       setLoading(false);
     }
@@ -62,7 +72,9 @@ export default function NotificationInboxScreen() {
       const s: any = await getSession();
       if (!s?.token) { router.replace('/landing'); return; }
       setToken(s.token);
-      fetchNotifications(s.token);
+      // Cache already showing real content (if any) — this is a background
+      // refresh, not the thing the spinner is gating.
+      fetchNotifications(s.token, !!cachedNotifications);
     })();
   }, [fetchNotifications]);
 
@@ -75,7 +87,11 @@ export default function NotificationInboxScreen() {
 
   const markAllRead = useCallback(async () => {
     if (!token) return;
-    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+    setNotifications((prev) => {
+      const next = prev.map((n) => ({ ...n, is_read: true }));
+      persistNotifications(next);
+      return next;
+    });
     try {
       await fetch(`${config.API_BASE}/store-owner/notifications/read-all`, {
         method: 'PUT',
@@ -88,7 +104,11 @@ export default function NotificationInboxScreen() {
 
   const markOneRead = useCallback(async (id: string) => {
     if (!token) return;
-    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)));
+    setNotifications((prev) => {
+      const next = prev.map((n) => (n.id === id ? { ...n, is_read: true } : n));
+      persistNotifications(next);
+      return next;
+    });
     try {
       await fetch(`${config.API_BASE}/store-owner/notifications/${id}/read`, {
         method: 'PUT',

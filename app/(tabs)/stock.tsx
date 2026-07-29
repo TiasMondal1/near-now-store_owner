@@ -51,6 +51,8 @@ export default function StockTab() {
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState<"inventory" | "custom">("inventory");
   const [inventoryRefreshKey, setInventoryRefreshKey] = useState(0);
+  const scrollRef = React.useRef<ScrollView>(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,7 +99,12 @@ export default function StockTab() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.container}
+        onScroll={(e) => setShowScrollTop(e.nativeEvent.contentOffset.y > 400)}
+        scrollEventThrottle={16}
+      >
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Ionicons name="cube-outline" size={24} color={colors.primary} />
@@ -114,10 +121,10 @@ export default function StockTab() {
             onPress={() => setActiveView("inventory")}
             activeOpacity={0.7}
           >
-            <Ionicons 
-              name="list-outline" 
-              size={18} 
-              color={activeView === "inventory" ? colors.surface : colors.textSecondary} 
+            <Ionicons
+              name="list-outline"
+              size={18}
+              color={activeView === "inventory" ? colors.surface : colors.textSecondary}
             />
             <Text style={[styles.toggleBtnText, activeView === "inventory" && styles.toggleBtnTextActive]}>
               Inventory
@@ -129,10 +136,10 @@ export default function StockTab() {
             onPress={() => setActiveView("custom")}
             activeOpacity={0.7}
           >
-            <Ionicons 
-              name="add-circle-outline" 
-              size={18} 
-              color={activeView === "custom" ? colors.surface : colors.textSecondary} 
+            <Ionicons
+              name="add-circle-outline"
+              size={18}
+              color={activeView === "custom" ? colors.surface : colors.textSecondary}
             />
             <Text style={[styles.toggleBtnText, activeView === "custom" && styles.toggleBtnTextActive]}>
               Add Custom
@@ -152,6 +159,17 @@ export default function StockTab() {
           <AddCustomSection onAdded={() => setInventoryRefreshKey((k) => k + 1)} />
         )}
       </ScrollView>
+
+      {showScrollTop && (
+        <TouchableOpacity
+          style={styles.scrollTopBtn}
+          onPress={() => scrollRef.current?.scrollTo({ y: 0, animated: true })}
+          activeOpacity={0.85}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="arrow-up" size={20} color={colors.surface} />
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 }
@@ -859,6 +877,22 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   container: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+  scrollTopBtn: {
+    position: "absolute",
+    right: spacing.lg,
+    bottom: spacing.xl,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 5,
+  },
 
   header: {
     flexDirection: "row",
