@@ -19,7 +19,7 @@ const FAQ: { q: string; a: string }[] = [
   { q: 'How do I add products?', a: 'Go to Inventory tab, switch to the Inventory view, browse the catalog and tap "Add" on products you want to sell.' },
   { q: 'How do I accept an order?', a: 'Go to Orders tab > Incoming. You can select which items to accept and tap the Accept button.' },
   { q: 'When do I get paid?', a: 'Payouts are processed after orders are delivered. Check the Payouts tab for your earnings history.' },
-  { q: 'How do I change my store name or address?', a: 'Go to Settings > Store Settings. You can update your store name, address, delivery radius, and more.' },
+  { q: 'How do I change my store name or address?', a: 'Go to Settings > Profile > Edit. You can update your store name and address there; changes are reviewed before they go live.' },
   { q: 'What is the pickup code?', a: 'After accepting an order, a pickup code is generated. Share this code with the delivery partner when they arrive to collect the order.' },
   { q: 'Can I reject an order?', a: 'Yes. On the incoming order card, tap Reject. This cannot be undone — the order will be reassigned to another store.' },
   { q: 'How do I remove a product?', a: 'Go to Home > Your Stock, expand the list, and tap the trash icon next to the product you want to remove.' },

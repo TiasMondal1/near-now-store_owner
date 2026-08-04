@@ -132,6 +132,21 @@ export default function NotificationInboxScreen() {
     }
   }, [token, notifications]);
 
+  const openNotification = useCallback(
+    (item: AppNotification) => {
+      markOneRead(item.id);
+      // No single-order detail screen exists in this app — orders live only
+      // as rows within the Orders tab's incoming/active/previous lists — so
+      // the deep link is "go to the tab that actually shows it" rather than
+      // a specific order screen. `new_order` always starts in the Incoming
+      // tab, which is that tab's own default state.
+      if (item.type === 'new_order') {
+        router.push('/(tabs)/previous-orders');
+      }
+    },
+    [markOneRead]
+  );
+
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
   if (loading) {
@@ -193,7 +208,7 @@ export default function NotificationInboxScreen() {
           <TouchableOpacity
             style={[st.card, !item.is_read && st.cardUnread]}
             activeOpacity={0.7}
-            onPress={() => markOneRead(item.id)}
+            onPress={() => openNotification(item)}
           >
             <View style={st.iconWrap}>
               <Ionicons name={TYPE_ICON[item.type] ?? 'notifications-outline'} size={18} color={colors.primary} />

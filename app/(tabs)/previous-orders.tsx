@@ -132,6 +132,7 @@ const AllocationCard = React.memo(function AllocationCard({
               numberOfLines={1}
             >
               {item.quantity} {item.unit} — {item.product_name}
+              {item.price != null && <Text style={allocStyles.itemPriceInline}> · ₹{item.price}</Text>}
             </Text>
             <View style={allocStyles.itemBtns}>
               <TouchableOpacity
@@ -665,6 +666,9 @@ export default function OrdersTab() {
                     <Text style={styles.itemText} numberOfLines={1}>
                       {item.quantity} {item.unit} — {item.product_name}
                     </Text>
+                    {item.price != null && (
+                      <Text style={styles.itemPrice}>₹{item.price}</Text>
+                    )}
                   </View>
                 ))}
               </View>
@@ -1081,6 +1085,12 @@ const styles = StyleSheet.create({
     flex: 1,
     fontWeight: "500",
   },
+  itemPrice: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: "600",
+    flexShrink: 0,
+  },
   cardFooter: {
     flexDirection: "row",
     alignItems: "center",
@@ -1252,6 +1262,11 @@ const allocStyles = StyleSheet.create({
   itemNameUnchecked: {
     color: colors.textTertiary,
     textDecorationLine: "line-through",
+  },
+  itemPriceInline: {
+    color: colors.textTertiary,
+    fontSize: 13,
+    fontWeight: "600",
   },
   cardActions: {
     flexDirection: "row",

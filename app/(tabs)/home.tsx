@@ -478,7 +478,13 @@ export default function HomeTab() {
         return;
       }
       setStoreProducts([]);
-    } catch { setStoreProducts([]); }
+    } catch {
+      // Only clear on a genuinely empty/failed foreground load. A silent
+      // background refresh (realtime subscription, focus effect, post-toggle)
+      // failing shouldn't wipe a real, already-loaded product list over a
+      // transient network hiccup — better to show stale data than none.
+      if (!silent) setStoreProducts([]);
+    }
     finally { if (!silent) setStoreProductsLoading(false); }
   }, [session?.token, selectedStore?.id]);
   useEffect(() => { fetchStoreProductsRef.current = fetchStoreProducts; }, [fetchStoreProducts]);
