@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  ActivityIndicator, RefreshControl,
+  ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -93,11 +93,13 @@ export default function NotificationInboxScreen() {
 
   const markAllRead = useCallback(async () => {
     if (!token) return;
-    setNotifications((prev) => {
-      const next = prev.map((n) => ({ ...n, is_read: true }));
-      persistNotifications(next);
-      return next;
-    });
+    // Snapshot before the optimistic update so a failed PUT can be reverted
+    // instead of leaving this screen permanently out of sync with the real
+    // server state (e.g. Home's bell badge, which always refetches fresh).
+    const previous = notifications;
+    const next = previous.map((n) => ({ ...n, is_read: true }));
+    setNotifications(next);
+    persistNotifications(next);
     try {
       const res = await apiClient.put('/store-owner/notifications/read-all', undefined, {
         Authorization: `Bearer ${token}`,
@@ -105,16 +107,18 @@ export default function NotificationInboxScreen() {
       if (!res.success) throw new Error(res.error || 'Mark all read failed');
     } catch (error) {
       if (__DEV__) console.warn('[notification-inbox] Mark all read failed', error);
+      setNotifications(previous);
+      persistNotifications(previous);
+      Alert.alert("Couldn't mark all as read", 'Please check your connection and try again.');
     }
-  }, [token]);
+  }, [token, notifications]);
 
   const markOneRead = useCallback(async (id: string) => {
     if (!token) return;
-    setNotifications((prev) => {
-      const next = prev.map((n) => (n.id === id ? { ...n, is_read: true } : n));
-      persistNotifications(next);
-      return next;
-    });
+    const previous = notifications;
+    const next = previous.map((n) => (n.id === id ? { ...n, is_read: true } : n));
+    setNotifications(next);
+    persistNotifications(next);
     try {
       const res = await apiClient.put(`/store-owner/notifications/${id}/read`, undefined, {
         Authorization: `Bearer ${token}`,
@@ -122,8 +126,11 @@ export default function NotificationInboxScreen() {
       if (!res.success) throw new Error(res.error || 'Mark one read failed');
     } catch (error) {
       if (__DEV__) console.warn('[notification-inbox] Mark one read failed', error);
+      setNotifications(previous);
+      persistNotifications(previous);
+      Alert.alert("Couldn't mark as read", 'Please check your connection and try again.');
     }
-  }, [token]);
+  }, [token, notifications]);
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
