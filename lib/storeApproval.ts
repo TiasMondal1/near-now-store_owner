@@ -1,5 +1,5 @@
 import { fetchStoresCached, peekStores, persistStores, type CachedStore } from "./appCache";
-import { config } from "./config";
+import { apiClient } from "./api-client";
 
 export type ApprovalStore = CachedStore & {
   is_approved?: boolean;
@@ -41,11 +41,12 @@ export async function refreshStoreApproval(
   token: string,
   userId?: string
 ): Promise<{ approved: boolean; store: ApprovalStore | null }> {
-  const url = `${config.API_BASE}/store-owner/stores${userId ? `?userId=${userId}` : ""}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) throw new Error("Failed to refresh store status");
-  const json = await res.json();
-  const stores: ApprovalStore[] = json?.stores ?? [];
+  const endpoint = `/store-owner/stores${userId ? `?userId=${userId}` : ""}`;
+  const res = await apiClient.get<{ stores?: ApprovalStore[] }>(endpoint, {
+    Authorization: `Bearer ${token}`,
+  });
+  if (!res.success) throw new Error(res.error || "Failed to refresh store status");
+  const stores: ApprovalStore[] = res.data?.stores ?? [];
   const store = stores[0] ?? null;
   // This bypasses the shared store cache (appCache.ts) to force a genuinely
   // fresh read — but without writing the result back, the cache stays stale

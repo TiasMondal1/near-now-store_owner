@@ -8,7 +8,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, shadows } from '../lib/theme';
 import { getSession } from '../session';
-import { config } from '../lib/config';
+import { apiClient } from '../lib/api-client';
 import { useRequireStoreApproval } from '../lib/useRequireStoreApproval';
 import {
   peekNotifications,
@@ -52,15 +52,14 @@ export default function NotificationInboxScreen() {
   const fetchNotifications = useCallback(async (authToken: string, silent = false) => {
     try {
       if (!silent) setLoading(true);
-      const res = await fetch(`${config.API_BASE}/store-owner/notifications`, {
-        headers: { Authorization: `Bearer ${authToken}` },
+      const res = await apiClient.get<AppNotification[]>('/store-owner/notifications', {
+        Authorization: `Bearer ${authToken}`,
       });
-      if (!res.ok) throw new Error(`Notifications fetch failed: ${res.status}`);
-      const data = await res.json();
-      if (!Array.isArray(data)) throw new Error('Notifications fetch returned an unexpected shape');
-      setNotifications(data);
+      if (!res.success) throw new Error(res.error || `Notifications fetch failed`);
+      if (!Array.isArray(res.data)) throw new Error('Notifications fetch returned an unexpected shape');
+      setNotifications(res.data);
       setLoadError(false);
-      await persistNotifications(data);
+      await persistNotifications(res.data);
     } catch {
       // Non-fatal when we already have cached data showing — only clobber
       // to empty on a genuinely cold, cache-less first load. Either way,
@@ -100,10 +99,10 @@ export default function NotificationInboxScreen() {
       return next;
     });
     try {
-      await fetch(`${config.API_BASE}/store-owner/notifications/read-all`, {
-        method: 'PUT',
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await apiClient.put('/store-owner/notifications/read-all', undefined, {
+        Authorization: `Bearer ${token}`,
       });
+      if (!res.success) throw new Error(res.error || 'Mark all read failed');
     } catch (error) {
       if (__DEV__) console.warn('[notification-inbox] Mark all read failed', error);
     }
@@ -117,10 +116,10 @@ export default function NotificationInboxScreen() {
       return next;
     });
     try {
-      await fetch(`${config.API_BASE}/store-owner/notifications/${id}/read`, {
-        method: 'PUT',
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await apiClient.put(`/store-owner/notifications/${id}/read`, undefined, {
+        Authorization: `Bearer ${token}`,
       });
+      if (!res.success) throw new Error(res.error || 'Mark one read failed');
     } catch (error) {
       if (__DEV__) console.warn('[notification-inbox] Mark one read failed', error);
     }

@@ -5,7 +5,7 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { config } from "./config";
+import { apiClient } from "./api-client";
 
 const STORE_CACHE_KEY = "nanow_store_cache_v2";
 const STORE_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
@@ -111,19 +111,13 @@ export async function forceFetchStores(
 
   _inflight = (async (): Promise<CachedStore[]> => {
     try {
-      const url = `${config.API_BASE}/store-owner/stores${
-        userId ? `?userId=${userId}` : ""
-      }`;
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 15_000);
-      const res = await fetch(url, {
+      const endpoint = `/store-owner/stores${userId ? `?userId=${userId}` : ""}`;
+      const res = await apiClient.request<{ stores?: CachedStore[] }>(endpoint, {
         headers: { Authorization: `Bearer ${token}` },
-        signal: ctrl.signal,
+        timeout: 15_000,
+        retries: 0,
       });
-      clearTimeout(timer);
-      const raw = await res.text();
-      const json = raw ? JSON.parse(raw) : null;
-      const stores: CachedStore[] = json?.stores ?? [];
+      const stores: CachedStore[] = res.data?.stores ?? [];
       if (stores.length > 0) await persistStores(stores);
       return stores;
     } catch {

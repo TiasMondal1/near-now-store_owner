@@ -21,7 +21,6 @@ import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
-import { config } from "../../lib/config";
 import { colors, radius, spacing, shadows } from "../../lib/theme";
 import { supabase } from "../../lib/supabase";
 import {
@@ -44,7 +43,6 @@ import { notificationService } from "../../lib/notifications";
 import { useSmartPoll } from "../../lib/useSmartPoll";
 import { apiClient } from "../../lib/api-client";
 
-const API_BASE = config.API_BASE;
 const SELECTED_STORE_KEY = "selected_store_id";
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
@@ -319,10 +317,9 @@ export default function HomeTab() {
     const wasApproved = isStoreApproved(selectedStore);
     const checkApproval = async () => {
       try {
-        const res = await fetch(`${API_BASE}/store-owner/stores`, { headers: { Authorization: `Bearer ${session.token}` } });
-        if (!res.ok) return;
-        const json = await res.json();
-        const fresh: StoreRow[] = json?.stores ?? [];
+        const res = await apiClient.get<{ stores?: StoreRow[] }>("/store-owner/stores", { Authorization: `Bearer ${session.token}` });
+        if (!res.success) return;
+        const fresh: StoreRow[] = res.data?.stores ?? [];
         if (!fresh.length) return;
         const updated = fresh.find(s => s.id === selectedStore?.id);
         setStores(fresh);
@@ -345,12 +342,12 @@ export default function HomeTab() {
   const fetchActiveOrderCount = useCallback(async () => {
     if (!session?.token || !selectedStore?.id) return;
     try {
-      const res = await fetch(`${API_BASE}/shopkeeper/orders?active=true`, {
-        headers: { Authorization: `Bearer ${session.token}` },
-      });
-      if (!res.ok) return;
-      const json = await res.json();
-      const orders: Array<{ store_id?: string; alloc_status?: string }> = json?.orders ?? [];
+      const res = await apiClient.get<{ orders?: Array<{ store_id?: string; alloc_status?: string }> }>(
+        "/shopkeeper/orders?active=true",
+        { Authorization: `Bearer ${session.token}` }
+      );
+      if (!res.success) return;
+      const orders: Array<{ store_id?: string; alloc_status?: string }> = res.data?.orders ?? [];
       const count = orders.filter((o) => o.store_id === selectedStore.id && o.alloc_status === "accepted").length;
       setActiveOrderCount(count);
     } catch {
@@ -496,8 +493,8 @@ export default function HomeTab() {
     if (selectedStore.is_active === value) return;
     if (value) {
       setConfirmModal({ title: "Go Online?", message: "Your store will become visible to customers.", confirmText: "Go Online", confirmColor: colors.success, iconName: "storefront", onConfirm: async () => {
-        const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, { method: "PATCH", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ is_active: true }) });
-        if (!response.ok) throw new Error(`Failed: ${response.status}`);
+        const response = await apiClient.patch(`/store-owner/stores/${selectedStore.id}/online`, { is_active: true }, { Authorization: `Bearer ${session.token}` });
+        if (!response.success) throw new Error(response.error || "Failed to go online");
         await restoreActiveProductsOnline(selectedStore.id); patchStoreActive(selectedStore.id, true); clearStoreCache();
         await fetchStores(session.token, session.user?.id); await fetchStoreProducts(true);
       }});
@@ -506,8 +503,8 @@ export default function HomeTab() {
         setStoreProductsLoading(true);
         try {
           await setAllProductsOffline(selectedStore.id);
-          const response = await fetch(`${API_BASE}/store-owner/stores/${selectedStore.id}/online`, { method: "PATCH", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ is_active: false }) });
-          if (!response.ok) throw new Error(`Failed: ${response.status}`);
+          const response = await apiClient.patch(`/store-owner/stores/${selectedStore.id}/online`, { is_active: false }, { Authorization: `Bearer ${session.token}` });
+          if (!response.success) throw new Error(response.error || "Failed to go offline");
           patchStoreActive(selectedStore.id, false); clearStoreCache(); await invalidateAllCaches();
           await fetchStores(session.token, session.user?.id); fetchStoreProducts(true).catch(() => {});
         } finally { setStoreProductsLoading(false); }
