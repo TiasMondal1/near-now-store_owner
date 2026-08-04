@@ -7,6 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, shadows } from '../lib/theme';
+import { apiClient } from '../lib/api-client';
+import { getSession } from '../session';
 
 const SUPPORT_PHONE = '+919876543210';
 const SUPPORT_EMAIL = 'support@nearandnow.in';
@@ -54,11 +56,20 @@ export default function HelpScreen() {
   const handleSendMessage = async () => {
     if (!message.trim()) { Alert.alert('Empty', 'Please type a message'); return; }
     setSending(true);
-    // Simulate send — in production this would hit an API
-    await new Promise((r) => setTimeout(r, 1000));
-    setSending(false);
-    Alert.alert('Sent', 'Your message has been sent. We will get back to you shortly.');
-    setMessage('');
+    try {
+      const session = await getSession();
+      if (!session?.token) { Alert.alert('Error', 'Your session has expired. Please log in again.'); return; }
+      const res = await apiClient.post('/store-owner/support-messages', { message: message.trim() }, {
+        Authorization: `Bearer ${session.token}`,
+      });
+      if (!res.success) throw new Error(res.error || 'Failed to send message');
+      Alert.alert('Sent', 'Your message has been sent. We will get back to you shortly.');
+      setMessage('');
+    } catch (err: any) {
+      Alert.alert('Couldn\'t send message', err?.message || 'Please check your connection and try again, or use Call/WhatsApp/Email above.');
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
