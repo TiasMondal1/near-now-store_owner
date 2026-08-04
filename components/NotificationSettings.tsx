@@ -29,7 +29,22 @@ export default function NotificationSettings({ onClose }: Props) {
   const handleEnable = async () => {
     if (!enabled) {
       const token = await notificationService.registerForPushNotifications();
-      if (token) { setEnabled(true); Alert.alert('Success', 'Notifications enabled'); }
+      if (token) {
+        setEnabled(true);
+        Alert.alert('Success', 'Notifications enabled');
+        return;
+      }
+      const reason = notificationService.getLastRegistrationError();
+      if (reason === 'permission-denied') {
+        Alert.alert(
+          'Permission needed',
+          'Notifications are blocked for this app. Enable them in your device settings to receive order alerts.'
+        );
+      } else if (reason === 'not-device' || reason === 'expo-go') {
+        Alert.alert('Not available', 'Push notifications aren’t available in this environment.');
+      } else {
+        Alert.alert('Couldn’t enable notifications', 'Something went wrong. Please try again.');
+      }
     } else {
       Alert.alert('Disable Notifications', 'Go to your device settings to disable notifications.');
     }

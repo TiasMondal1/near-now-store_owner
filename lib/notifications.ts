@@ -57,6 +57,20 @@ class NotificationService {
   private static instance: NotificationService;
   private preferences: NotificationPreferences = DEFAULT_PREFERENCES;
   private readyPromise: Promise<void>;
+  // Set right before every `return null` in registerForPushNotifications so
+  // a caller (e.g. the "Enable" button) can show a specific, actionable
+  // message instead of a silent no-op on failure.
+  private lastRegistrationError:
+    | 'expo-go'
+    | 'not-device'
+    | 'permission-denied'
+    | 'token-failed'
+    | 'unknown'
+    | null = null;
+
+  getLastRegistrationError() {
+    return this.lastRegistrationError;
+  }
 
   private constructor() {
     this.readyPromise = this.loadPreferences();
@@ -107,13 +121,17 @@ class NotificationService {
    * Register for push notifications
    */
   async registerForPushNotifications(): Promise<string | null> {
+    this.lastRegistrationError = null;
+
     if (IS_EXPO_GO || !Notifications) {
       if (__DEV__) console.log('[notifications] Push registration skipped: Expo Go or module unavailable');
+      this.lastRegistrationError = 'expo-go';
       return null;
     }
 
     if (!Device.isDevice) {
       if (__DEV__) console.log('Push notifications only work on physical devices');
+      this.lastRegistrationError = 'not-device';
       return null;
     }
 
@@ -140,6 +158,7 @@ class NotificationService {
 
       if (finalStatus !== 'granted') {
         if (__DEV__) console.log('Notification permissions not granted');
+        this.lastRegistrationError = 'permission-denied';
         return null;
       }
 
@@ -148,11 +167,13 @@ class NotificationService {
         token = await Notifications.getExpoPushTokenAsync();
       } catch (error: any) {
         if (__DEV__) console.warn('Could not get push token:', error?.message || error);
+        this.lastRegistrationError = 'token-failed';
         return null;
       }
 
       if (!token?.data) {
         if (__DEV__) console.warn('No push token received');
+        this.lastRegistrationError = 'token-failed';
         return null;
       }
 
@@ -166,6 +187,7 @@ class NotificationService {
       return token.data;
     } catch (error: any) {
       if (__DEV__) console.warn('Push notification registration failed:', error?.message || error);
+      this.lastRegistrationError = 'unknown';
       return null;
     }
   }

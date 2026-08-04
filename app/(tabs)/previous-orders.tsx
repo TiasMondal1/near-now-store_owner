@@ -203,6 +203,8 @@ export default function OrdersTab() {
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [allocLoading, setAllocLoading] = useState(true);
   const [respondingId, setRespondingId] = useState<string | null>(null);
+  const [refreshingActive, setRefreshingActive] = useState(false);
+  const [refreshingPrevious, setRefreshingPrevious] = useState(false);
 
   const [allOrders, setAllOrders] = useState<any[]>([]);
   const [prevLoading, setPrevLoading] = useState(true);
@@ -349,6 +351,21 @@ export default function OrdersTab() {
       setAllOrders([]);
     }
   }, [session, storeId]);
+
+  // Wrap the poll-shared fetchers with their own `refreshing` flags so
+  // pull-to-refresh shows a spinner — the raw fetchers are also called
+  // silently by useSmartPoll/focus effects and shouldn't spin the UI then.
+  const handleRefreshActive = useCallback(async () => {
+    setRefreshingActive(true);
+    await fetchActiveOrders();
+    setRefreshingActive(false);
+  }, [fetchActiveOrders]);
+
+  const handleRefreshPrevious = useCallback(async () => {
+    setRefreshingPrevious(true);
+    await fetchPreviousOrders();
+    setRefreshingPrevious(false);
+  }, [fetchPreviousOrders]);
 
   useEffect(() => { fetchPreviousOrdersRef.current = fetchPreviousOrders; }, [fetchPreviousOrders]);
 
@@ -560,8 +577,8 @@ export default function OrdersTab() {
           data={incomingAllocations}
           keyExtractor={(a) => a.allocation_id}
           contentContainerStyle={styles.list}
-          refreshing={false}
-          onRefresh={fetchActiveOrders}
+          refreshing={refreshingActive}
+          onRefresh={handleRefreshActive}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
               <View style={[styles.emptyIconWrap, { backgroundColor: "#FF9800" + "12" }]}>
@@ -585,8 +602,8 @@ export default function OrdersTab() {
           data={activeAllocations}
           keyExtractor={(a) => a.allocation_id}
           contentContainerStyle={styles.list}
-          refreshing={false}
-          onRefresh={fetchActiveOrders}
+          refreshing={refreshingActive}
+          onRefresh={handleRefreshActive}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
               <View style={styles.emptyIconWrap}>
@@ -696,8 +713,8 @@ export default function OrdersTab() {
             sections={visibleSections}
             keyExtractor={(o) => o.id}
             contentContainerStyle={styles.list}
-            refreshing={false}
-            onRefresh={fetchPreviousOrders}
+            refreshing={refreshingPrevious}
+            onRefresh={handleRefreshPrevious}
             stickySectionHeadersEnabled={false}
             renderSectionHeader={({ section }) => {
               const collapsed = collapsedDates.has(section.title);
