@@ -365,10 +365,16 @@ export default function OrdersTab() {
       );
       const json: any = response.data;
       if (response.success && json?.success) {
+        const acceptedIds = new Set(ids);
         setAllocations((prev) =>
           prev.map((a) =>
             a.allocation_id === allocId
-              ? { ...a, alloc_status: "accepted", pickup_code: json.pickup_code ?? a.pickup_code }
+              ? {
+                  ...a,
+                  alloc_status: "accepted",
+                  pickup_code: json.pickup_code ?? a.pickup_code,
+                  items: a.items.filter((item) => acceptedIds.has(item.id)),
+                }
               : a
           )
         );

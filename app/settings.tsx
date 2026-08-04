@@ -101,6 +101,11 @@ export default function SettingsScreen() {
     { key: 'notif', icon: 'options-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Notification Preferences', desc: 'Manage alerts and sounds', onPress: () => setShowNotifications(true) },
   ];
 
+  const storeItems: SettingItem[] = [
+    { key: 'submissions', icon: 'cube-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'My Submissions', desc: 'Track custom product review status', onPress: () => router.push('/product-submissions') },
+    { key: 'billing', icon: 'card-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Billing Details', desc: 'Update bank account and IFSC', onPress: () => router.push('/billing-info') },
+  ];
+
   return (
     <SafeAreaView style={st.safe}>
       <ScrollView contentContainerStyle={st.scroll} showsVerticalScrollIndicator={false}>
@@ -144,6 +149,26 @@ export default function SettingsScreen() {
                   <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
                 </TouchableOpacity>
                 {idx < prefItems.length - 1 && <View style={st.rowDivider} />}
+              </React.Fragment>
+            ))}
+          </View>
+
+          {/* Store section */}
+          <Text style={st.sectionLabel}>Store</Text>
+          <View style={st.cardGroup}>
+            {storeItems.map((item, idx) => (
+              <React.Fragment key={item.key}>
+                <TouchableOpacity style={st.row} onPress={item.onPress} activeOpacity={0.6}>
+                  <View style={[st.rowIcon, { backgroundColor: item.iconBg }]}>
+                    <Ionicons name={item.icon} size={20} color={item.iconColor} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={st.rowTitle}>{item.title}</Text>
+                    <Text style={st.rowDesc}>{item.desc}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+                </TouchableOpacity>
+                {idx < storeItems.length - 1 && <View style={st.rowDivider} />}
               </React.Fragment>
             ))}
           </View>
