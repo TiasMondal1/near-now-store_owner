@@ -654,6 +654,7 @@ export default function OrdersTab() {
                     <Text style={styles.pickupCodeLabel}>Deliver to (receiver)</Text>
                     <Text style={styles.pickupCodeValue}>{a.receiver_name}</Text>
                     {a.receiver_phone && <Text style={styles.orderMeta}>{a.receiver_phone}</Text>}
+                    {a.receiver_address && <Text style={styles.orderMeta}>{a.receiver_address}</Text>}
                   </View>
                 </View>
               )}
