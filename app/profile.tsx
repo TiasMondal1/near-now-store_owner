@@ -25,7 +25,7 @@ import { fetchStoresCached, forceFetchStores, peekStores, clearStoreCache } from
 import { config } from "../lib/config";
 import { uploadStoreImage, uploadOwnerImage, OWNER_IMAGE_KEY } from "../lib/storage";
 import { useRequireStoreApproval } from "../lib/useRequireStoreApproval";
-import { fetchVerificationDocuments, REQUIRED_DOC_KEYS } from "../lib/verificationDocuments";
+import { fetchVerificationDocuments, ALL_DOC_KEYS } from "../lib/verificationDocuments";
 import { useSmartPoll } from "../lib/useSmartPoll";
 
 const API_BASE = config.API_BASE;
@@ -459,7 +459,7 @@ export default function ProfileScreen() {
   // the 7 business documents — see the matching fix in upload-documents.tsx
   // and pending-verification.tsx (this screen already loads `storeImages`
   // for its own gallery, so no extra fetch is needed here).
-  const TOTAL_REQUIRED = REQUIRED_DOC_KEYS.length + MAX_STORE_IMAGES;
+  const TOTAL_REQUIRED = ALL_DOC_KEYS.length + MAX_STORE_IMAGES;
   const uploadedCount = uploadedDocCount + storeImages.length;
   const docsComplete = uploadedCount >= TOTAL_REQUIRED;
 
@@ -650,7 +650,7 @@ export default function ProfileScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.docNavTitle}>Upload Shop Documents</Text>
                   <Text style={styles.docNavDesc}>
-                    Aadhaar (front/back), PAN (front/back), Trade License, GST, FSSAI & store photos
+                    Aadhaar & PAN, plus optional Trade License, GST, FSSAI & store photos
                   </Text>
                 </View>
               </View>

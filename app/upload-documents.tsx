@@ -29,6 +29,7 @@ import VerificationNavBar from "../components/VerificationNavBar";
 import {
   DOC_NUMBER_FORMATS,
   DOC_NUMBER_LENGTHS,
+  ONBOARDING_REQUIRED_DOC_KEYS,
   deleteVerificationDocument,
   docNumberErrorMessage,
   fetchVerificationDocuments,
@@ -96,6 +97,12 @@ const DOCUMENT_GROUPS: DocGroup[] = [
   { groupKey: "fssai", headerLabel: "FSSAI License", headerIcon: "restaurant-outline", numberKey: "fssai", members: ["fssai"] },
 ];
 
+// Only Aadhaar + PAN are required to get a store approved for the first
+// time — Trade License/GST/FSSAI are shown here too, but only once the
+// store is already approved, as an optional add-anytime step (per product
+// decision: minimize onboarding friction, collect the rest later).
+const ONBOARDING_GROUP_KEYS = new Set(["aadhaar", "pan"]);
+
 export default function UploadDocumentsScreen() {
   // Seed storeId from the shared store cache when warm (e.g. the shopkeeper
   // already visited Home/Status this session) so this screen renders
@@ -104,6 +111,7 @@ export default function UploadDocumentsScreen() {
   const cachedStoreId = peekStores()?.[0]?.id ?? null;
   const [loading, setLoading] = useState(!cachedStoreId);
   const [storeId, setStoreId] = useState<string | null>(cachedStoreId);
+  const [isApproved, setIsApproved] = useState<boolean>(!!peekStores()?.[0]?.is_approved);
   const [token, setToken] = useState<string | null>(null);
   const [serverDocs, setServerDocs] = useState<DocsState>(EMPTY_DOCS());
   const [numbers, setNumbers] = useState<Record<DocKey, string>>(
@@ -270,6 +278,7 @@ export default function UploadDocumentsScreen() {
         return;
       }
       setStoreId(store.id);
+      setIsApproved(!!store.is_approved);
       if (!cancelled) setLoading(false); // render the form now — don't block on document status
 
       try {
@@ -466,9 +475,10 @@ export default function UploadDocumentsScreen() {
   const deleteOne = (key: DocKey) => {
     const doc = serverDocs[key];
     if (!doc?.url) return;
+    const canSuspend = (ONBOARDING_REQUIRED_DOC_KEYS as readonly string[]).includes(key);
     Alert.alert(
       "Delete document",
-      doc.status === "approved"
+      doc.status === "approved" && canSuspend
         ? "This document is already approved — deleting it means your store will be sent back for re-verification. Continue?"
         : "This removes the uploaded file. You can upload a new one anytime.",
       [
@@ -502,12 +512,21 @@ export default function UploadDocumentsScreen() {
     );
   };
 
+  // Trade License/GST/FSSAI only show up once the store is already approved
+  // — an unapproved store only needs Aadhaar + PAN to get through onboarding.
+  const visibleGroups = isApproved
+    ? DOCUMENT_GROUPS
+    : DOCUMENT_GROUPS.filter((g) => ONBOARDING_GROUP_KEYS.has(g.groupKey));
+  const visibleSections = DOCUMENT_SECTIONS.filter((s) =>
+    isApproved || (ONBOARDING_REQUIRED_DOC_KEYS as readonly string[]).includes(s.key)
+  );
+
   const handleSaveAll = async () => {
     setSaving(true);
     suspendedRef.current = false;
     try {
       const results: Partial<Record<DocKey, VerificationDocument | null>> = {};
-      for (const section of DOCUMENT_SECTIONS) {
+      for (const section of visibleSections) {
         results[section.key] = await saveOne(section.key);
       }
       if (suspendedRef.current) {
@@ -524,21 +543,29 @@ export default function UploadDocumentsScreen() {
       const imagesOk = await saveStoreImages();
       if (!imagesOk) return; // alert already shown inside saveStoreImages
 
-      const allDocsApproved = DOCUMENT_SECTIONS.every((s) => results[s.key]?.status === "approved");
-      const allDocsSubmitted = DOCUMENT_SECTIONS.every((s) => !!results[s.key]?.url);
+      const allDocsApproved = visibleSections.every((s) => results[s.key]?.status === "approved");
+      const allDocsSubmitted = visibleSections.every((s) => !!results[s.key]?.url);
       const totalImagesAfterSave = storeImages.length + pendingCountBeforeSave;
       const imagesRemaining = MAX_STORE_IMAGES - totalImagesAfterSave;
       const imagesComplete = imagesRemaining <= 0;
 
       Alert.alert(
         "Saved",
-        allDocsApproved && imagesComplete
-          ? "All documents and store photos are saved."
-          : allDocsSubmitted
-            ? imagesComplete
-              ? "Your documents have been submitted. Our team will verify them before your shop goes live."
-              : `Your documents have been submitted. Add ${imagesRemaining} more store photo${imagesRemaining !== 1 ? "s" : ""} to complete your gallery.`
-            : "Upload the remaining documents to complete verification."
+        // Once approved, nothing here blocks the shop from being live —
+        // Trade License/GST/FSSAI are optional additions, not a
+        // re-verification gate, so this skips the "before your shop goes
+        // live"/"complete verification" phrasing that only applies pre-approval.
+        isApproved
+          ? allDocsApproved
+            ? "All documents and store photos are saved."
+            : "Your changes have been saved. Newly added documents will be reviewed by our team."
+          : allDocsApproved && imagesComplete
+            ? "All documents and store photos are saved."
+            : allDocsSubmitted
+              ? imagesComplete
+                ? "Your documents have been submitted. Our team will verify them before your shop goes live."
+                : `Your documents have been submitted. Add ${imagesRemaining} more store photo${imagesRemaining !== 1 ? "s" : ""} to complete your gallery.`
+              : "Upload the remaining documents to complete verification."
       );
     } catch {
       Alert.alert("Error", "Failed to save one or more documents. Please try again.");
@@ -547,8 +574,8 @@ export default function UploadDocumentsScreen() {
     }
   };
 
-  const TOTAL_REQUIRED = DOCUMENT_SECTIONS.length + MAX_STORE_IMAGES;
-  const uploadedCount = DOCUMENT_SECTIONS.filter((d) => serverDocs[d.key]?.url).length + storeImages.length;
+  const TOTAL_REQUIRED = visibleSections.length + MAX_STORE_IMAGES;
+  const uploadedCount = visibleSections.filter((d) => serverDocs[d.key]?.url).length + storeImages.length;
 
   type StatusBadge = { icon: React.ComponentProps<typeof Ionicons>["name"]; text: string; color: string };
 
@@ -612,7 +639,9 @@ export default function UploadDocumentsScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.infoTitle}>Shop verification</Text>
               <Text style={styles.infoText}>
-                Upload clear documents and store photos. {uploadedCount} of {TOTAL_REQUIRED} submitted.
+                {isApproved
+                  ? `Upload clear documents and store photos. ${uploadedCount} of ${TOTAL_REQUIRED} submitted.`
+                  : `Only Aadhaar and PAN are needed to get started — Trade License, GST, and FSSAI can be added later from your profile. ${uploadedCount} of ${TOTAL_REQUIRED} submitted.`}
               </Text>
             </View>
           </View>
@@ -701,9 +730,10 @@ export default function UploadDocumentsScreen() {
             </View>
           </View>
 
-          {DOCUMENT_GROUPS.map((group) => {
+          {visibleGroups.map((group) => {
             const status = computeGroupStatus(group);
             const numberSection = group.numberKey ? SECTION_BY_KEY[group.numberKey] : null;
+            const isOptionalGroup = !ONBOARDING_GROUP_KEYS.has(group.groupKey);
 
             return (
               <View key={group.groupKey} style={styles.sectionCard}>
@@ -714,7 +744,7 @@ export default function UploadDocumentsScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.sectionTitle}>{group.headerLabel}</Text>
                     <Text style={styles.sectionSubtitle}>
-                      {status ? status.text : "Required for verification"}
+                      {status ? status.text : isOptionalGroup ? "Optional — add anytime" : "Required for verification"}
                     </Text>
                   </View>
                   {status && (

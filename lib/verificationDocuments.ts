@@ -1,11 +1,26 @@
 import { config } from "./config";
 
-export const REQUIRED_DOC_KEYS = [
+export const ALL_DOC_KEYS = [
   "aadhaar_front", "aadhaar_back",
   "pan_front", "pan_back",
   "trade", "gst", "fssai",
 ] as const;
-export type RequiredDocKey = (typeof REQUIRED_DOC_KEYS)[number];
+export type RequiredDocKey = (typeof ALL_DOC_KEYS)[number];
+
+/**
+ * Only these are required to get a store approved for the first time —
+ * Aadhaar and PAN establish identity, which is what admin review actually
+ * gates on today. Trade License / GST / FSSAI are collected later, from the
+ * post-approval profile screen, once the shopkeeper is already live —
+ * see OPTIONAL_DOC_KEYS.
+ */
+export const ONBOARDING_REQUIRED_DOC_KEYS = [
+  "aadhaar_front", "aadhaar_back",
+  "pan_front", "pan_back",
+] as const;
+
+/** Collectable any time after approval; never gates onboarding or re-triggers re-verification when edited. */
+export const OPTIONAL_DOC_KEYS = ["trade", "gst", "fssai"] as const;
 
 export type DocStatus = "pending" | "approved" | "rejected" | null;
 

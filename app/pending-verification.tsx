@@ -19,7 +19,7 @@ import { config } from "../lib/config";
 import { useStoreApprovalGate } from "../lib/useStoreApprovalGate";
 import {
   fetchVerificationDocuments,
-  REQUIRED_DOC_KEYS,
+  ONBOARDING_REQUIRED_DOC_KEYS,
   type VerificationDocument,
 } from "../lib/verificationDocuments";
 import VerificationNavBar from "../components/VerificationNavBar";
@@ -31,14 +31,13 @@ const API_BASE = config.API_BASE;
 // still hadn't added any of their 5 required store photos.
 const MAX_STORE_IMAGES = 5;
 
-const DOC_LABELS: Record<(typeof REQUIRED_DOC_KEYS)[number], string> = {
+// Only Aadhaar + PAN gate onboarding today — Trade License/GST/FSSAI are
+// collected later from the profile screen, so they're not shown here.
+const DOC_LABELS: Record<(typeof ONBOARDING_REQUIRED_DOC_KEYS)[number], string> = {
   aadhaar_front: "Aadhaar Card (Front)",
   aadhaar_back: "Aadhaar Card (Back)",
   pan_front: "PAN Card (Front)",
   pan_back: "PAN Card (Back)",
-  trade: "Trade License",
-  gst: "GST Certificate",
-  fssai: "FSSAI License",
 };
 
 const STEPS = [
@@ -107,9 +106,12 @@ export default function PendingVerificationScreen() {
     }, [loadDocuments, loadStoreImageCount])
   );
 
-  const TOTAL_REQUIRED = REQUIRED_DOC_KEYS.length + MAX_STORE_IMAGES;
-  const uploadedCount = documents.filter((d) => !!d.url).length + storeImageCount;
-  const rejectedDocs = documents.filter((d) => d.status === "rejected");
+  const TOTAL_REQUIRED = ONBOARDING_REQUIRED_DOC_KEYS.length + MAX_STORE_IMAGES;
+  const onboardingDocs = documents.filter((d) =>
+    (ONBOARDING_REQUIRED_DOC_KEYS as readonly string[]).includes(d.doc_type)
+  );
+  const uploadedCount = onboardingDocs.filter((d) => !!d.url).length + storeImageCount;
+  const rejectedDocs = onboardingDocs.filter((d) => d.status === "rejected");
 
   const checkApprovalNow = useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true);
@@ -240,14 +242,14 @@ export default function PendingVerificationScreen() {
               </View>
             </View>
             <Text style={styles.docsDesc}>
-              Upload Aadhaar (front & back), PAN (front & back), Trade License, GST Certificate, FSSAI License, and {MAX_STORE_IMAGES} store photos to continue verification.
+              Upload Aadhaar (front & back), PAN (front & back), and {MAX_STORE_IMAGES} store photos to continue verification. Trade License, GST Certificate, and FSSAI License can be added later from your profile once you&apos;re approved.
             </Text>
 
             {rejectedDocs.map((doc) => (
               <View key={doc.doc_type} style={styles.rejectionRow}>
                 <Ionicons name="close-circle" size={15} color={colors.error} />
                 <Text style={styles.rejectionRowText}>
-                  {DOC_LABELS[doc.doc_type]} needs to be re-uploaded
+                  {DOC_LABELS[doc.doc_type as keyof typeof DOC_LABELS]} needs to be re-uploaded
                   {doc.rejection_reason ? ` — ${doc.rejection_reason}` : ""}
                 </Text>
               </View>
