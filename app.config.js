@@ -42,7 +42,7 @@ module.exports = () => {
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       package: "com.nearandnow.shopkeeper",
-      versionCode: 15,
+      versionCode: 16,
       jsEngine: "hermes",
       // Native Maps SDK meta-data — required for MapView tiles on Android
       config: {
