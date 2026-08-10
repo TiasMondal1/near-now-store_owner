@@ -7,6 +7,7 @@ import * as Device from 'expo-device';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { router } from 'expo-router';
 import { apiClient } from './api-client';
 import { getSession } from '../session';
 
@@ -247,10 +248,11 @@ class NotificationService {
   private handleNotificationTap(notification: any): void {
     const data = notification.request.content.data;
 
-    // Navigate based on notification type
+    // Navigate based on notification type — mirrors notification-inbox.tsx's
+    // own openNotification handler for the in-app tap case, so both entry
+    // points land in the same place.
     if (data?.type === 'new_order') {
-      // Navigate to orders screen
-      if (__DEV__) console.log('Navigate to order:', data.orderId);
+      router.push('/(tabs)/previous-orders');
     }
   }
 

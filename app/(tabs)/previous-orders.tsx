@@ -271,8 +271,16 @@ export default function OrdersTab() {
 
   const fetchPreviousOrdersRef = useRef<(() => Promise<void>) | null>(null);
 
+  // Timestamp of the most recent local accept/reject mutation. A poll that
+  // was already in-flight when the shopkeeper accepted/rejected an order
+  // carries pre-mutation server data — applying it after the fact would
+  // revert the just-completed action's optimistic update (e.g. an accepted
+  // allocation flashing back to pending_acceptance) for one poll cycle.
+  const lastLocalMutationRef = useRef(0);
+
   const fetchActiveOrders = useCallback(async () => {
     if (!session?.token) return;
+    const requestStartedAt = Date.now();
     try {
       const response = await apiClient.get("/shopkeeper/orders", {
         Authorization: `Bearer ${session.token}`,
@@ -283,6 +291,11 @@ export default function OrdersTab() {
       }
       const json: any = response.data;
       if (json?.success) {
+        // A local mutation landed after this request was issued — its
+        // response reflects stale, pre-mutation state. Skip applying it;
+        // the next scheduled poll will pick up the real current state.
+        if (lastLocalMutationRef.current > requestStartedAt) return;
+
         const active = (json.orders || []).filter(
           (a: Allocation) => a.alloc_status === "accepted" || a.alloc_status === "pending_acceptance"
         );
@@ -371,7 +384,18 @@ export default function OrdersTab() {
   useEffect(() => { fetchPreviousOrdersRef.current = fetchPreviousOrders; }, [fetchPreviousOrders]);
 
   const acceptAllocation = useCallback(async (allocId: string, itemIds?: string[]) => {
-    if (!session?.token || respondingId) return;
+    if (!session?.token) return;
+    if (respondingId) {
+      // A different card's accept/reject is already in flight — the button
+      // guard below only disables the card actually being responded to
+      // (accepting={respondingId === a.allocation_id}), so a second card is
+      // still tappable and would otherwise silently no-op here with zero
+      // feedback.
+      if (respondingId !== allocId) {
+        Alert.alert("Please wait", "Still processing your last action — try again in a moment.");
+      }
+      return;
+    }
     setRespondingId(allocId);
     try {
       const alloc = allocations.find((a) => a.allocation_id === allocId);
@@ -384,6 +408,7 @@ export default function OrdersTab() {
       const json: any = response.data;
       if (response.success && json?.success) {
         const acceptedIds = new Set(ids);
+        lastLocalMutationRef.current = Date.now();
         setAllocations((prev) =>
           prev.map((a) =>
             a.allocation_id === allocId
@@ -407,6 +432,10 @@ export default function OrdersTab() {
   }, [session?.token, allocations, respondingId]);
 
   const rejectAllocation = useCallback((allocId: string, orderCode: string) => {
+    if (respondingId && respondingId !== allocId) {
+      Alert.alert("Please wait", "Still processing your last action — try again in a moment.");
+      return;
+    }
     Alert.alert("Reject Order", `Reject order #${orderCode}? This cannot be undone.`, [
       { text: "Cancel", style: "cancel" },
       {
@@ -424,6 +453,7 @@ export default function OrdersTab() {
               Alert.alert("Error", "Failed to reject. Please try again.");
               return;
             }
+            lastLocalMutationRef.current = Date.now();
             setAllocations((prev) => prev.filter((a) => a.allocation_id !== allocId));
           } catch {
             Alert.alert("Error", "Failed to reject. Please try again.");
@@ -433,7 +463,7 @@ export default function OrdersTab() {
         },
       },
     ]);
-  }, [session?.token]);
+  }, [session?.token, respondingId]);
 
   useEffect(() => {
     if (session && storeId) {
