@@ -31,6 +31,20 @@ import { useSmartPoll } from "../lib/useSmartPoll";
 const API_BASE = config.API_BASE;
 const MAX_STORE_IMAGES = 5;
 
+// store_profile_change_requests now also carries bank/payout fields
+// (saveBillingInfo in billing-info.tsx submits into the same table/queue
+// this screen already polls) — this used to be a 3-way name/address/phone
+// ternary that would have silently mislabeled any bank field as "Phone".
+const CHANGE_FIELD_LABELS: Record<string, string> = {
+  name: "Store Name",
+  address: "Address",
+  phone: "Phone",
+  bank_account_number: "Bank Account Number",
+  bank_ifsc_code: "IFSC Code",
+  bank_branch_name: "Bank Branch",
+  bank_passbook_storage_path: "Passbook/Cheque Photo",
+};
+
 export default function ProfileScreen() {
   useRequireStoreApproval();
   const [session, setSession] = useState<any>(null);
@@ -614,7 +628,7 @@ export default function ProfileScreen() {
                 <Text style={styles.pendingBannerTitle}>Changes pending admin review</Text>
                 {Object.entries(pendingChangeRequest.changes).map(([field, diff]) => (
                   <Text key={field} style={styles.pendingBannerLine}>
-                    {field === "name" ? "Store Name" : field === "address" ? "Address" : "Phone"}: {diff.new}
+                    {CHANGE_FIELD_LABELS[field] || field}: {field === "bank_passbook_storage_path" ? "New photo uploaded" : diff.new}
                   </Text>
                 ))}
               </View>

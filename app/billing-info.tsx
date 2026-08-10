@@ -25,6 +25,16 @@ import VerificationNavBar from "../components/VerificationNavBar";
 
 const API_BASE = config.API_BASE;
 
+const CHANGE_FIELD_LABELS: Record<string, string> = {
+  bank_account_number: "Bank Account Number",
+  bank_ifsc_code: "IFSC Code",
+  bank_branch_name: "Bank Branch",
+  bank_passbook_storage_path: "Passbook/Cheque Photo",
+};
+const BILLING_FIELDS = new Set(Object.keys(CHANGE_FIELD_LABELS));
+
+type PendingChangeRequest = { changes: Record<string, { old: string | null; new: string }> } | null;
+
 export default function BillingInfoScreen() {
   const cachedStoreId = peekStores()?.[0]?.id ?? null;
   const [loading, setLoading] = useState(!cachedStoreId);
@@ -41,6 +51,28 @@ export default function BillingInfoScreen() {
   const [passbookUri, setPassbookUri] = useState<string | null>(null);
   const [pendingPassbookFile, setPendingPassbookFile] = useState<PickedBillingFile | null>(null);
   const [saving, setSaving] = useState(false);
+  const [pendingChangeRequest, setPendingChangeRequest] = useState<PendingChangeRequest>(null);
+
+  const loadPendingChangeRequest = async (t: string, sId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/store-owner/stores/${sId}/profile-change-request`, {
+        headers: { Authorization: `Bearer ${t}` },
+      });
+      const json = await res.json().catch(() => null);
+      // profile.tsx's identity-field edits (name/address/phone) share this
+      // same request queue — only surface it here if it actually contains a
+      // billing field, otherwise this screen would show a "pending review"
+      // banner for a change it has nothing to do with.
+      const req = json?.request as PendingChangeRequest;
+      if (req && Object.keys(req.changes).some((f) => BILLING_FIELDS.has(f))) {
+        setPendingChangeRequest(req);
+      } else {
+        setPendingChangeRequest(null);
+      }
+    } catch {
+      /* non-fatal — banner just doesn't show */
+    }
+  };
 
   const applyBillingInfo = (info: BillingInfo) => {
     setOwnerName(info.ownerName);
@@ -81,6 +113,7 @@ export default function BillingInfoScreen() {
       } finally {
         setLoading(false);
       }
+      void loadPendingChangeRequest(session.token, store.id);
     })();
   }, []);
 
@@ -157,7 +190,8 @@ export default function BillingInfoScreen() {
         return;
       }
       setPendingPassbookFile(null);
-      Alert.alert("Saved", "Your billing info has been saved.");
+      Alert.alert("Submitted for review", "Your billing info change has been sent to the admin team for review before it takes effect.");
+      void loadPendingChangeRequest(token, storeId);
     } finally {
       setSaving(false);
     }
@@ -190,6 +224,22 @@ export default function BillingInfoScreen() {
               <Text style={styles.infoText}>Bank details used to pay out your store's earnings.</Text>
             </View>
           </View>
+
+          {pendingChangeRequest && (
+            <View style={styles.pendingBanner}>
+              <Ionicons name="time-outline" size={18} color={colors.warning} />
+              <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                <Text style={styles.pendingBannerTitle}>Changes pending admin review</Text>
+                {Object.entries(pendingChangeRequest.changes)
+                  .filter(([field]) => BILLING_FIELDS.has(field))
+                  .map(([field, diff]) => (
+                    <Text key={field} style={styles.pendingBannerLine}>
+                      {CHANGE_FIELD_LABELS[field] || field}: {field === "bank_passbook_storage_path" ? "New photo uploaded" : diff.new}
+                    </Text>
+                  ))}
+              </View>
+            </View>
+          )}
 
           <View style={styles.sectionCard}>
             <View style={styles.sectionHeader}>
@@ -358,6 +408,19 @@ const styles = StyleSheet.create({
   },
   infoTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: "700", marginBottom: 2 },
   infoText: { color: colors.textSecondary, fontSize: 13, lineHeight: 18 },
+
+  pendingBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: colors.warning + "18",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.warning + "40",
+    marginBottom: spacing.lg,
+    padding: spacing.md,
+  },
+  pendingBannerTitle: { fontWeight: "700", fontSize: 13, color: colors.textPrimary, marginBottom: 2 },
+  pendingBannerLine: { fontSize: 12, color: colors.textSecondary },
 
   sectionCard: {
     backgroundColor: colors.surface,
