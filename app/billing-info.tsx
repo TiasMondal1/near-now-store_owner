@@ -22,6 +22,7 @@ import { clearStoreCache, forceFetchStores, peekStores } from "../lib/appCache";
 import { uploadOwnerImage, OWNER_IMAGE_KEY } from "../lib/storage";
 import { fetchBillingInfo, saveBillingInfo, type BillingInfo, type PickedBillingFile } from "../lib/billingInfo";
 import VerificationNavBar from "../components/VerificationNavBar";
+import { useSmartPoll } from "../lib/useSmartPoll";
 
 const API_BASE = config.API_BASE;
 
@@ -116,6 +117,14 @@ export default function BillingInfoScreen() {
       void loadPendingChangeRequest(session.token, store.id);
     })();
   }, []);
+
+  // While a billing change is pending, poll for the admin's decision so the
+  // banner clears without needing to leave and re-enter this screen — mirrors
+  // profile.tsx's identical pattern for identity-field pending requests.
+  useSmartPoll(
+    () => { if (token && storeId) void loadPendingChangeRequest(token, storeId); },
+    { intervalMs: 20_000, enabled: !!pendingChangeRequest && !!token && !!storeId }
+  );
 
   const pickOwnerImage = async () => {
     if (ownerImageUrl) return; // already set — read-only from here on
