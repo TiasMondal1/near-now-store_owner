@@ -165,6 +165,16 @@ export async function upsertStoreProduct(
   if (!supabase) return { error: "Supabase not configured" };
   if (!storeId || !masterProductId) return { error: "Missing store_id or master_product_id" };
 
+  const { data: masterProduct, error: masterErr } = await supabase
+    .from("master_products")
+    .select("is_active")
+    .eq("id", masterProductId)
+    .maybeSingle();
+  if (masterErr) return { error: masterErr.message };
+  if (!masterProduct || masterProduct.is_active === false) {
+    return { error: "This product is no longer available in the Near&Now catalog" };
+  }
+
   // Include soft-deleted rows so we can restore them instead of inserting a duplicate
   const { data: existing, error: selectErr } = await supabase
     .from("products")
@@ -284,10 +294,10 @@ export async function addCustomMasterProduct(
 
   const base = Number(input.base_price);
   const disc = Number(input.discounted_price);
-  if (!Number.isFinite(base) || base < 0) {
+  if (!Number.isFinite(base) || base <= 0) {
     return { success: false, error: "Enter a valid base (MRP) price" };
   }
-  if (!Number.isFinite(disc) || disc < 0) {
+  if (!Number.isFinite(disc) || disc <= 0) {
     return { success: false, error: "Enter a valid discounted / selling price" };
   }
   if (disc > base) {
@@ -490,6 +500,7 @@ export async function getMasterProductsPage({
     .select(
       "id, name, description, brand, category, image_url, base_price, discounted_price, unit, is_active, is_loose"
     )
+    .eq("is_active", true)
     .range(from, from + pageSize - 1)
     .order("name");
 

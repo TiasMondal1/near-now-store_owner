@@ -105,7 +105,7 @@ const PayoutCard = React.memo(function PayoutCard({
           ) : null}
         </View>
         <View style={styles.earningWrap}>
-          <Text style={styles.earningLabel}>PAYOUT</Text>
+          <Text style={styles.earningLabel}>ORDER VALUE</Text>
           <Text style={styles.earningText}>{formatINR(amount)}</Text>
         </View>
       </View>
@@ -198,19 +198,23 @@ export default function PaymentsTab() {
 
   const filtered = period === "today" ? todayPayouts : period === "week" ? weekPayouts : payouts;
   const filteredTotal = period === "today" ? todayTotal : period === "week" ? weekTotal : allTotal;
-  const periodLabel = period === "today" ? "Today's Earnings" : period === "week" ? "This Week" : "All Time";
+  const periodLabel = period === "today" ? "Today's Order Value" : period === "week" ? "This Week" : "All Time";
 
   return (
     <SafeAreaView style={styles.safe}>
       <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
         <View style={styles.headerRow}>
-          <Text style={styles.header}>Payouts</Text>
+          <Text style={styles.header}>Delivered Orders</Text>
           {payouts.length > 0 && (
             <View style={styles.countBadge}>
               <Text style={styles.countBadgeText}>{payouts.length}</Text>
             </View>
           )}
         </View>
+
+        <Text style={{ color: colors.textTertiary, fontSize: 12, paddingHorizontal: spacing.lg, marginTop: -4, marginBottom: spacing.sm }}>
+          Shows the value of your delivered orders. Your actual settlement amount (after platform fees) is confirmed separately.
+        </Text>
 
         {/* Period tabs */}
         <View style={styles.periodRow}>
@@ -303,7 +307,7 @@ export default function PaymentsTab() {
                 <View style={styles.emptyIconWrap}>
                   <Ionicons name="alert-circle-outline" size={36} color={colors.error} />
                 </View>
-                <Text style={styles.emptyText}>Couldn't load payouts</Text>
+                <Text style={styles.emptyText}>Couldn't load orders</Text>
                 <Text style={styles.emptySub}>Check your connection and try again.</Text>
                 <TouchableOpacity
                   style={{ backgroundColor: colors.error, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, marginTop: spacing.md, borderRadius: radius.md }}
@@ -318,11 +322,11 @@ export default function PaymentsTab() {
                   <Ionicons name="wallet-outline" size={36} color={colors.primary} />
                 </View>
                 <Text style={styles.emptyText}>
-                  {period === "today" ? "No earnings today" : period === "week" ? "No earnings this week" : "No payouts yet"}
+                  {period === "today" ? "No orders today" : period === "week" ? "No orders this week" : "No delivered orders yet"}
                 </Text>
                 <Text style={styles.emptySub}>
                   {period === "all"
-                    ? "Payouts appear here once orders are delivered"
+                    ? "Delivered orders appear here"
                     : "Completed orders in this period will show here"}
                 </Text>
               </View>
