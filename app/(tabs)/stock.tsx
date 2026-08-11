@@ -672,7 +672,7 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.addCustomTitle}>Add Custom Product</Text>
-          <Text style={styles.addCustomSubtitle}>Submitted for admin review before it's added to your store.</Text>
+          <Text style={styles.addCustomSubtitle}>Submitted for admin review before it&apos;s added to your store.</Text>
         </View>
       </View>
 

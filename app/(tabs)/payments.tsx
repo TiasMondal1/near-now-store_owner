@@ -307,7 +307,7 @@ export default function PaymentsTab() {
                 <View style={styles.emptyIconWrap}>
                   <Ionicons name="alert-circle-outline" size={36} color={colors.error} />
                 </View>
-                <Text style={styles.emptyText}>Couldn't load orders</Text>
+                <Text style={styles.emptyText}>Couldn&apos;t load orders</Text>
                 <Text style={styles.emptySub}>Check your connection and try again.</Text>
                 <TouchableOpacity
                   style={{ backgroundColor: colors.error, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, marginTop: spacing.md, borderRadius: radius.md }}

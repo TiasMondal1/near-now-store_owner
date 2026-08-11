@@ -199,7 +199,11 @@ export default function BillingInfoScreen() {
         return;
       }
       setPendingPassbookFile(null);
-      Alert.alert("Submitted for review", "Your billing info change has been sent to the admin team for review before it takes effect.");
+      if (res.cancelled) {
+        Alert.alert("Request withdrawn", "Your pending billing change has been withdrawn since it matched your current details.");
+      } else {
+        Alert.alert("Submitted for review", "Your billing info change has been sent to the admin team for review before it takes effect.");
+      }
       void loadPendingChangeRequest(token, storeId);
     } finally {
       setSaving(false);
@@ -230,7 +234,7 @@ export default function BillingInfoScreen() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.infoTitle}>Billing info</Text>
-              <Text style={styles.infoText}>Bank details used to pay out your store's earnings.</Text>
+              <Text style={styles.infoText}>Bank details used to pay out your store&apos;s earnings.</Text>
             </View>
           </View>
 

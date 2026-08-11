@@ -401,7 +401,18 @@ export default function ProfileScreen() {
       if (storeAddress.trim() && storeAddress.trim() !== (storeInfo.address ?? "")) patch.address = storeAddress.trim();
       if (storePhone.trim() && storePhone.trim() !== (storeInfo.phone ?? "")) patch.phone = storePhone.trim();
 
-      if (Object.keys(patch).length === 0) {
+      // A genuinely-untouched form only needs a local bail. But if every
+      // edited field was reverted back to its committed value while an
+      // identity-field change request from an earlier session is still
+      // pending, an empty patch here must still reach the backend — that's
+      // the only way it learns the field was reverted and can withdraw the
+      // now-stale request (see submitProfileChangeRequest's ownedFields
+      // reconciliation). Without this, a reverted field's stale pending
+      // entry could sit forever with no way to cancel it (found 2026-08-11).
+      const hasPendingIdentityFields =
+        !!pendingChangeRequest &&
+        Object.keys(pendingChangeRequest.changes).some((f) => (["name", "address", "phone"] as const).includes(f as "name" | "address" | "phone"));
+      if (Object.keys(patch).length === 0 && !hasPendingIdentityFields) {
         setEditing(false);
         return;
       }
@@ -430,7 +441,11 @@ export default function ProfileScreen() {
       setPendingChangeRequest(json.request);
       await hydrate(storeInfo);
       setEditing(false);
-      Alert.alert("Submitted for review", "Your requested changes have been sent to the admin team and will apply once approved.");
+      if (json.cancelled) {
+        Alert.alert("Request withdrawn", "Your pending change request has been withdrawn since it matched your current details.");
+      } else {
+        Alert.alert("Submitted for review", "Your requested changes have been sent to the admin team and will apply once approved.");
+      }
     } catch (e: any) {
       Alert.alert("Error", e?.message || "Failed to save changes. Please try again.");
     } finally {

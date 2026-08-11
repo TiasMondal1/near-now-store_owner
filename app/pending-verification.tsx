@@ -15,7 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { clearSession, getSession } from "../session";
 import { notificationService } from "../lib/notifications";
 import { colors, radius, spacing, shadows } from "../lib/theme";
-import { config } from "../lib/config";
+import { apiClient } from "../lib/api-client";
 import { useStoreApprovalGate } from "../lib/useStoreApprovalGate";
 import {
   fetchVerificationDocuments,
@@ -25,7 +25,6 @@ import {
 import { fetchBillingInfo } from "../lib/billingInfo";
 import VerificationNavBar from "../components/VerificationNavBar";
 
-const API_BASE = config.API_BASE;
 // Keep in sync with MAX_STORE_IMAGES in app/upload-documents.tsx — this
 // screen's "required documents" count previously only tallied the 7
 // business documents, so it kept reading "7/7" even when the shopkeeper
@@ -74,17 +73,17 @@ export default function PendingVerificationScreen() {
     try {
       const session = await getSession();
       if (!session?.token) return;
-      const [info, changeReqJson] = await Promise.all([
+      const [info, changeReqRes] = await Promise.all([
         fetchBillingInfo(session.token, store.id),
-        fetch(`${API_BASE}/store-owner/stores/${store.id}/profile-change-request`, {
-          headers: { Authorization: `Bearer ${session.token}` },
-        })
-          .then((r) => r.json())
-          .catch(() => null),
+        apiClient.get<{ request: { changes: Record<string, unknown> } | null }>(
+          `/store-owner/stores/${store.id}/profile-change-request`,
+          { Authorization: `Bearer ${session.token}` }
+        ),
       ]);
+      const changeReq = changeReqRes.success ? changeReqRes.data?.request : null;
       const hasPendingBilling =
-        !!changeReqJson?.request &&
-        Object.keys(changeReqJson.request.changes ?? {}).some((f) =>
+        !!changeReq &&
+        Object.keys(changeReq.changes ?? {}).some((f) =>
           ["bank_account_number", "bank_ifsc_code", "bank_branch_name", "bank_passbook_storage_path"].includes(f)
         );
       setBillingComplete(!!info.bankAccountNumber || hasPendingBilling);
@@ -118,12 +117,12 @@ export default function PendingVerificationScreen() {
     try {
       const session = await getSession();
       if (!session?.token) return;
-      const res = await fetch(`${API_BASE}/store-owner/stores/${store.id}/images`, {
-        headers: { Authorization: `Bearer ${session.token}` },
-      });
-      const json = await res.json().catch(() => null);
-      if (res.ok && json?.success) {
-        setStoreImageCount((json.images ?? []).length);
+      const res = await apiClient.get<{ images?: unknown[] }>(
+        `/store-owner/stores/${store.id}/images`,
+        { Authorization: `Bearer ${session.token}` }
+      );
+      if (res.success) {
+        setStoreImageCount((res.data?.images ?? []).length);
       }
     } catch {
       /* non-fatal — keep showing whatever we last had */

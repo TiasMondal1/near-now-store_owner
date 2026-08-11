@@ -177,7 +177,7 @@ export default function StoreOwnerOtpScreen() {
             </TouchableOpacity>
 
             <View style={styles.resendRow}>
-              <Text style={styles.resendText}>Didn't get the code?</Text>
+              <Text style={styles.resendText}>Didn&apos;t get the code?</Text>
               {secondsLeft > 0 ? (
                 <Text style={styles.resendTimer}>Resend in {secondsLeft}s</Text>
               ) : (

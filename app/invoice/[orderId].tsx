@@ -213,7 +213,7 @@ export default function InvoiceScreen() {
         <View style={styles.emptyCard}>
           <Ionicons name="receipt-outline" size={40} color={colors.textTertiary} />
           <Text style={styles.emptyTitle}>Invoice not found</Text>
-          <Text style={styles.emptyText}>This order's details couldn't be loaded.</Text>
+          <Text style={styles.emptyText}>This order&apos;s details couldn&apos;t be loaded.</Text>
         </View>
       </SafeAreaView>
     );

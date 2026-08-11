@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { getSession } from "../session";
-import { config } from "../lib/config";
+import { apiClient } from "../lib/api-client";
 import { colors, radius, spacing } from "../lib/theme";
 
 type Submission = {
@@ -50,15 +50,15 @@ export default function ProductSubmissionsScreen() {
         router.replace("/landing");
         return;
       }
-      const res = await fetch(`${config.API_BASE}/shopkeeper/product-submissions`, {
-        headers: { Authorization: `Bearer ${s.token}` },
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.success) {
-        setError(data?.error || "Failed to load submissions");
+      const res = await apiClient.get<{ submissions?: Submission[] }>(
+        "/shopkeeper/product-submissions",
+        { Authorization: `Bearer ${s.token}` }
+      );
+      if (!res.success) {
+        setError(res.error || "Failed to load submissions");
         return;
       }
-      setSubmissions(data.submissions ?? []);
+      setSubmissions(res.data?.submissions ?? []);
     } catch (e: any) {
       setError(e?.message || "Network error");
     }
@@ -86,7 +86,7 @@ export default function ProductSubmissionsScreen() {
         </TouchableOpacity>
         <View style={styles.headerText}>
           <Text style={styles.title}>My Submissions</Text>
-          <Text style={styles.subtitle}>Custom products you've sent for admin review</Text>
+          <Text style={styles.subtitle}>Custom products you&apos;ve sent for admin review</Text>
         </View>
       </View>
 
@@ -105,7 +105,7 @@ export default function ProductSubmissionsScreen() {
             <View style={styles.emptyState}>
               <Text style={styles.emptyTitle}>No submissions yet</Text>
               <Text style={styles.emptyBody}>
-                Products you add from "Add Custom Product" will show up here with their review status.
+                Products you add from &quot;Add Custom Product&quot; will show up here with their review status.
               </Text>
             </View>
           )}

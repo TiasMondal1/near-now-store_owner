@@ -30,6 +30,7 @@ import { normalizeToShopkeeperRole } from "../lib/shopkeeperRole";
 import { colors, radius, spacing } from "../lib/theme";
 import { peekStores, fetchStoresCached, clearStoreCache, persistStores, type CachedStore } from "../lib/appCache";
 import { uploadOwnerImage, OWNER_IMAGE_KEY } from "../lib/storage";
+import { fetchVerificationDocuments, type VerificationDocument } from "../lib/verificationDocuments";
 import VerificationNavBar from "../components/VerificationNavBar";
 
 const API_BASE = config.API_BASE;
@@ -93,6 +94,14 @@ export default function StoreOwnerSignupScreen() {
   const [loadingExisting, setLoadingExisting] = useState(false);
   const [existingStore, setExistingStore] = useState<CachedStore | null>(cachedStore);
   const [storeLoadFailed, setStoreLoadFailed] = useState(false);
+  // A returning unapproved owner now lands here (Details) instead of Status
+  // — without this, a store that was suspended (an Aadhaar/PAN document
+  // rejected post-approval) would have no way to learn why until they
+  // manually tapped the Status tab. Suspension always pairs with a rejected
+  // onboarding document server-side (see suspendStoreIfApprovedAndGetName),
+  // so surfacing rejected docs here restores that visibility regardless of
+  // which tab the owner lands on first.
+  const [rejectedDocs, setRejectedDocs] = useState<VerificationDocument[]>([]);
   const [ownerName2, setOwnerName2] = useState(""); // read-only display copies, kept separate from the editable form's own state above
   const [ownerPhone, setOwnerPhone] = useState("");
   const [ownerEmail, setOwnerEmail] = useState("");
@@ -132,6 +141,12 @@ export default function StoreOwnerSignupScreen() {
         } else {
           setOwnerImageUri(null);
           AsyncStorage.removeItem(OWNER_IMAGE_KEY).catch(() => {});
+        }
+        try {
+          const docs = await fetchVerificationDocuments(session.token, stores[0].id);
+          setRejectedDocs(docs.filter((d) => d.status === "rejected"));
+        } catch {
+          /* non-fatal — banner just doesn't show */
         }
       } else {
         setStoreLoadFailed(true);
@@ -578,6 +593,28 @@ export default function StoreOwnerSignupScreen() {
             <Text style={viewOnlyStyles.title}>Your Details</Text>
             <Text style={viewOnlyStyles.subtitle}>Submitted — shown read-only until you&apos;re verified</Text>
 
+            {rejectedDocs.length > 0 && (
+              <View style={viewOnlyStyles.rejectionBanner}>
+                <Ionicons name="alert-circle" size={18} color={colors.error} />
+                <View style={{ flex: 1 }}>
+                  <Text style={viewOnlyStyles.rejectionBannerTitle}>Action needed — a document was rejected</Text>
+                  {rejectedDocs.map((doc) => (
+                    <Text key={doc.doc_type} style={viewOnlyStyles.rejectionBannerText}>
+                      {doc.doc_type.replace(/_/g, " ")}
+                      {doc.rejection_reason ? ` — ${doc.rejection_reason}` : ""}
+                    </Text>
+                  ))}
+                  <TouchableOpacity
+                    style={viewOnlyStyles.rejectionBannerBtn}
+                    onPress={() => router.push("/upload-documents")}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={viewOnlyStyles.rejectionBannerBtnText}>Go to Documents</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
             {loadingExisting ? (
               <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.xl }} />
             ) : (
@@ -628,7 +665,7 @@ export default function StoreOwnerSignupScreen() {
                       activeOpacity={0.8}
                     >
                       <Ionicons name="refresh" size={14} color={colors.primary} />
-                      <Text style={viewOnlyStyles.retryBtnText}>Couldn't load store details — tap to retry</Text>
+                      <Text style={viewOnlyStyles.retryBtnText}>Couldn&apos;t load store details — tap to retry</Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -1260,6 +1297,28 @@ const styles = StyleSheet.create({
 });
 
 const viewOnlyStyles = StyleSheet.create({
+  rejectionBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    backgroundColor: colors.error + "0C",
+    borderWidth: 1,
+    borderColor: colors.error + "30",
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  rejectionBannerTitle: { color: colors.error, fontSize: 13, fontWeight: "700", marginBottom: 2 },
+  rejectionBannerText: { color: colors.error, fontSize: 12, lineHeight: 17, textTransform: "capitalize" },
+  rejectionBannerBtn: {
+    alignSelf: "flex-start",
+    marginTop: spacing.sm,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: radius.full,
+    backgroundColor: colors.error,
+  },
+  rejectionBannerBtnText: { color: "#fff", fontSize: 12, fontWeight: "700" },
   avatarTouch: { position: "relative" },
   avatar: {
     width: 76,

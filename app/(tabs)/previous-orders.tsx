@@ -725,7 +725,7 @@ export default function OrdersTab() {
               <View style={[styles.emptyIconWrap, { backgroundColor: colors.error + "12" }]}>
                 <Ionicons name="alert-circle-outline" size={36} color={colors.error} />
               </View>
-              <Text style={styles.emptyTitle}>Couldn't load orders</Text>
+              <Text style={styles.emptyTitle}>Couldn&apos;t load orders</Text>
               <Text style={styles.emptySub}>Check your connection and try again.</Text>
               <TouchableOpacity
                 style={[styles.emptyIconWrap, { backgroundColor: colors.error, width: undefined, height: undefined, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, marginTop: spacing.md, borderRadius: radius.md }]}

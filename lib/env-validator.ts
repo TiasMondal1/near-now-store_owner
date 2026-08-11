@@ -20,19 +20,28 @@ export function validateEnvironment(): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  // Required variables
-  const required = [
-    'EXPO_PUBLIC_API_BASE_URL',
-    'EXPO_PUBLIC_SUPABASE_URL',
-    'EXPO_PUBLIC_SUPABASE_ANON_KEY',
-  ];
+  // Required variables — mapped to statically-referenced process.env reads
+  // (not process.env[key]) since Expo's bundler inlines EXPO_PUBLIC_* vars by
+  // matching the literal `process.env.NAME` expression at build time; a
+  // dynamic/computed access can't be statically analyzed and silently never
+  // gets replaced, which is exactly the class of bug this validator exists
+  // to catch — it shouldn't itself rely on the pattern it's guarding against.
+  const requiredValues: Record<string, string | undefined> = {
+    EXPO_PUBLIC_API_BASE_URL: process.env.EXPO_PUBLIC_API_BASE_URL,
+    EXPO_PUBLIC_SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL,
+    EXPO_PUBLIC_SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
+  };
+  const required = Object.keys(requiredValues);
 
   // Optional but recommended
-  const optional = ['EXPO_PUBLIC_GOOGLE_MAPS_API_KEY'];
+  const optionalValues: Record<string, string | undefined> = {
+    EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY,
+  };
+  const optional = Object.keys(optionalValues);
 
   // Check required variables
   required.forEach((key) => {
-    const value = process.env[key];
+    const value = requiredValues[key];
     if (!value || value.trim() === '') {
       errors.push(`Missing required environment variable: ${key}`);
     } else {
@@ -60,7 +69,7 @@ export function validateEnvironment(): ValidationResult {
 
   // Check optional variables
   optional.forEach((key) => {
-    const value = process.env[key];
+    const value = optionalValues[key];
     if (!value || value.trim() === '') {
       warnings.push(`Optional environment variable not set: ${key}`);
     }
