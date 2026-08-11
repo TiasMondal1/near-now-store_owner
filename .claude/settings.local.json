@@ -19,7 +19,8 @@
       "Bash(brew list *)",
       "Read(//opt/homebrew/opt/**)",
       "Read(//Library/Java/JavaVirtualMachines/**)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(npm run *)"
     ]
   }
 }
