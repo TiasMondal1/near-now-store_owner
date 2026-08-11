@@ -549,6 +549,11 @@ export default function UploadDocumentsScreen() {
       const imagesRemaining = MAX_STORE_IMAGES - totalImagesAfterSave;
       const imagesComplete = imagesRemaining <= 0;
 
+      // First-time full submission (not yet approved, all docs + photos in) is the
+      // only case that should advance the flow — editing already-approved docs or
+      // leaving something incomplete keeps the shopkeeper on this screen.
+      const readyForBilling = !isApproved && allDocsSubmitted && imagesComplete;
+
       Alert.alert(
         "Saved",
         // Once approved, nothing here blocks the shop from being live —
@@ -565,7 +570,10 @@ export default function UploadDocumentsScreen() {
               ? imagesComplete
                 ? "Your documents have been submitted. Our team will verify them before your shop goes live."
                 : `Your documents have been submitted. Add ${imagesRemaining} more store photo${imagesRemaining !== 1 ? "s" : ""} to complete your gallery.`
-              : "Upload the remaining documents to complete verification."
+              : "Upload the remaining documents to complete verification.",
+        readyForBilling
+          ? [{ text: "OK", onPress: () => router.replace("/billing-info") }]
+          : undefined
       );
     } catch {
       Alert.alert("Error", "Failed to save one or more documents. Please try again.");
