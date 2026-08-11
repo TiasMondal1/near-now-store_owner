@@ -19,7 +19,7 @@ export default function RegistrationSuccessScreen() {
     <View style={styles.container}>
       <View style={styles.card}>
         <Text style={styles.emoji}>✓</Text>
-        <Text style={styles.title}>Thanks for registering with Near and Now</Text>
+        <Text style={styles.title}>Thanks for registering with Near & Now</Text>
         <Text style={styles.sub}>
           Upload your shop documents next. Your store will go live after admin verification.
         </Text>

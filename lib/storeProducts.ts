@@ -11,7 +11,6 @@ export type StoreProductRow = {
   store_id: string;
   master_product_id: string;
   is_active?: boolean;
-  quantity?: number;
   name?: string;
   phone?: string;
 };
@@ -25,7 +24,7 @@ export async function getStoreProductsFromDb(
   if (!supabase) return [];
   const { data, error } = await supabase
     .from("products")
-    .select("id, store_id, master_product_id, is_active, quantity, name, phone")
+    .select("id, store_id, master_product_id, is_active, name, phone")
     .eq("store_id", storeId)
     .is("deleted_at", null)
     .order("created_at", { ascending: true });
@@ -123,7 +122,7 @@ export async function getStoreProductsWithNames(
 /** Your stock list: id, name, unit, is_active, is_loose for main page */
 export async function getStockListFromDb(
   storeId: string
-): Promise<Array<{ id: string; name: string; unit: string; storeProductId: string; is_active: boolean; quantity: number; is_loose: boolean }>> {
+): Promise<Array<{ id: string; name: string; unit: string; storeProductId: string; is_active: boolean; is_loose: boolean }>> {
   const rows = await getStoreProductsWithNames(storeId);
   return rows.map((r) => {
     const rawName = r.name ?? (r as any).product_name;
@@ -134,23 +133,9 @@ export async function getStockListFromDb(
       name,
       unit: (r as any).unit || "",
       is_active: r.is_active !== false,
-      quantity: r.quantity ?? 0,
       is_loose: (r as any).is_loose === true,
     };
   });
-}
-
-/** Update available stock quantity for a store product. */
-export async function updateProductQuantity(
-  storeProductId: string,
-  quantity: number
-): Promise<boolean> {
-  if (!supabase) return false;
-  const { error } = await supabase
-    .from("products")
-    .update({ quantity, updated_at: new Date().toISOString() })
-    .eq("id", storeProductId);
-  return !error;
 }
 
 export type UpsertResult = { id: string } | { error: string };
