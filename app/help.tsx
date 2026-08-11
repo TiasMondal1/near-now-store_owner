@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   Linking, Alert, TextInput, ActivityIndicator,
@@ -35,10 +35,35 @@ const QUICK_MESSAGES = [
   'Other issue',
 ];
 
+type SentMessage = {
+  id: string;
+  message: string;
+  status: 'open' | 'resolved';
+  admin_reply: string | null;
+  replied_at: string | null;
+  created_at: string;
+};
+
 export default function HelpScreen() {
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
+  const [sentMessages, setSentMessages] = useState<SentMessage[]>([]);
+
+  const loadMessages = useCallback(async () => {
+    try {
+      const session = await getSession();
+      if (!session?.token) return;
+      const res = await apiClient.get<{ messages: SentMessage[] }>('/store-owner/support-messages', {
+        Authorization: `Bearer ${session.token}`,
+      });
+      if (res.success && res.data) setSentMessages(res.data.messages);
+    } catch {
+      // Non-fatal — the FAQ/contact options above still work if this fails.
+    }
+  }, []);
+
+  useEffect(() => { loadMessages(); }, [loadMessages]);
 
   const handleCall = () => {
     Linking.openURL(`tel:${SUPPORT_PHONE}`).catch(() => Alert.alert('Error', 'Could not open dialer'));
@@ -65,6 +90,7 @@ export default function HelpScreen() {
       if (!res.success) throw new Error(res.error || 'Failed to send message');
       Alert.alert('Sent', 'Your message has been sent. We will get back to you shortly.');
       setMessage('');
+      loadMessages();
     } catch (err: any) {
       Alert.alert('Couldn\'t send message', err?.message || 'Please check your connection and try again, or use Call/WhatsApp/Email above.');
     } finally {
@@ -147,6 +173,34 @@ export default function HelpScreen() {
             )}
           </TouchableOpacity>
         </View>
+
+        {/* Sent messages + admin replies — previously the only way to know a
+            message was ever seen was the "Sent" alert; there was no way to
+            check back for a response. */}
+        {sentMessages.length > 0 && (
+          <>
+            <Text style={st.sectionLabel}>Your messages</Text>
+            <View style={st.messageCard}>
+              {sentMessages.map((m, idx) => (
+                <React.Fragment key={m.id}>
+                  <View style={st.sentMessageRow}>
+                    <Text style={st.sentMessageText}>{m.message}</Text>
+                    <Text style={st.sentMessageDate}>{new Date(m.created_at).toLocaleDateString('en-IN')}</Text>
+                    {m.admin_reply ? (
+                      <View style={st.replyBox}>
+                        <Text style={st.replyLabel}>Support team</Text>
+                        <Text style={st.replyText}>{m.admin_reply}</Text>
+                      </View>
+                    ) : (
+                      <Text style={st.pendingText}>Awaiting a response</Text>
+                    )}
+                  </View>
+                  {idx < sentMessages.length - 1 && <View style={st.divider} />}
+                </React.Fragment>
+              ))}
+            </View>
+          </>
+        )}
 
         {/* FAQ */}
         <Text style={st.sectionLabel}>Frequently asked questions</Text>
@@ -237,6 +291,15 @@ const st = StyleSheet.create({
     paddingVertical: 12, borderRadius: radius.sm,
   },
   sendBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+
+  // Sent messages
+  sentMessageRow: { padding: spacing.lg, gap: 6 },
+  sentMessageText: { fontSize: 14, color: colors.textPrimary, lineHeight: 20 },
+  sentMessageDate: { fontSize: 11, color: colors.textTertiary },
+  pendingText: { fontSize: 12, color: colors.textTertiary, fontStyle: 'italic', marginTop: 2 },
+  replyBox: { backgroundColor: colors.surfaceVariant, borderRadius: radius.sm, padding: spacing.sm, marginTop: 4 },
+  replyLabel: { fontSize: 11, fontWeight: '700', color: colors.primary, marginBottom: 2 },
+  replyText: { fontSize: 13, color: colors.textSecondary, lineHeight: 18 },
 
   // FAQ
   faqCard: {
