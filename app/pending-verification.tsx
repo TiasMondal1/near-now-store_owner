@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
   View,
   Text,
@@ -22,6 +22,7 @@ import {
   ONBOARDING_REQUIRED_DOC_KEYS,
   type VerificationDocument,
 } from "../lib/verificationDocuments";
+import { fetchBillingInfo } from "../lib/billingInfo";
 import VerificationNavBar from "../components/VerificationNavBar";
 
 const API_BASE = config.API_BASE;
@@ -42,6 +43,7 @@ const DOC_LABELS: Record<(typeof ONBOARDING_REQUIRED_DOC_KEYS)[number], string> 
 
 const STEPS = [
   { key: "upload", label: "Upload documents", icon: "cloud-upload-outline" as const },
+  { key: "billing", label: "Upload billing details", icon: "card-outline" as const },
   { key: "review", label: "Admin verification", icon: "shield-checkmark-outline" as const },
   { key: "live", label: "Store goes live", icon: "storefront-outline" as const },
 ];
@@ -58,6 +60,38 @@ export default function PendingVerificationScreen() {
   const [documents, setDocuments] = useState<VerificationDocument[]>([]);
   const [storeImageCount, setStoreImageCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Neither useStoreApprovalGate nor the documents/images fetch above knows
+  // about bank/billing details — that lives entirely in billing-info.tsx's
+  // own fetch + change-request endpoints — so this screen tracks it
+  // separately to know whether the "Upload billing details" step is done.
+  const [billingComplete, setBillingComplete] = useState(false);
+  const checkBillingStatus = useCallback(async () => {
+    if (!store?.id) {
+      setBillingComplete(false);
+      return;
+    }
+    try {
+      const session = await getSession();
+      if (!session?.token) return;
+      const [info, changeReqJson] = await Promise.all([
+        fetchBillingInfo(session.token, store.id),
+        fetch(`${API_BASE}/store-owner/stores/${store.id}/profile-change-request`, {
+          headers: { Authorization: `Bearer ${session.token}` },
+        })
+          .then((r) => r.json())
+          .catch(() => null),
+      ]);
+      const hasPendingBilling =
+        !!changeReqJson?.request &&
+        Object.keys(changeReqJson.request.changes ?? {}).some((f) =>
+          ["bank_account_number", "bank_ifsc_code", "bank_branch_name", "bank_passbook_storage_path"].includes(f)
+        );
+      setBillingComplete(!!info.bankAccountNumber || hasPendingBilling);
+    } catch {
+      /* non-fatal — step just shows as not-yet-done */
+    }
+  }, [store?.id]);
 
   const loadDocuments = useCallback(async () => {
     if (!store?.id) {
@@ -103,7 +137,8 @@ export default function PendingVerificationScreen() {
     useCallback(() => {
       void loadDocuments();
       void loadStoreImageCount();
-    }, [loadDocuments, loadStoreImageCount])
+      void checkBillingStatus();
+    }, [loadDocuments, loadStoreImageCount, checkBillingStatus])
   );
 
   const TOTAL_REQUIRED = ONBOARDING_REQUIRED_DOC_KEYS.length + MAX_STORE_IMAGES;
@@ -119,28 +154,17 @@ export default function PendingVerificationScreen() {
       await refresh();
       await loadDocuments();
       await loadStoreImageCount();
+      await checkBillingStatus();
     } catch {
       if (!silent) Alert.alert("Could not refresh", "Check your connection and try again.");
     } finally {
       if (!silent) setRefreshing(false);
     }
-  }, [refresh, loadDocuments, loadStoreImageCount]);
+  }, [refresh, loadDocuments, loadStoreImageCount, checkBillingStatus]);
 
-  // Show the "Store Verified" alert exactly once, when the gate hook's own
-  // `approved` state flips to true — navigation only ever happens from the
-  // alert's own Continue button (see useStoreApprovalGate's "require-pending"
-  // mode doc comment for why this screen must not auto-redirect on its own).
-  const approvedAlertShownRef = useRef(false);
-  useEffect(() => {
-    if (approved && !approvedAlertShownRef.current) {
-      approvedAlertShownRef.current = true;
-      Alert.alert(
-        "Store Verified",
-        "Your documents have been approved. You can now use the app and go online for customers.",
-        [{ text: "Continue", onPress: () => router.replace("/(tabs)/home") }]
-      );
-    }
-  }, [approved]);
+  // Once approved, this screen stays put (no auto-alert, no auto-navigate) —
+  // the shopkeeper sees the "Verified" state right here and moves on to
+  // /(tabs)/home only by tapping "Start Selling" below.
 
   const handleLogout = () => {
     Alert.alert("Logout", "Are you sure you want to logout?", [
@@ -169,7 +193,7 @@ export default function PendingVerificationScreen() {
   }
 
   const docsComplete = uploadedCount >= TOTAL_REQUIRED;
-  const currentStep = docsComplete ? 1 : 0;
+  const currentStep = approved ? 3 : billingComplete ? 2 : docsComplete ? 1 : 0;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -180,11 +204,17 @@ export default function PendingVerificationScreen() {
 
           <View style={styles.hero}>
             <View style={styles.heroIcon}>
-              <Ionicons name="hourglass-outline" size={34} color={colors.primary} />
+              <Ionicons
+                name={approved ? "checkmark-circle-outline" : "hourglass-outline"}
+                size={34}
+                color={approved ? colors.success : colors.primary}
+              />
             </View>
-            <Text style={styles.heroTitle}>Verification Pending</Text>
+            <Text style={styles.heroTitle}>{approved ? "Store Verified" : "Verification Pending"}</Text>
             <Text style={styles.heroSub}>
-              Your shop will appear to customers only after our team verifies your documents.
+              {approved
+                ? "Your documents have been approved. Tap below to start selling."
+                : "Your shop will appear to customers only after our team verifies your documents."}
             </Text>
           </View>
 
@@ -193,11 +223,26 @@ export default function PendingVerificationScreen() {
               <Ionicons name="storefront-outline" size={18} color={colors.primary} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.storeName}>{store.name}</Text>
-                <Text style={styles.storeMeta}>Not visible to customers yet</Text>
+                <Text style={[styles.storeMeta, approved && styles.storeMetaVerified]}>
+                  {approved ? "Verified" : "Not visible to customers yet"}
+                </Text>
               </View>
             </View>
           ) : null}
 
+          {approved && (
+            <TouchableOpacity
+              style={[styles.primaryBtn, { marginBottom: spacing.md }]}
+              onPress={() => router.replace("/(tabs)/home")}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="storefront-outline" size={18} color="#fff" />
+              <Text style={styles.primaryBtnText}>Start Selling</Text>
+            </TouchableOpacity>
+          )}
+
+          {!approved && (
+          <>
           <View style={styles.stepsCard}>
             <Text style={styles.sectionTitle}>What happens next</Text>
             {STEPS.map((step, index) => {
@@ -222,6 +267,9 @@ export default function PendingVerificationScreen() {
                     <Text style={[styles.stepLabel, active && styles.stepLabelActive]}>{step.label}</Text>
                     {active && step.key === "upload" && (
                       <Text style={styles.stepHint}>Upload all {TOTAL_REQUIRED} required items — documents and store photos</Text>
+                    )}
+                    {active && step.key === "billing" && (
+                      <Text style={styles.stepHint}>Add your bank details so we can pay out your earnings</Text>
                     )}
                     {active && step.key === "review" && (
                       <Text style={styles.stepHint}>Our admins are reviewing your submission</Text>
@@ -266,22 +314,26 @@ export default function PendingVerificationScreen() {
               </Text>
             </TouchableOpacity>
           </View>
+          </>
+          )}
 
-          <TouchableOpacity
-            style={[styles.secondaryBtn, refreshing && { opacity: 0.6 }]}
-            onPress={() => checkApprovalNow(false)}
-            disabled={refreshing}
-            activeOpacity={0.85}
-          >
-            {refreshing ? (
-              <ActivityIndicator color={colors.primary} />
-            ) : (
-              <>
-                <Ionicons name="refresh-outline" size={18} color={colors.primary} />
-                <Text style={styles.secondaryBtnText}>Check Verification Status</Text>
-              </>
-            )}
-          </TouchableOpacity>
+          {!approved && (
+            <TouchableOpacity
+              style={[styles.secondaryBtn, refreshing && { opacity: 0.6 }]}
+              onPress={() => checkApprovalNow(false)}
+              disabled={refreshing}
+              activeOpacity={0.85}
+            >
+              {refreshing ? (
+                <ActivityIndicator color={colors.primary} />
+              ) : (
+                <>
+                  <Ionicons name="refresh-outline" size={18} color={colors.primary} />
+                  <Text style={styles.secondaryBtnText}>Check Verification Status</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity style={styles.linkBtn} onPress={() => router.push("/help")} activeOpacity={0.7}>
             <Text style={styles.linkBtnText}>Need help? Contact support</Text>
@@ -334,6 +386,7 @@ const styles = StyleSheet.create({
   },
   storeName: { color: colors.textPrimary, fontSize: 16, fontWeight: "700" },
   storeMeta: { color: colors.warning, fontSize: 12, fontWeight: "600", marginTop: 2 },
+  storeMetaVerified: { color: colors.success },
   stepsCard: {
     backgroundColor: colors.surface,
     borderRadius: radius.xl,

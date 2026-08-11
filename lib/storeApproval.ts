@@ -32,9 +32,13 @@ export async function checkStoreApproval(
 export async function resolveAuthenticatedRoute(
   token: string,
   userId?: string
-): Promise<"/(tabs)/home" | "/pending-verification"> {
+): Promise<"/(tabs)/home" | "/store-owner-signup"> {
   const { approved } = await checkStoreApproval(token, userId);
-  return approved ? "/(tabs)/home" : "/pending-verification";
+  // A returning, already-signed-up, not-yet-approved owner always lands on
+  // Details first — they can then move freely between Details/Documents/
+  // Billing/Status via VerificationNavBar, instead of being dropped straight
+  // onto the Status tab.
+  return approved ? "/(tabs)/home" : "/store-owner-signup";
 }
 
 export async function refreshStoreApproval(
