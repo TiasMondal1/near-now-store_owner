@@ -92,7 +92,9 @@ function StockSection({
         <FlatList
           data={products}
           keyExtractor={(p) => p.id}
-          scrollEnabled={false}
+          style={{ maxHeight: 320 }}
+          nestedScrollEnabled
+          initialNumToRender={products.length}
           contentContainerStyle={{ gap: spacing.sm }}
           renderItem={({ item: p }) => {
             const isActive = p.is_active !== false;
