@@ -94,7 +94,7 @@ function StockSection({
           keyExtractor={(p) => p.id}
           style={{ maxHeight: 320 }}
           nestedScrollEnabled
-          initialNumToRender={products.length}
+          showsVerticalScrollIndicator={false}
           contentContainerStyle={{ gap: spacing.sm }}
           renderItem={({ item: p }) => {
             const isActive = p.is_active !== false;
@@ -470,23 +470,42 @@ export default function HomeTab() {
     if (session?.token && selectedStore?.id) fetchStoreProducts(true);
   }, [session?.token, selectedStore?.id]));
 
+  // Multiple independent triggers can call this concurrently (realtime
+  // subscription firing on the products table, useFocusEffect firing on
+  // screen focus, the initial mount effect) — e.g. add a product from the
+  // Inventory tab, then immediately navigate to Home: both the realtime
+  // INSERT event and the focus effect kick off a fetch, and without
+  // sequencing, whichever network response lands *last* wins the
+  // setStoreProducts call even if it started first and is now stale/slower.
+  // Tracking a monotonically-increasing request id and only committing the
+  // result of the most-recently-*started* request avoids an older, in-flight
+  // fetch clobbering a newer one's result.
+  const fetchRequestIdRef = useRef(0);
   const fetchStoreProducts = useCallback(async (silent = false) => {
     if (!session?.token || !selectedStore?.id) return;
+    const requestId = ++fetchRequestIdRef.current;
     if (!silent) setStoreProductsLoading(true);
     try {
       const fromDb = await getStockListFromDb(selectedStore.id);
+      if (requestId !== fetchRequestIdRef.current) return;
       if (Array.isArray(fromDb) && fromDb.length > 0) {
         setStoreProducts(fromDb.map((item: any) => ({ id: item.id, name: (item.name || item.product_name || "").trim() || "Product", unit: item.unit || "", storeProductId: item.storeProductId, is_active: item.is_active !== false, is_loose: item.is_loose === true })));
         return;
       }
       setStoreProducts([]);
     } catch {
+      if (requestId !== fetchRequestIdRef.current) return;
       // Only clear on a genuinely empty/failed foreground load. A silent
       // background refresh (realtime subscription, focus effect, post-toggle)
       // failing shouldn't wipe a real, already-loaded product list over a
       // transient network hiccup — better to show stale data than none.
       if (!silent) setStoreProducts([]);
     }
+    // Always clear the spinner this call raised, regardless of whether a
+    // newer request has since superseded it for the purpose of committing
+    // data above — otherwise a silent refetch starting before the initial
+    // non-silent load resolves permanently strands storeProductsLoading at
+    // true (the requestId guard would never let this call turn it off).
     finally { if (!silent) setStoreProductsLoading(false); }
   }, [session?.token, selectedStore?.id]);
   useEffect(() => { fetchStoreProductsRef.current = fetchStoreProducts; }, [fetchStoreProducts]);
