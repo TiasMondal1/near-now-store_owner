@@ -13,6 +13,7 @@ const { spawnSync } = require("child_process");
 
 const rootDir = path.resolve(__dirname, "..");
 const androidDir = path.join(rootDir, "android");
+const signingBackupDir = path.join(rootDir, ".android-signing");
 const isWin = process.platform === "win32";
 
 // ─── 1. Graceful daemon stop ──────────────────────────────────────────────────
@@ -58,7 +59,41 @@ function removeGradleLocks() {
   }
 }
 
-// ─── 4. Delete android directory with retry + exponential backoff ─────────────
+// ─── 4. Backup / restore release signing files (survive android/ deletion) ───
+function backupAndroidSigning() {
+  const ksProps = path.join(androidDir, "keystore.properties");
+  const ksFile = path.join(androidDir, "app", "release.keystore");
+  if (!fs.existsSync(ksProps) && !fs.existsSync(ksFile)) return;
+
+  fs.mkdirSync(signingBackupDir, { recursive: true });
+  if (fs.existsSync(ksProps)) {
+    fs.copyFileSync(ksProps, path.join(signingBackupDir, "keystore.properties"));
+    console.log("Backed up android/keystore.properties → .android-signing/");
+  }
+  if (fs.existsSync(ksFile)) {
+    fs.copyFileSync(ksFile, path.join(signingBackupDir, "release.keystore"));
+    console.log("Backed up android/app/release.keystore → .android-signing/");
+  }
+}
+
+function restoreAndroidSigning() {
+  const ksPropsBackup = path.join(signingBackupDir, "keystore.properties");
+  const ksFileBackup = path.join(signingBackupDir, "release.keystore");
+  if (!fs.existsSync(signingBackupDir)) return;
+
+  if (fs.existsSync(ksPropsBackup)) {
+    fs.mkdirSync(androidDir, { recursive: true });
+    fs.copyFileSync(ksPropsBackup, path.join(androidDir, "keystore.properties"));
+    console.log("Restored .android-signing/keystore.properties → android/");
+  }
+  if (fs.existsSync(ksFileBackup)) {
+    fs.mkdirSync(path.join(androidDir, "app"), { recursive: true });
+    fs.copyFileSync(ksFileBackup, path.join(androidDir, "app", "release.keystore"));
+    console.log("Restored .android-signing/release.keystore → android/app/");
+  }
+}
+
+// ─── 5. Delete android directory with retry + exponential backoff ─────────────
 function sleep(ms) {
   const end = Date.now() + ms;
   while (Date.now() < end) { /* busy wait — synchronous script, no event loop */ }
@@ -98,7 +133,7 @@ function deleteAndroidDirWithRetry() {
   );
 }
 
-// ─── 5. Write local.properties (always recreate after expo deletes android/) ──
+// ─── 6. Write local.properties (always recreate after expo deletes android/) ──
 function writeLocalProperties() {
   const localProps = path.join(androidDir, "local.properties");
   if (fs.existsSync(localProps)) return;
@@ -117,7 +152,7 @@ function writeLocalProperties() {
   }
 }
 
-// ─── 6. Run expo prebuild ─────────────────────────────────────────────────────
+// ─── 7. Run expo prebuild ─────────────────────────────────────────────────────
 function runExpoPrebuild() {
   const args = ["expo", "prebuild", "--platform", "android", "--clean"];
   console.log(`Running: npx ${args.join(" ")}`);
@@ -136,8 +171,10 @@ stopGradleDaemons();
 forceKillJavaProcesses();
 sleep(800); // give the OS a moment to release file handles after kills
 removeGradleLocks();
+backupAndroidSigning();
 deleteAndroidDirWithRetry();
 
 const exitCode = runExpoPrebuild();
+restoreAndroidSigning();
 writeLocalProperties(); // restore after expo regenerates android/
 process.exit(exitCode);

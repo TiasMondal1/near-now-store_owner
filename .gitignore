@@ -50,6 +50,7 @@ android/app/build/
 android/local.properties
 android/keystore.properties
 android/app/release.keystore
+.android-signing/
 android/.kotlin/
 
 # Claude Code
