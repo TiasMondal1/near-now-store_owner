@@ -152,52 +152,62 @@ export default function BillingInfoScreen() {
 
   const pickOwnerImage = async () => {
     if (ownerImageUrl) return; // already set — read-only from here on
-    if (!storeId || !token) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.85,
-    });
-    if (result.canceled || !result.assets[0]) return;
-
-    const session = await getSession();
-    if (!session?.user?.id) return;
-    setUploadingOwnerImage(true);
+    if (!storeId || !token || uploadingOwnerImage) return;
     try {
-      const res = await uploadOwnerImage(session.user.id, result.assets[0].uri);
-      if (!res.ok) {
-        Alert.alert("Upload failed", res.error);
-        return;
-      }
-      await fetch(`${API_BASE}/store-owner/stores/${storeId}`, {
-        method: "PATCH",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ owner_image_url: res.url }),
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85,
       });
-      clearStoreCache();
-      // The Details screen's own avatar reads from this same AsyncStorage key
-      // (not a network fetch) — without writing it here too, a photo
-      // uploaded from Billing Info would never show up on Details.
-      await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);
-      setOwnerImageUrl(res.url);
-    } finally {
-      setUploadingOwnerImage(false);
+      if (result.canceled || !result.assets[0]) return;
+
+      const session = await getSession();
+      if (!session?.user?.id) return;
+      setUploadingOwnerImage(true);
+      try {
+        const res = await uploadOwnerImage(session.user.id, result.assets[0].uri);
+        if (!res.ok) {
+          Alert.alert("Upload failed", res.error);
+          return;
+        }
+        await fetch(`${API_BASE}/store-owner/stores/${storeId}`, {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ owner_image_url: res.url }),
+        });
+        clearStoreCache();
+        // The Details screen's own avatar reads from this same AsyncStorage key
+        // (not a network fetch) — without writing it here too, a photo
+        // uploaded from Billing Info would never show up on Details.
+        await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);
+        setOwnerImageUrl(res.url);
+      } finally {
+        setUploadingOwnerImage(false);
+      }
+    } catch (err) {
+      console.warn("[billing-info] pickOwnerImage failed:", err);
+      Alert.alert("Couldn't open gallery", "Please try again.");
     }
   };
 
   const pickPassbookFile = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
-    const mimeType = asset.mimeType || "image/jpeg";
-    const ext = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
-    setPendingPassbookFile({ uri: asset.uri, name: `passbook.${ext}`, type: mimeType });
-    setPassbookUri(asset.uri);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.9,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      const asset = result.assets[0];
+      const mimeType = asset.mimeType || "image/jpeg";
+      const ext = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+      setPendingPassbookFile({ uri: asset.uri, name: `passbook.${ext}`, type: mimeType });
+      setPassbookUri(asset.uri);
+    } catch (err) {
+      console.warn("[billing-info] pickPassbookFile failed:", err);
+      Alert.alert("Couldn't open gallery", "Please try again.");
+    }
   };
 
   const handleSave = async () => {

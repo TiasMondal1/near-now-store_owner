@@ -273,37 +273,43 @@ export default function ProfileScreen() {
       Alert.alert("Gallery full", `A store can have at most ${MAX_STORE_IMAGES} photos. Remove one before adding another.`);
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [16, 9],
-      quality: 0.85,
-    });
-    if (result.canceled || !result.assets[0]) return;
-
-    const uri = result.assets[0].uri;
-    setUploadingStoreImage(true);
+    if (uploadingStoreImage) return;
     try {
-      const res = await uploadStoreImage(storeInfo.id, uri);
-      if (!res.ok) {
-        Alert.alert("Upload failed", res.error);
-        return;
-      }
-      const s = await getSession();
-      if (!s?.token) return;
-      const addRes = await fetch(`${API_BASE}/store-owner/stores/${storeInfo.id}/images`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${s.token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ url: res.url }),
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [16, 9],
+        quality: 0.85,
       });
-      const addJson = await addRes.json().catch(() => null);
-      if (!addRes.ok || !addJson?.success) {
-        Alert.alert("Error", addJson?.error || "Photo uploaded but couldn't be added to your gallery.");
-        return;
+      if (result.canceled || !result.assets[0]) return;
+
+      const uri = result.assets[0].uri;
+      setUploadingStoreImage(true);
+      try {
+        const res = await uploadStoreImage(storeInfo.id, uri);
+        if (!res.ok) {
+          Alert.alert("Upload failed", res.error);
+          return;
+        }
+        const s = await getSession();
+        if (!s?.token) return;
+        const addRes = await fetch(`${API_BASE}/store-owner/stores/${storeInfo.id}/images`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${s.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ url: res.url }),
+        });
+        const addJson = await addRes.json().catch(() => null);
+        if (!addRes.ok || !addJson?.success) {
+          Alert.alert("Error", addJson?.error || "Photo uploaded but couldn't be added to your gallery.");
+          return;
+        }
+        await loadStoreImages(storeInfo.id);
+      } finally {
+        setUploadingStoreImage(false);
       }
-      await loadStoreImages(storeInfo.id);
-    } finally {
-      setUploadingStoreImage(false);
+    } catch (err) {
+      console.warn("[profile] pickStoreImage failed:", err);
+      Alert.alert("Couldn't open gallery", "Please try again.");
     }
   };
 
@@ -341,39 +347,44 @@ export default function ProfileScreen() {
     // Same one-time-lock as store-owner-signup.tsx/billing-info.tsx — this is
     // a KYC/identity photo, not an ordinary profile picture, and should never
     // be silently replaceable post-verification from any screen.
-    if (ownerImageUri) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.85,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    if (!session?.user?.id) {
-      Alert.alert("Can't upload yet", "Your session is still loading — try again in a moment.");
-      return;
-    }
-    const uri = result.assets[0].uri;
-    // Marked the instant the local preview is set (not just on upload
-    // success) so a background hydrate() already in flight can't revert even
-    // this optimistic state — see ownerImageUploadedAtRef's declaration.
-    ownerImageUploadedAtRef.current = Date.now();
-    setOwnerImageUri(uri);
-    setUploadingOwnerImage(true);
+    if (ownerImageUri || uploadingOwnerImage) return;
     try {
-      const res = await uploadOwnerImage(session.user.id, uri);
-      if (res.ok) {
-        // Save remote URL so it persists across sessions
-        await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);
-        setOwnerImageUri(res.url);
-        // Also persist to store row if column exists
-        await patchStore({ owner_image_url: res.url });
-      } else {
-        // Fallback: save local URI in AsyncStorage
-        await AsyncStorage.setItem(OWNER_IMAGE_KEY, uri);
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      if (!session?.user?.id) {
+        Alert.alert("Can't upload yet", "Your session is still loading — try again in a moment.");
+        return;
       }
-    } finally {
-      setUploadingOwnerImage(false);
+      const uri = result.assets[0].uri;
+      // Marked the instant the local preview is set (not just on upload
+      // success) so a background hydrate() already in flight can't revert even
+      // this optimistic state — see ownerImageUploadedAtRef's declaration.
+      ownerImageUploadedAtRef.current = Date.now();
+      setOwnerImageUri(uri);
+      setUploadingOwnerImage(true);
+      try {
+        const res = await uploadOwnerImage(session.user.id, uri);
+        if (res.ok) {
+          // Save remote URL so it persists across sessions
+          await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);
+          setOwnerImageUri(res.url);
+          // Also persist to store row if column exists
+          await patchStore({ owner_image_url: res.url });
+        } else {
+          // Fallback: save local URI in AsyncStorage
+          await AsyncStorage.setItem(OWNER_IMAGE_KEY, uri);
+        }
+      } finally {
+        setUploadingOwnerImage(false);
+      }
+    } catch (err) {
+      console.warn("[profile] pickOwnerImage failed:", err);
+      Alert.alert("Couldn't open gallery", "Please try again.");
     }
   };
 

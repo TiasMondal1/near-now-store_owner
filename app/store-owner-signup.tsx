@@ -240,43 +240,49 @@ export default function StoreOwnerSignupScreen() {
   };
 
   const pickOwnerImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.85,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    const uri = result.assets[0].uri;
-
-    if (!viewOnly) {
-      // Fresh, pre-signup form — no account/store exists yet to upload
-      // against. Just preview it locally; handleNext uploads it for real
-      // once signup succeeds and a user id exists.
-      setPendingOwnerImageUri(uri);
-      setOwnerImageUri(uri);
-      return;
-    }
-    if (ownerImageUri) return; // already set — read-only from here on, mirrors the rider app
-
-    const session = await getSession();
-    if (!session?.user?.id) {
-      Alert.alert("Can't upload yet", "Your session is still loading — try again in a moment.");
-      return;
-    }
-    setOwnerImageUri(uri);
-    setUploadingOwnerImage(true);
+    if (uploadingOwnerImage) return;
     try {
-      const res = await uploadOwnerImage(session.user.id, uri);
-      if (res.ok) {
-        await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);
-        setOwnerImageUri(res.url);
-        await patchExistingStore({ owner_image_url: res.url });
-      } else {
-        await AsyncStorage.setItem(OWNER_IMAGE_KEY, uri);
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      const uri = result.assets[0].uri;
+
+      if (!viewOnly) {
+        // Fresh, pre-signup form — no account/store exists yet to upload
+        // against. Just preview it locally; handleNext uploads it for real
+        // once signup succeeds and a user id exists.
+        setPendingOwnerImageUri(uri);
+        setOwnerImageUri(uri);
+        return;
       }
-    } finally {
-      setUploadingOwnerImage(false);
+      if (ownerImageUri) return; // already set — read-only from here on, mirrors the rider app
+
+      const session = await getSession();
+      if (!session?.user?.id) {
+        Alert.alert("Can't upload yet", "Your session is still loading — try again in a moment.");
+        return;
+      }
+      setOwnerImageUri(uri);
+      setUploadingOwnerImage(true);
+      try {
+        const res = await uploadOwnerImage(session.user.id, uri);
+        if (res.ok) {
+          await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);
+          setOwnerImageUri(res.url);
+          await patchExistingStore({ owner_image_url: res.url });
+        } else {
+          await AsyncStorage.setItem(OWNER_IMAGE_KEY, uri);
+        }
+      } finally {
+        setUploadingOwnerImage(false);
+      }
+    } catch (err) {
+      console.warn("[store-owner-signup] pickOwnerImage failed:", err);
+      Alert.alert("Couldn't open gallery", "Please try again.");
     }
   };
 

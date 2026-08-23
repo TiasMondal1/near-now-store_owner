@@ -1,4 +1,4 @@
-import React, { useEffect, useState, memo } from "react";
+import React, { useEffect, useRef, useState, memo } from "react";
 import {
   View,
   Text,
@@ -530,31 +530,55 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
 
   const UNITS = ["kg", "g", "l", "ml", "pcs", "units", "bunch", "pack"];
 
+  // Synchronous guard against a fast double-tap firing two overlapping
+  // camera/gallery picker calls — neither handler previously had a
+  // try/catch either, so an unhandled native-module rejection (camera
+  // unavailable, overlapping permission request) would go uncaught.
+  const imagePickInFlightRef = useRef(false);
+
   const pickFromCamera = async () => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert("Permission required", "Camera access is needed.");
-      return;
-    }
-    const res = await ImagePicker.launchCameraAsync({
-      base64: true,
-      quality: 0.8,
-    });
-    if (!res.canceled) {
-      setImageUri(res.assets[0].uri);
-      setImageBase64(res.assets[0].base64 || null);
+    if (imagePickInFlightRef.current) return;
+    imagePickInFlightRef.current = true;
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Permission required", "Camera access is needed.");
+        return;
+      }
+      const res = await ImagePicker.launchCameraAsync({
+        base64: true,
+        quality: 0.8,
+      });
+      if (!res.canceled) {
+        setImageUri(res.assets[0].uri);
+        setImageBase64(res.assets[0].base64 || null);
+      }
+    } catch (err) {
+      console.warn("[stock] pickFromCamera failed:", err);
+      Alert.alert("Couldn't open camera", "Please try again.");
+    } finally {
+      imagePickInFlightRef.current = false;
     }
   };
 
   const pickFromGallery = async () => {
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      base64: true,
-      quality: 0.8,
-    });
-    if (!res.canceled) {
-      setImageUri(res.assets[0].uri);
-      setImageBase64(res.assets[0].base64 || null);
+    if (imagePickInFlightRef.current) return;
+    imagePickInFlightRef.current = true;
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        base64: true,
+        quality: 0.8,
+      });
+      if (!res.canceled) {
+        setImageUri(res.assets[0].uri);
+        setImageBase64(res.assets[0].base64 || null);
+      }
+    } catch (err) {
+      console.warn("[stock] pickFromGallery failed:", err);
+      Alert.alert("Couldn't open gallery", "Please try again.");
+    } finally {
+      imagePickInFlightRef.current = false;
     }
   };
 

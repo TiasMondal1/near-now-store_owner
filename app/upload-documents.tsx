@@ -352,42 +352,57 @@ export default function UploadDocumentsScreen() {
   };
 
   const takePhoto = async (key: DocKey) => {
-    if (!(await requestCameraPermission())) return;
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ["images"],
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    await applyPickedImage(key, result.assets[0]);
+    try {
+      if (!(await requestCameraPermission())) return;
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.9,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      await applyPickedImage(key, result.assets[0]);
+    } catch (err) {
+      console.warn("[upload-documents] takePhoto failed:", err);
+      Alert.alert("Couldn't open camera", "Please try again.");
+    }
   };
 
   const pickImage = async (key: DocKey) => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    await applyPickedImage(key, result.assets[0]);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.9,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      await applyPickedImage(key, result.assets[0]);
+    } catch (err) {
+      console.warn("[upload-documents] pickImage failed:", err);
+      Alert.alert("Couldn't open gallery", "Please try again.");
+    }
   };
 
   const pickPdf = async (key: DocKey) => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: "application/pdf",
-      copyToCacheDirectory: true,
-    });
-    if (result.canceled || !result.assets?.[0]) return;
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "application/pdf",
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
 
-    const asset = result.assets[0];
-    if (asset.size && asset.size > MAX_FILE_SIZE_BYTES) {
-      Alert.alert("File too large", FORMATS_DISCLAIMER);
-      return;
+      const asset = result.assets[0];
+      if (asset.size && asset.size > MAX_FILE_SIZE_BYTES) {
+        Alert.alert("File too large", FORMATS_DISCLAIMER);
+        return;
+      }
+      setPendingFiles((prev) => ({
+        ...prev,
+        [key]: { uri: asset.uri, name: asset.name || "document.pdf", type: "application/pdf", size: asset.size },
+      }));
+    } catch (err) {
+      console.warn("[upload-documents] pickPdf failed:", err);
+      Alert.alert("Couldn't open file picker", "Please try again.");
     }
-    setPendingFiles((prev) => ({
-      ...prev,
-      [key]: { uri: asset.uri, name: asset.name || "document.pdf", type: "application/pdf", size: asset.size },
-    }));
   };
 
   const choosePickerFor = (key: DocKey) => {
@@ -410,10 +425,21 @@ export default function UploadDocumentsScreen() {
     }).start(() => setPickerSheetKey(null));
   };
 
-  const runPickerAction = (action: (key: DocKey) => void) => {
+  // Guards against a fast double-tap on a picker-sheet option firing the
+  // underlying async picker twice concurrently before the sheet's close
+  // animation finishes — each of takePhoto/pickImage/pickPdf now has its own
+  // try/catch, but a synchronous re-entrancy guard here is a cheap extra
+  // layer against the same "unguarded overlapping native-module call" shape
+  // that caused a crash in the rider app's location-permission flow.
+  const pickerActionInFlightRef = useRef(false);
+  const runPickerAction = (action: (key: DocKey) => Promise<void>) => {
     const key = pickerSheetKey;
     closePickerSheet();
-    if (key) action(key);
+    if (!key || pickerActionInFlightRef.current) return;
+    pickerActionInFlightRef.current = true;
+    action(key).finally(() => {
+      pickerActionInFlightRef.current = false;
+    });
   };
 
   const showSuspendedNotice = () => {
