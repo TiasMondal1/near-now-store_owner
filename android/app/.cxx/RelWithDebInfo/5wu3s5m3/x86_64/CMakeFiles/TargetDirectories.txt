@@ -1,0 +1,15 @@
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/CMakeFiles/appmodules.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/CMakeFiles/edit_cache.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/CMakeFiles/rebuild_cache.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/rnasyncstorage_autolinked_build/CMakeFiles/edit_cache.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/rnasyncstorage_autolinked_build/CMakeFiles/rebuild_cache.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/RNSentrySpec_autolinked_build/CMakeFiles/react_codegen_RNSentrySpec.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/RNSentrySpec_autolinked_build/CMakeFiles/edit_cache.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/RNSentrySpec_autolinked_build/CMakeFiles/rebuild_cache.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/safeareacontext_autolinked_build/CMakeFiles/react_codegen_safeareacontext.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/safeareacontext_autolinked_build/CMakeFiles/edit_cache.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/safeareacontext_autolinked_build/CMakeFiles/rebuild_cache.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/rnscreens_autolinked_build/CMakeFiles/react_codegen_rnscreens.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/rnscreens_autolinked_build/CMakeFiles/edit_cache.dir
+/Users/tiasmondal166/projects/near-now-store_owner/android/app/.cxx/RelWithDebInfo/5wu3s5m3/x86_64/rnscreens_autolinked_build/CMakeFiles/rebuild_cache.dir
