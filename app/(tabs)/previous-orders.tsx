@@ -318,7 +318,14 @@ export default function OrdersTab() {
   const fetchPreviousOrders = useCallback(async () => {
     if (!session || !storeId) return;
     try {
-      const fromDb = await getOrdersFromDb(storeId);
+      // "Previous" only ever shows terminal-state orders — a shopkeeper
+      // reviewing history has no real need to see more than the most recent
+      // few hundred, and this now-bounded fetch is what previously grew
+      // unbounded with a store's entire lifetime order count on every 60s
+      // poll. payments.tsx's "All Time" view intentionally stays unbounded
+      // (getOrdersFromDb(sid), no limit) since it needs a genuinely
+      // complete total.
+      const fromDb = await getOrdersFromDb(storeId, 200);
       setPreviousOrdersError(false);
       if (!Array.isArray(fromDb) || fromDb.length === 0) { setAllOrders([]); return; }
 
@@ -483,9 +490,18 @@ export default function OrdersTab() {
     enabled: !!(session?.token),
   });
 
+  // fetchPreviousOrders fetches the store's *entire* order history (no
+  // date range/limit — getOrdersFromDb has none to offer) every single
+  // call; unlike Active/Incoming, "Previous" only ever shows terminal-state
+  // orders (picked_up/rejected) that essentially never change once
+  // reached, so there's little real benefit to polling them anywhere near
+  // as often as the live Active/Incoming queues. Lengthened from 15s/30s to
+  // 60s/120s — still refreshes automatically within a minute of a genuine
+  // change, but cuts this specific full-history re-fetch's request volume
+  // 4x for every shopkeeper with the Orders screen open.
   useSmartPoll(fetchPreviousOrders, {
-    intervalMs: 15_000,
-    slowIntervalMs: 30_000,
+    intervalMs: 60_000,
+    slowIntervalMs: 120_000,
     enabled: !!(session && storeId),
   });
 

@@ -183,10 +183,10 @@ async function getOrdersFromDbViaCustomerOrders(storeId: string): Promise<{ orde
  * finding zero orders, which resolves to [] as before. Lets callers show a
  * real error state instead of an indistinguishable "no orders" empty state.
  */
-export async function getOrdersFromDb(storeId: string): Promise<OrderForStore[]> {
+export async function getOrdersFromDb(storeId: string, limit?: number): Promise<OrderForStore[]> {
   if (!supabase || !storeId) return [];
 
-  const rpcResult = await getOrdersFromDbViaRpc(storeId);
+  const rpcResult = await getOrdersFromDbViaRpc(storeId, limit);
   if (rpcResult.orders.length > 0) return rpcResult.orders;
 
   const tablesResult = await getOrdersFromDbViaTables(storeId);
@@ -209,10 +209,18 @@ export async function getOrdersFromDb(storeId: string): Promise<OrderForStore[]>
  * shopkeeper_owns_store() so a caller only ever gets back their own store's
  * orders.
  */
-async function getOrdersFromDbViaRpc(storeId: string): Promise<{ orders: OrderForStore[]; failed: boolean }> {
+async function getOrdersFromDbViaRpc(storeId: string, limit?: number): Promise<{ orders: OrderForStore[]; failed: boolean }> {
   if (!supabase || !storeId) return { orders: [], failed: false };
 
-  const { data, error } = await supabase.rpc("get_orders_for_store", { p_store_id: storeId });
+  // p_limit is optional server-side (defaults to NULL/unbounded, see
+  // 20260930310000 migration) — omitted here entirely when the caller
+  // doesn't pass one, preserving the exact previous unbounded behavior for
+  // callers like payments.tsx's "All Time" view that genuinely need full
+  // history.
+  const { data, error } = await supabase.rpc(
+    "get_orders_for_store",
+    limit != null ? { p_store_id: storeId, p_limit: limit } : { p_store_id: storeId }
+  );
 
   if (error) {
     // 42883 = function does not exist — an expected, documented case when

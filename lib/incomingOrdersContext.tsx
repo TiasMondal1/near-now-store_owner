@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSession } from '../session';
 import { fetchStoresCached, peekStores } from './appCache';
@@ -77,8 +77,15 @@ export function IncomingOrdersProvider({ children }: { children: React.ReactNode
     enabled: !!(session?.token && storeId),
   });
 
+  // Memoized so a re-render of this provider for reasons unrelated to
+  // incomingCount (e.g. its own session/storeId bootstrap effects) doesn't
+  // force every useIncomingOrdersCount() consumer across the whole tab
+  // layout to re-render just because this object literal has a new
+  // reference.
+  const value = useMemo(() => ({ incomingCount, setIncomingCount }), [incomingCount]);
+
   return (
-    <IncomingOrdersContext.Provider value={{ incomingCount, setIncomingCount }}>
+    <IncomingOrdersContext.Provider value={value}>
       {children}
     </IncomingOrdersContext.Provider>
   );
