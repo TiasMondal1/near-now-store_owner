@@ -18,7 +18,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, radius, spacing, shadows } from "../../lib/theme";
-import { getOrderByIdFromDb, getOrdersFromDb, OrdersFetchFailedError } from "../../lib/orders-db";
+import { getOrdersFromDb, OrdersFetchFailedError } from "../../lib/orders-db";
 import { supabase } from "../../lib/supabase";
 import { getStatusColor, formatStatus, isDelivered } from "../../lib/order-utils";
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
@@ -347,25 +347,49 @@ export default function OrdersTab() {
         }
       }
 
-      const withData = await Promise.all(
-        fromDb.map(async (o: any) => {
-          const placedAt =
-            (o.customer_order_id && tsMap[o.customer_order_id]) ||
-            o.placed_at ||
-            undefined;
-          const base = { ...o, ...(placedAt ? { placed_at: placedAt } : {}) };
+      const withPlacedAt = fromDb.map((o: any) => {
+        const placedAt =
+          (o.customer_order_id && tsMap[o.customer_order_id]) ||
+          o.placed_at ||
+          undefined;
+        return { ...o, ...(placedAt ? { placed_at: placedAt } : {}) };
+      });
 
-          if (Array.isArray(o.order_items) && o.order_items.length > 0) return base;
-          if (!o?.id) return base;
-          try {
-            const detail = await getOrderByIdFromDb(String(o.id));
-            if (!detail) return base;
-            return { ...base, order_items: detail.order_items };
-          } catch {
-            return base;
-          }
-        })
-      );
+      // Orders the RPC returned with no `order_items` (an edge case — the
+      // normal/happy path already includes them) previously each triggered
+      // their own individual getOrderByIdFromDb() call — a full multi-join
+      // single-order lookup, N of them fired concurrently via Promise.all
+      // on every poll tick. All that's actually missing is order_items
+      // itself, so this batches just that piece in one query instead.
+      const missingItemIds = withPlacedAt
+        .filter((o: any) => (!Array.isArray(o.order_items) || o.order_items.length === 0) && o?.id)
+        .map((o: any) => String(o.id));
+
+      let itemsByOrderId: Record<string, any[]> = {};
+      if (missingItemIds.length > 0 && supabase) {
+        const { data: itemsData } = await supabase
+          .from("order_items")
+          .select("id, store_order_id, product_name, unit, image_url, unit_price, quantity")
+          .in("store_order_id", missingItemIds);
+        (itemsData ?? []).forEach((it: any) => {
+          const list = itemsByOrderId[it.store_order_id] ?? [];
+          list.push({
+            id: it.id,
+            product_name: it.product_name || "Item",
+            quantity: Number(it.quantity ?? 0),
+            unit: it.unit ?? "pcs",
+            image_url: it.image_url ?? undefined,
+            price: it.unit_price != null ? Number(it.unit_price) : undefined,
+          });
+          itemsByOrderId[it.store_order_id] = list;
+        });
+      }
+
+      const withData = withPlacedAt.map((o: any) => {
+        if (Array.isArray(o.order_items) && o.order_items.length > 0) return o;
+        const items = itemsByOrderId[String(o.id)];
+        return items ? { ...o, order_items: items } : o;
+      });
       setAllOrders(withData);
     } catch (e) {
       if (e instanceof OrdersFetchFailedError) setPreviousOrdersError(true);
