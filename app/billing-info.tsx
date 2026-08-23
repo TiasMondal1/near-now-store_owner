@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
@@ -53,6 +54,11 @@ export default function BillingInfoScreen() {
   const [pendingPassbookFile, setPendingPassbookFile] = useState<PickedBillingFile | null>(null);
   const [saving, setSaving] = useState(false);
   const [pendingChangeRequest, setPendingChangeRequest] = useState<PendingChangeRequest>(null);
+  // Tracks whether the billing-info fetch has ever succeeded — lets the
+  // useFocusEffect below self-heal a failed first fetch (e.g. cold-start
+  // network blip) the moment this screen regains focus, instead of leaving
+  // Bank Details stuck blank with no recovery until a full remount.
+  const infoFetchedRef = useRef(false);
 
   const loadPendingChangeRequest = async (t: string, sId: string) => {
     try {
@@ -76,6 +82,7 @@ export default function BillingInfoScreen() {
   };
 
   const applyBillingInfo = (info: BillingInfo) => {
+    infoFetchedRef.current = true;
     setOwnerName(info.ownerName);
     setOwnerImageUrl(info.ownerImageUrl);
     setAccountNumber(info.bankAccountNumber ?? "");
@@ -84,39 +91,56 @@ export default function BillingInfoScreen() {
     setPassbookUri(info.passbookUrl);
   };
 
+  const loadBillingInfo = async () => {
+    const session = await getSession();
+    if (!session?.token) {
+      router.replace("/landing");
+      return;
+    }
+    setToken(session.token);
+
+    // Always hit the network for the real, current store — a stale cached
+    // entry (e.g. a wrong/blank name persisted from an earlier session)
+    // would otherwise keep pointing this screen at bad data for up to the
+    // cache's 10-minute TTL, and getBillingInfo's ownership check would
+    // silently 403 if the cached id ever belonged to a different store.
+    const stores = await forceFetchStores(session.token, session.user?.id);
+    const store = stores[0];
+    if (!store?.id) {
+      setLoading(false);
+      return;
+    }
+    setStoreId(store.id);
+
+    try {
+      const info = await fetchBillingInfo(session.token, store.id);
+      applyBillingInfo(info);
+    } catch {
+      /* non-fatal — screen still renders with empty state, self-heals via
+         the useFocusEffect below */
+    } finally {
+      setLoading(false);
+    }
+    void loadPendingChangeRequest(session.token, store.id);
+  };
+
   useEffect(() => {
-    (async () => {
-      const session = await getSession();
-      if (!session?.token) {
-        router.replace("/landing");
-        return;
-      }
-      setToken(session.token);
-
-      // Always hit the network for the real, current store — a stale cached
-      // entry (e.g. a wrong/blank name persisted from an earlier session)
-      // would otherwise keep pointing this screen at bad data for up to the
-      // cache's 10-minute TTL, and getBillingInfo's ownership check would
-      // silently 403 if the cached id ever belonged to a different store.
-      const stores = await forceFetchStores(session.token, session.user?.id);
-      const store = stores[0];
-      if (!store?.id) {
-        setLoading(false);
-        return;
-      }
-      setStoreId(store.id);
-
-      try {
-        const info = await fetchBillingInfo(session.token, store.id);
-        applyBillingInfo(info);
-      } catch {
-        /* non-fatal — screen still renders with empty state */
-      } finally {
-        setLoading(false);
-      }
-      void loadPendingChangeRequest(session.token, store.id);
-    })();
+    loadBillingInfo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Self-heals a failed (or not-yet-attempted) first fetch the moment this
+  // screen regains focus — e.g. bouncing to another VerificationNavBar tab
+  // and back, mirroring the rider app's signup.tsx fix for the identical
+  // "stuck blank until I leave and come back" symptom.
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!infoFetchedRef.current) {
+        void loadBillingInfo();
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+  );
 
   // While a billing change is pending, poll for the admin's decision so the
   // banner clears without needing to leave and re-enter this screen — mirrors

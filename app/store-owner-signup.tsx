@@ -20,6 +20,7 @@ import * as ImagePicker from "expo-image-picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { Stack, useLocalSearchParams, router } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { clearSession, getSession, saveSession } from "../session";
 import { notificationService } from "../lib/notifications";
 import { config } from "../lib/config";
@@ -94,6 +95,13 @@ export default function StoreOwnerSignupScreen() {
   const [loadingExisting, setLoadingExisting] = useState(false);
   const [existingStore, setExistingStore] = useState<CachedStore | null>(cachedStore);
   const [storeLoadFailed, setStoreLoadFailed] = useState(false);
+  // Tracks whether loadStore has ever succeeded — lets the useFocusEffect
+  // below self-heal a failed (or not-yet-attempted) first fetch the moment
+  // this screen regains focus, instead of relying on the shopkeeper
+  // discovering the manual "tap to retry" banner. Mirrors the rider app's
+  // signup.tsx profileFetchedRef fix for the identical symptom (cold-start
+  // network failure right after signup leaving Details stuck on "—").
+  const storeFetchedRef = useRef(!!cachedStore);
   // A returning unapproved owner now lands here (Details) instead of Status
   // — without this, a store that was suspended (an Aadhaar/PAN document
   // rejected post-approval) would have no way to learn why until they
@@ -128,6 +136,7 @@ export default function StoreOwnerSignupScreen() {
       const json = await res.json().catch(() => null);
       const stores: CachedStore[] = json?.stores ?? [];
       if (stores[0]) {
+        storeFetchedRef.current = true;
         setExistingStore(stores[0]);
         await persistStores(stores);
         // Always prefer the server's own owner_image_url over whatever's
@@ -149,9 +158,11 @@ export default function StoreOwnerSignupScreen() {
           /* non-fatal — banner just doesn't show */
         }
       } else {
+        storeFetchedRef.current = false;
         setStoreLoadFailed(true);
       }
     } catch {
+      storeFetchedRef.current = false;
       setStoreLoadFailed(true);
     }
   };
@@ -187,6 +198,30 @@ export default function StoreOwnerSignupScreen() {
     // whether to show a spinner, not re-evaluated reactively.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phone]);
+
+  // Self-heals a failed (or not-yet-attempted) first fetch the moment this
+  // screen regains focus — e.g. the shopkeeper switching to Status/Documents
+  // and back, which is exactly the manual workaround that used to be
+  // required to see Store Name/Address populate after a transient
+  // cold-start network failure right after signup.
+  useFocusEffect(
+    React.useCallback(() => {
+      if (viewOnly && !storeFetchedRef.current) {
+        (async () => {
+          const session = await getSession();
+          if (session?.token) {
+            if (!existingStore) setLoadingExisting(true);
+            try {
+              await loadStore(session);
+            } finally {
+              setLoadingExisting(false);
+            }
+          }
+        })();
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [viewOnly])
+  );
 
   const patchExistingStore = async (fields: Record<string, string>) => {
     if (!existingStore?.id) return;
