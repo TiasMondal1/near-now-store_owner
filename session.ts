@@ -46,10 +46,24 @@ export async function saveSession(session: Omit<UserSession, 'expiresAt'> & { ex
   // rooted/jailbroken device or a device backup extraction. Everything else
   // (user id/name/role, expiry) is non-sensitive and stays in AsyncStorage.
   const { token, ...rest } = withExpiry;
-  await Promise.all([
-    SecureStore.setItemAsync(TOKEN_KEY, token),
-    AsyncStorage.setItem(SESSION_KEY, JSON.stringify(rest)),
-  ]);
+  // _memSession and the in-memory auth token are already set above, so the
+  // session is already usable for the rest of this app run even if the
+  // durable-storage writes below fail (e.g. a transient SecureStore/AsyncStorage
+  // error). Swallow rather than throw — a caller like otp.tsx awaits this
+  // inside a try/catch alongside the actual OTP-verify network call, and a
+  // storage hiccup here must not surface as "login failed" after the backend
+  // already authenticated the user. Worst case is falling back to the
+  // legacy-migration re-write path in getSession() next cold start, or (if
+  // the process is killed before that) needing to log in again — never a
+  // false failure on an already-successful login.
+  try {
+    await Promise.all([
+      SecureStore.setItemAsync(TOKEN_KEY, token),
+      AsyncStorage.setItem(SESSION_KEY, JSON.stringify(rest)),
+    ]);
+  } catch (err) {
+    if (__DEV__) console.warn("saveSession: failed to persist session to storage", err);
+  }
 }
 
 export async function getSession(): Promise<UserSession | null> {
