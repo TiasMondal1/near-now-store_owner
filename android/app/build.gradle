@@ -222,3 +222,12 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+// Guarded so a build doesn't fail before the real google-services.json (from
+// the Firebase console — see FCM_PUSH_NOTIFICATIONS_SETUP.md) is placed at
+// android/app/google-services.json. Applying this plugin without the file
+// present errors the Gradle build immediately ("File google-services.json is
+// missing"), so it only activates once the file actually exists.
+if (file('google-services.json').exists()) {
+    apply plugin: 'com.google.gms.google-services'
+}

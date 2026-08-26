@@ -55,3 +55,6 @@ android/.kotlin/
 
 # Claude Code
 .claude/
+
+# Firebase Android app config — contains project identifiers, not committed
+google-services.json

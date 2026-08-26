@@ -42,6 +42,15 @@ module.exports = () => {
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       package: "com.nearandnow.shopkeeper",
+      // NOTE: this app's android/ is committed to git (bare workflow) — EAS
+      // Build uses it as-is and never runs `expo prebuild`, so this field is
+      // inert here (it's only honored by the config-plugin, which only runs
+      // during prebuild). The real Firebase wiring for THIS app is native:
+      // android/app/google-services.json + the guarded `apply plugin:
+      // 'com.google.gms.google-services'` in android/app/build.gradle. Kept
+      // here only so the field stays consistent with the other two apps for
+      // anyone reading this config; it does nothing on its own.
+      googleServicesFile: "./google-services.json",
       versionCode: 16,
       jsEngine: "hermes",
       // Native Maps SDK meta-data — required for MapView tiles on Android
