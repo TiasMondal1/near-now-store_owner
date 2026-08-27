@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
+    "eas-build-post-install": "node scripts/copy-google-services-json.js",
     "start": "expo start",
     "test": "jest",
     "test:watch": "jest --watch",
