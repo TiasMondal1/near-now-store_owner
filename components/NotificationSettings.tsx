@@ -52,9 +52,6 @@ export default function NotificationSettings({ onClose }: Props) {
 
   const items: { key: keyof NotificationPreferences; title: string; desc: string }[] = [
     { key: 'newOrders', title: 'New Orders', desc: 'When you receive a new order' },
-    { key: 'dailySummary', title: 'Daily Summary', desc: 'Daily sales and order recap' },
-    { key: 'payments', title: 'Payment Updates', desc: 'Payment confirmations' },
-    { key: 'systemAlerts', title: 'System Alerts', desc: 'Important announcements' },
   ];
 
   return (

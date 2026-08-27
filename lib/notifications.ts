@@ -40,18 +40,16 @@ if (!IS_EXPO_GO) {
   }
 }
 
+// Previously also had dailySummary/payments/systemAlerts toggles, but no
+// backend push feature has ever existed for any of them — removed rather
+// than left as dead UI a shopkeeper could toggle with no effect, matching
+// this codebase's own precedent for other never-built controls.
 export interface NotificationPreferences {
   newOrders: boolean;
-  dailySummary: boolean;
-  payments: boolean;
-  systemAlerts: boolean;
 }
 
 const DEFAULT_PREFERENCES: NotificationPreferences = {
   newOrders: true,
-  dailySummary: true,
-  payments: true,
-  systemAlerts: true,
 };
 
 class NotificationService {
