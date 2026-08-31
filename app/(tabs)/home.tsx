@@ -510,6 +510,19 @@ export default function HomeTab() {
   }, [session?.token, selectedStore?.id]);
   useEffect(() => { fetchStoreProductsRef.current = fetchStoreProducts; }, [fetchStoreProducts]);
 
+  // Safety net for the realtime channel + focus-effect refresh above: mobile
+  // Supabase realtime sockets can drop silently across app backgrounding, and
+  // if that coincides with a missed focus event (e.g. the app resumes from
+  // background rather than the Home tab regaining navigation focus), a newly
+  // added product would otherwise stay invisible until a full app restart.
+  // Mirrors the same self-healing pattern already used for the active-order
+  // and unread-notification counters above.
+  useSmartPoll(() => fetchStoreProducts(true), {
+    intervalMs: 15_000,
+    slowIntervalMs: 30_000,
+    enabled: !!(session?.token && selectedStore?.id),
+  });
+
   const fetchStores = useCallback(async (token: string, userId?: string): Promise<StoreRow[]> => {
     try { const fetched = await fetchStoresCached(token, userId); if (fetched.length > 0) setStores(fetched); return fetched; } catch { return []; }
   }, []);
