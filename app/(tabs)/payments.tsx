@@ -133,6 +133,18 @@ export default function PaymentsTab() {
     ]).start();
   }, []);
 
+  // getOrdersFromDb intentionally fetches this store's entire delivered-order
+  // history, unbounded — the "All Time" total needs a genuinely complete sum,
+  // not a capped page (see orders-db.ts). But useFocusEffect below re-runs
+  // this same full fetch on every single tab focus, not just when the
+  // screen first mounts or Today/Week/All Time actually needs fresh data —
+  // for a long-lived store this re-fetches and re-processes the whole
+  // lifetime order list on every tab switch. Throttled to at most once a
+  // minute on focus (a real pull-to-refresh or the initial mount always goes
+  // through). Found 2026-09-01 during a cross-app audit.
+  const lastLoadedAtRef = useRef(0);
+  const FOCUS_REFETCH_THROTTLE_MS = 60_000;
+
   const load = useCallback(async (showLoader = false) => {
     if (showLoader) setLoading(true);
     try {
@@ -170,6 +182,7 @@ export default function PaymentsTab() {
         return tb - ta;
       });
       setPayouts(rows);
+      lastLoadedAtRef.current = Date.now();
     } catch (e) {
       if (e instanceof OrdersFetchFailedError) setPayoutsError(true);
     } finally {
@@ -179,7 +192,12 @@ export default function PaymentsTab() {
   }, []);
 
   useEffect(() => { load(true); }, [load]);
-  useFocusEffect(useCallback(() => { load(false); }, [load]));
+  useFocusEffect(
+    useCallback(() => {
+      if (Date.now() - lastLoadedAtRef.current < FOCUS_REFETCH_THROTTLE_MS) return;
+      load(false);
+    }, [load]),
+  );
 
   const { todayPayouts, weekPayouts, todayTotal, weekTotal, allTotal } = useMemo(() => {
     const now = new Date();

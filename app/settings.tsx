@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
   Text,
@@ -66,10 +67,16 @@ export default function SettingsScreen() {
       // (was previously a redundant uncached fetch on every visit here).
       setLoading(false);
 
+      // Match the selected store, not just the first one — a shopkeeper
+      // managing multiple stores could otherwise see a different store's ID
+      // here than the one they're actually operating on everywhere else in
+      // the app (home/stock/orders/payments all resolve `selected_store_id`
+      // the same way). Found 2026-09-01 during a cross-app audit.
+      const selId = await AsyncStorage.getItem('selected_store_id');
       const cached = peekStores();
-      if (cached?.[0]) setStore(cached[0]);
+      if (cached?.length) setStore((selId && cached.find((c) => c.id === selId)) || cached[0]);
       const fresh = await fetchStoresCached(s.token, s.user?.id);
-      if (fresh?.[0]) setStore(fresh[0]);
+      if (fresh?.length) setStore((selId && fresh.find((f) => f.id === selId)) || fresh[0]);
     } catch (error) {
       console.error('Failed to load settings:', error);
       Alert.alert('Error', 'Failed to load settings');
