@@ -1,9 +1,39 @@
 // Single-source dynamic Expo config (no app.json).
 // Uses EXPO_PUBLIC_API_BASE_URL and your custom logo for icons.
 
+const fs = require("fs");
+const path = require("path");
 const withAbiSplits = require("./plugins/withAbiSplits");
 const withTabletSupport = require("./plugins/withTabletSupport");
 const withRemoveMediaPermissions = require("./plugins/withRemoveMediaPermissions");
+
+// This app's android/app/build.gradle (and root build.gradle/settings.gradle/
+// gradlew) were deleted from git by an errant "cleanup" commit (ec154b4,
+// 2026-08-27) and never restored — confirmed via `git ls-files` and `find`,
+// neither shows them tracked or present on disk as of HEAD. Despite that,
+// `eas build` still succeeds and produces ABI-split APKs (app-arm64-v8a-*,
+// app-armeabi-v7a-*, matching the `withAbiSplits` config-plugin below) —
+// meaning EAS Build is silently falling back to a fresh `expo prebuild` from
+// this file, NOT using a hand-maintained native android/ project the way the
+// comment below this block used to claim. That comment was correct when
+// written, before the native files were deleted; it is not correct now.
+// Root cause of shopkeeper push notifications never arriving (found
+// 2026-09-01, direct comparison against the rider app which DOES receive
+// pushes): with no `googleServicesFile` field here, a prebuild-generated
+// android/ project has no Firebase wiring at all — confirmed by extracting
+// a real built APK and finding zero occurrences of this project's
+// `mobilesdk_app_id` anywhere in it. `copy-google-services-json.js` (the
+// eas-build-post-install hook) still copies the file into
+// android/app/google-services.json, but with no build.gradle to apply
+// `com.google.gms.google-services` against it, the copied file is inert.
+// Guarded the same way nearandnowcustomerapp/app.config.js and
+// NAT_Near-Now_Rider-/app.config.js already do it (that pattern is exactly
+// what makes rider push notifications work) — an ungated field would throw
+// during prebuild whenever the file isn't present at all (e.g. local
+// checkouts without it).
+const googleServicesFilePath =
+  process.env.GOOGLE_SERVICES_JSON || path.join(__dirname, "google-services.json");
+const hasGoogleServicesFile = fs.existsSync(googleServicesFilePath);
 
 module.exports = () => {
   const googleMapsApiKey =
@@ -42,18 +72,12 @@ module.exports = () => {
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       package: "com.nearandnow.shopkeeper",
-      // NOTE: this app's android/ is committed to git (bare workflow) — EAS
-      // Build uses it as-is and never runs `expo prebuild`. The real Firebase
-      // wiring for THIS app is native: android/app/google-services.json +
-      // the guarded `apply plugin: 'com.google.gms.google-services'` in
-      // android/app/build.gradle, populated by the eas-build-post-install
-      // hook (scripts/copy-google-services-json.js). A `googleServicesFile`
-      // field here was previously believed inert (only honored by the
-      // config-plugin during prebuild) — it isn't: EAS Build's own preflight
-      // validates that path exists in the uploaded archive regardless of
-      // workflow, and since this file is deliberately gitignored, that check
-      // failed every build with EAS_BUILD_MISSING_GOOGLE_SERVICES_JSON_ERROR.
-      // Left out entirely; nothing reads it for this app.
+      // See the top-of-file comment: EAS Build has been silently prebuilding
+      // this app fresh (the native android/ this comment used to describe no
+      // longer exists), so it needs the same googleServicesFile config-plugin
+      // wiring the customer/rider apps already use — guarded so a checkout
+      // without the file (or a prebuild-preflight quirk) doesn't fail outright.
+      ...(hasGoogleServicesFile ? { googleServicesFile: googleServicesFilePath } : {}),
       versionCode: 16,
       jsEngine: "hermes",
       // Native Maps SDK meta-data — required for MapView tiles on Android
