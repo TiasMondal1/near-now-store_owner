@@ -13,6 +13,7 @@ import {
   Switch,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../../session";
@@ -24,13 +25,14 @@ import {
   formatMasterProductUnit,
   getMasterProductCategories,
   getMasterProductsPage,
-  getStoreProductsFromDb,
+  getStoreProductsFromDbStrict,
   unitForLoosePricingBasis,
   upsertStoreProduct,
   CATALOG_PAGE_SIZE,
   type LoosePricingBasis,
 } from "../../lib/storeProducts";
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
+import { sameData } from "../../lib/persistCache";
 import { useRequireStoreApproval } from "../../lib/useRequireStoreApproval";
 
 const PLACEHOLDER_IMAGE = require("../../assets/icon.png");
@@ -147,17 +149,21 @@ export default function StockTab() {
           </TouchableOpacity>
         </View>
 
-        {activeView === "inventory" && (
+        {/* Both sections stay mounted; the inactive one is hidden with
+            display:none. Unmounting on toggle threw away all catalog state —
+            categories, loaded pages, scroll, half-typed search — and refetched
+            everything behind a skeleton on every Inventory<->Add Custom flip. */}
+        <View style={activeView === "inventory" ? null : styles.hiddenView}>
           <InventoryCatalogSection
             storeId={storeId}
             token={session?.token}
             refreshKey={inventoryRefreshKey}
           />
-        )}
+        </View>
 
-        {activeView === "custom" && (
+        <View style={activeView === "custom" ? null : styles.hiddenView}>
           <AddCustomSection onAdded={() => setInventoryRefreshKey((k) => k + 1)} />
-        )}
+        </View>
       </ScrollView>
 
       {showScrollTop && (
@@ -213,26 +219,55 @@ function InventoryCatalogSection({
       .finally(() => setCategoriesLoading(false));
   }, []);
 
-  // Load store products so we know which master products are already added
-  useEffect(() => {
+  // Load store products so we know which master products are already added.
+  // Revalidated on focus too — a product removed from the Home tab could
+  // never be re-added here because this map was fetched once per mount and
+  // kept saying "already in store".
+  const lastMapFetchRef = React.useRef(0);
+  const mapReqIdRef = React.useRef(0);
+  // Stamped when addProduct optimistically inserts into the map — a map fetch
+  // issued before the add but resolving after it would drop the new entry and
+  // make the just-added product reappear in the catalog.
+  const mapMutationRef = React.useRef(0);
+  const refreshStoreMap = React.useCallback(() => {
     if (!storeId) return;
-    getStoreProductsFromDb(storeId).then((rows) => {
-      const map: Record<string, { id: string; is_active: boolean }> = {};
-      rows.forEach((sp) => {
-        map[sp.master_product_id] = { id: sp.id, is_active: sp.is_active !== false };
-      });
-      setStoreProductMap(map);
-    });
-  }, [storeId, refreshKey]);
+    const seq = ++mapReqIdRef.current;
+    const startedAt = Date.now();
+    lastMapFetchRef.current = startedAt;
+    // Strict variant: a transient query error must skip the commit entirely —
+    // the lenient [] would wipe a populated map and make every already-added
+    // product reappear in the catalog with an Add button.
+    getStoreProductsFromDbStrict(storeId)
+      .then((rows) => {
+        if (seq !== mapReqIdRef.current) return;
+        if (mapMutationRef.current > startedAt) return;
+        const map: Record<string, { id: string; is_active: boolean }> = {};
+        rows.forEach((sp) => {
+          map[sp.master_product_id] = { id: sp.id, is_active: sp.is_active !== false };
+        });
+        setStoreProductMap((prev) => (sameData(prev, map) ? prev : map));
+      })
+      .catch(() => { /* keep the last-known map */ });
+  }, [storeId]);
 
-  // Debounce search input
+  useEffect(() => { refreshStoreMap(); }, [refreshStoreMap, refreshKey]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (Date.now() - lastMapFetchRef.current < 10_000) return;
+      refreshStoreMap();
+    }, [refreshStoreMap])
+  );
+
+  // Debounce search input. The current list intentionally stays visible while
+  // the new results load (stale-while-revalidate) instead of blanking to a
+  // skeleton on every keystroke/category change.
   const handleSearch = (text: string) => {
     setSearch(text);
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     searchTimerRef.current = setTimeout(() => {
       setDebouncedSearch(text);
       setPage(0);
-      setProducts([]);
       setHasMore(true);
     }, 350);
   };
@@ -242,13 +277,17 @@ function InventoryCatalogSection({
     if (cat === selectedCategory) return;
     setSelectedCategory(cat);
     setPage(0);
-    setProducts([]);
     setHasMore(true);
   };
 
-  // Fetch products whenever category / search / page changes
+  // Fetch products whenever category / search / page changes. The request id
+  // guards against out-of-order responses: a slow page for an old search or
+  // category landing after a newer one used to overwrite (or append to) the
+  // newer results.
+  const catalogReqIdRef = React.useRef(0);
   useEffect(() => {
     if (!storeId) return;
+    const reqId = ++catalogReqIdRef.current;
     setLoadingProducts(true);
     getMasterProductsPage({
       category: selectedCategory,
@@ -256,11 +295,12 @@ function InventoryCatalogSection({
       from: page * CATALOG_PAGE_SIZE,
     })
       .then(({ data, hasMore: more }) => {
+        if (reqId !== catalogReqIdRef.current) return;
         setProducts((prev) => (page === 0 ? data : [...prev, ...data]));
         setHasMore(more);
       })
-      .catch(() => { if (page === 0) setProducts([]); })
-      .finally(() => setLoadingProducts(false));
+      .catch(() => { if (reqId === catalogReqIdRef.current && page === 0) setProducts([]); })
+      .finally(() => { if (reqId === catalogReqIdRef.current) setLoadingProducts(false); });
   }, [storeId, selectedCategory, debouncedSearch, page]);
 
   // Products not yet added to this store, deduplicated by id
@@ -278,12 +318,16 @@ function InventoryCatalogSection({
     setPage((p) => p + 1);
   };
 
-  const addProduct = async (product: any) => {
+  // Stable callback — an inline handler recreated every render defeated
+  // CatalogItem's React.memo, re-rendering every visible catalog row on each
+  // keystroke of the search field.
+  const addProduct = React.useCallback(async (product: any) => {
     if (!storeId || !token) return;
     setTogglingId(product.id);
     try {
       const inserted = await upsertStoreProduct(storeId, product.id);
       if (inserted && "id" in inserted && inserted.id) {
+        mapMutationRef.current = Date.now();
         setStoreProductMap((prev) => ({
           ...prev,
           [product.id]: { id: inserted.id, is_active: true },
@@ -296,7 +340,22 @@ function InventoryCatalogSection({
     } finally {
       setTogglingId(null);
     }
-  };
+  }, [storeId, token]);
+
+  const renderCatalogItem = React.useCallback(({ item: p }: { item: any }) => {
+    const name = p.name || p.product_name || "Product";
+    const cat = p.category ? formatCategoryLabel(p.category) : "";
+    return (
+      <CatalogItem
+        p={p}
+        name={name}
+        brand={p.brand}
+        cat={cat}
+        adding={togglingId === p.id}
+        onAdd={addProduct}
+      />
+    );
+  }, [togglingId, addProduct]);
 
   return (
     <View style={styles.catalogCard}>
@@ -407,22 +466,7 @@ function InventoryCatalogSection({
           maxToRenderPerBatch={10}
           windowSize={5}
           contentContainerStyle={styles.catalogList}
-          renderItem={({ item: p }) => {
-            const name = p.name || p.product_name || "Product";
-            const brand = p.brand;
-            const cat = p.category ? formatCategoryLabel(p.category) : "";
-            return (
-              <CatalogItem
-                key={p.id}
-                p={p}
-                name={name}
-                brand={brand}
-                cat={cat}
-                togglingId={togglingId}
-                onAdd={addProduct}
-              />
-            );
-          }}
+          renderItem={renderCatalogItem}
           ListFooterComponent={
             hasMore ? (
               <TouchableOpacity
@@ -450,14 +494,16 @@ const CatalogItem = memo(function CatalogItem({
   name,
   brand,
   cat,
-  togglingId,
+  adding,
   onAdd,
 }: {
   p: any;
   name: string;
   brand?: string;
   cat: string;
-  togglingId: string | null;
+  // Boolean (not the whole togglingId string) so only the row actually being
+  // added re-renders when it changes — every other row's props stay equal.
+  adding: boolean;
   onAdd: (p: any) => void;
 }) {
   const [imgError, setImgError] = useState(false);
@@ -489,10 +535,10 @@ const CatalogItem = memo(function CatalogItem({
       <TouchableOpacity
         style={styles.catalogAddBtn}
         onPress={() => onAdd(p)}
-        disabled={togglingId === p.id}
+        disabled={adding}
         activeOpacity={0.8}
       >
-        {togglingId === p.id ? (
+        {adding ? (
           <ActivityIndicator size="small" color={colors.surface} />
         ) : (
           <Text style={styles.catalogAddBtnText}>Add</Text>
@@ -911,6 +957,7 @@ function AddCustomSection({ onAdded }: { onAdded?: () => void }) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   container: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+  hiddenView: { display: "none" },
   scrollTopBtn: {
     position: "absolute",
     right: spacing.lg,

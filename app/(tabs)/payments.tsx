@@ -20,6 +20,20 @@ import { getOrdersFromDb, OrdersFetchFailedError, type OrderForStore } from "../
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
 import { colors, radius, spacing, shadows } from "../../lib/theme";
 import { useRequireStoreApproval } from "../../lib/useRequireStoreApproval";
+import { hydrateCache, sameData, writeCache } from "../../lib/persistCache";
+
+/** persistCache key for the delivered-order rows — instant Payouts paint. */
+const payoutsCacheKey = (storeId: string) => `payouts:${storeId}`;
+/**
+ * Rows persisted for the fast first paint. Each trimmed row serializes to
+ * ~260 bytes (UUID id, order_code, status, amounts, two ISO timestamps), so
+ * the cap yields a ~1.3 MB entry — inside Android's ~2 MB CursorWindow
+ * per-row read limit, but do NOT raise this much further or the seed read
+ * starts failing silently. Below the cap the cached All-Time totals are
+ * exact; beyond it they read slightly low until the live (unbounded) fetch
+ * commits a few seconds later.
+ */
+const PAYOUTS_CACHE_MAX_ROWS = 5000;
 
 function safeDate(str: string | null | undefined): Date | null {
   if (!str) return null;
@@ -143,9 +157,15 @@ export default function PaymentsTab() {
   // minute on focus (a real pull-to-refresh or the initial mount always goes
   // through). Found 2026-09-01 during a cross-app audit.
   const lastLoadedAtRef = useRef(0);
+  const loadInFlightRef = useRef(false);
   const FOCUS_REFETCH_THROTTLE_MS = 60_000;
 
   const load = useCallback(async (showLoader = false) => {
+    // Mount effect + the initial focus callback both fire before the first
+    // load finishes — without this, the full-history fetch went out twice
+    // concurrently on every visit to the tab.
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
     if (showLoader) setLoading(true);
     try {
       const s: any = await getSession();
@@ -168,6 +188,16 @@ export default function PaymentsTab() {
       }
       if (!sid) return;
 
+      // Stale-while-revalidate: paint last-known rows immediately instead of
+      // blocking the whole tab behind a spinner for the full-history fetch.
+      if (showLoader) {
+        const cachedRows = await hydrateCache<PayoutRow[]>(payoutsCacheKey(sid));
+        if (cachedRows?.length) {
+          setPayouts((prev) => (prev.length > 0 ? prev : cachedRows));
+          setLoading(false);
+        }
+      }
+
       const orders = await getOrdersFromDb(sid);
       setPayoutsError(false);
       const delivered = orders.filter((o) => DELIVERED.has(o.status));
@@ -181,11 +211,28 @@ export default function PaymentsTab() {
         const tb = safeDate(b.order.created_at)?.getTime() ?? 0;
         return tb - ta;
       });
-      setPayouts(rows);
+      setPayouts((prev) => (sameData(prev, rows) ? prev : rows));
+      // Persist a trimmed copy — the list/totals only need code, dates, amount.
+      writeCache(
+        payoutsCacheKey(sid),
+        rows.slice(0, PAYOUTS_CACHE_MAX_ROWS).map((r) => ({
+          amount: r.amount,
+          order: {
+            id: r.order.id,
+            order_code: r.order.order_code,
+            status: r.order.status,
+            total_amount: r.order.total_amount,
+            created_at: r.order.created_at,
+            placed_at: r.order.placed_at,
+            order_items: [],
+          },
+        }))
+      );
       lastLoadedAtRef.current = Date.now();
     } catch (e) {
       if (e instanceof OrdersFetchFailedError) setPayoutsError(true);
     } finally {
+      loadInFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }

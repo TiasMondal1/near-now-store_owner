@@ -27,18 +27,8 @@ export default function SplashScreen() {
   const barWidth = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (isJustLoggedIn()) {
-      (async () => {
-        const session = await getSession();
-        if (session?.token) {
-          router.replace(await resolveAuthenticatedRoute(session.token, session.user?.id));
-        } else {
-          router.replace("/landing");
-        }
-      })();
-      return;
-    }
-
+    // Always start the splash visuals — the post-OTP path used to return
+    // before this, leaving a blank screen while the route-deciding fetch ran.
     const anim = Animated.sequence([
       // 1. Logo + ring fade in together
       Animated.parallel([
@@ -57,19 +47,42 @@ export default function SplashScreen() {
     ]);
     anim.start();
 
-    const startMs = Date.now();
     let cancelled = false;
+
+    if (isJustLoggedIn()) {
+      (async () => {
+        const session = await getSession();
+        if (cancelled) return;
+        if (session?.token) {
+          router.replace(await resolveAuthenticatedRoute(session.token, session.user?.id));
+        } else {
+          router.replace("/landing");
+        }
+      })();
+      return () => { cancelled = true; anim.stop(); };
+    }
+
+    const startMs = Date.now();
 
     (async () => {
       try {
         await guardFreshInstall();
         const [session] = await Promise.all([getSession(), hydrateStoreCache(), hydrateNotificationsCache()]);
         if (cancelled) return;
-        const elapsed = Date.now() - startMs;
-        await new Promise<void>((r) => setTimeout(r, Math.max(0, MIN_SPLASH_MS - elapsed)));
-        if (cancelled) return;
         const ok = session?.token && session?.user?.id && session.user.role !== "customer";
-        router.replace(ok ? await resolveAuthenticatedRoute(session.token, session.user.id) : "/landing");
+        // Resolve the route WHILE the minimum-splash timer runs, not after it
+        // — with a warm/stale store cache this is instant, and even a cold
+        // network fetch now overlaps the 800ms the splash shows anyway.
+        const routePromise: Promise<"/(tabs)/home" | "/store-owner-signup" | "/landing"> = ok
+          ? resolveAuthenticatedRoute(session.token, session.user.id)
+          : Promise.resolve("/landing");
+        const elapsed = Date.now() - startMs;
+        const [route] = await Promise.all([
+          routePromise,
+          new Promise<void>((r) => setTimeout(r, Math.max(0, MIN_SPLASH_MS - elapsed))),
+        ]);
+        if (cancelled) return;
+        router.replace(route);
       } catch {
         if (!cancelled) router.replace("/landing");
       }

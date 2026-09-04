@@ -183,11 +183,25 @@ async function getOrdersFromDbViaCustomerOrders(storeId: string): Promise<{ orde
  * finding zero orders, which resolves to [] as before. Lets callers show a
  * real error state instead of an indistinguishable "no orders" empty state.
  */
+// Stores for which the RPC has proven authoritative this session — either it
+// returned rows, or it returned empty AND a full table-fallback cascade
+// agreed there was nothing. Once proven, a legitimately-empty RPC result is
+// trusted as-is instead of re-running the whole 3-query fallback cascade on
+// every poll tick (orders never silently disappear — a store that had rows
+// keeps them, and a new store's first empty result is verified once).
+const _rpcAuthoritativeStores = new Set<string>();
+
 export async function getOrdersFromDb(storeId: string, limit?: number): Promise<OrderForStore[]> {
   if (!supabase || !storeId) return [];
 
   const rpcResult = await getOrdersFromDbViaRpc(storeId, limit);
-  if (rpcResult.orders.length > 0) return rpcResult.orders;
+  if (rpcResult.orders.length > 0) {
+    if (rpcResult.available) _rpcAuthoritativeStores.add(storeId);
+    return rpcResult.orders;
+  }
+  if (rpcResult.available && !rpcResult.failed && _rpcAuthoritativeStores.has(storeId)) {
+    return [];
+  }
 
   const tablesResult = await getOrdersFromDbViaTables(storeId);
   if (tablesResult.orders.length > 0) return tablesResult.orders;
@@ -196,6 +210,9 @@ export async function getOrdersFromDb(storeId: string, limit?: number): Promise<
   // rather than legitimately finding nothing, surface it instead of
   // returning an indistinguishable empty list.
   if (rpcResult.failed || tablesResult.failed) throw new OrdersFetchFailedError();
+  // RPC answered (empty) and the full cascade agreed — trust the RPC alone
+  // from here on.
+  if (rpcResult.available) _rpcAuthoritativeStores.add(storeId);
   return [];
 }
 
@@ -209,8 +226,11 @@ export async function getOrdersFromDb(storeId: string, limit?: number): Promise<
  * shopkeeper_owns_store() so a caller only ever gets back their own store's
  * orders.
  */
-async function getOrdersFromDbViaRpc(storeId: string, limit?: number): Promise<{ orders: OrderForStore[]; failed: boolean }> {
-  if (!supabase || !storeId) return { orders: [], failed: false };
+async function getOrdersFromDbViaRpc(
+  storeId: string,
+  limit?: number
+): Promise<{ orders: OrderForStore[]; failed: boolean; available: boolean }> {
+  if (!supabase || !storeId) return { orders: [], failed: false, available: false };
 
   // p_limit is optional server-side (defaults to NULL/unbounded, see
   // 20260930310000 migration) — omitted here entirely when the caller
@@ -225,12 +245,12 @@ async function getOrdersFromDbViaRpc(storeId: string, limit?: number): Promise<{
   if (error) {
     // 42883 = function does not exist — an expected, documented case when
     // the optional RPC hasn't been set up, not a real failure.
-    if (error.code === "42883") return { orders: [], failed: false };
+    if (error.code === "42883") return { orders: [], failed: false, available: false };
     console.warn("[orders-db] RPC get_orders_for_store error:", error.message);
-    return { orders: [], failed: true };
+    return { orders: [], failed: true, available: false };
   }
 
-  if (data == null) return { orders: [], failed: false };
+  if (data == null) return { orders: [], failed: false, available: true };
   // RPC returns single jsonb array; Supabase may give us the array or one row containing it
   let raw: any[] = [];
   if (Array.isArray(data)) {
@@ -281,11 +301,12 @@ async function getOrdersFromDbViaRpc(storeId: string, limit?: number): Promise<{
           return { ...o, placed_at: ts, created_at: o.created_at || ts };
         }),
         failed: false,
+        available: true,
       };
     }
   }
 
-  return { orders: mapped.map((o) => ({ ...o, created_at: o.created_at || new Date().toISOString() })), failed: false };
+  return { orders: mapped.map((o) => ({ ...o, created_at: o.created_at || new Date().toISOString() })), failed: false, available: true };
 }
 
 /**

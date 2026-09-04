@@ -29,7 +29,7 @@ import { coalesceEmail, isPlausibleEmail, normalizeSignupEmail } from "../lib/em
 import { isMapsEnabled } from "../lib/maps-env";
 import { normalizeToShopkeeperRole } from "../lib/shopkeeperRole";
 import { colors, radius, spacing } from "../lib/theme";
-import { peekStores, fetchStoresCached, clearStoreCache, persistStores, type CachedStore } from "../lib/appCache";
+import { peekStores, fetchStoresCached, clearStoreCache, persistStores, storeCacheGeneration, type CachedStore } from "../lib/appCache";
 import { uploadOwnerImage, OWNER_IMAGE_KEY } from "../lib/storage";
 import { fetchVerificationDocuments, type VerificationDocument } from "../lib/verificationDocuments";
 import VerificationNavBar from "../components/VerificationNavBar";
@@ -130,6 +130,11 @@ export default function StoreOwnerSignupScreen() {
   const loadStore = async (session: { token: string }) => {
     setStoreLoadFailed(false);
     try {
+      // Same in-flight-mutation guard every other writer of the shared store
+      // cache carries (see appCache.storeCacheGeneration): a logout or toggle
+      // landing while this GET runs means the response is stale — don't
+      // re-persist it as fresh.
+      const generationAtStart = storeCacheGeneration();
       const res = await fetch(`${API_BASE}/store-owner/stores`, {
         headers: { Authorization: `Bearer ${session.token}` },
       });
@@ -138,7 +143,7 @@ export default function StoreOwnerSignupScreen() {
       if (stores[0]) {
         storeFetchedRef.current = true;
         setExistingStore(stores[0]);
-        await persistStores(stores);
+        if (storeCacheGeneration() === generationAtStart) await persistStores(stores);
         // Always prefer the server's own owner_image_url over whatever's
         // cached in AsyncStorage from line ~134 above — that read is only a
         // same-mount-tick optimistic placeholder and, on a shared device,

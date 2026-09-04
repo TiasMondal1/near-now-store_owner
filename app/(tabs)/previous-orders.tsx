@@ -12,7 +12,7 @@ import {
   Easing,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { router } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession } from "../../session";
@@ -26,6 +26,10 @@ import { useSmartPoll } from "../../lib/useSmartPoll";
 import { apiClient } from "../../lib/api-client";
 import { useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
 import { useRequireStoreApproval } from "../../lib/useRequireStoreApproval";
+import { hydrateCache, sameData, writeCache } from "../../lib/persistCache";
+
+/** persistCache key for the terminal-state order list — instant "Previous" tab paint. */
+const ordersCacheKey = (storeId: string) => `orders200:${storeId}`;
 
 type AllocationItem = {
   id: string;
@@ -193,6 +197,7 @@ const AllocationCard = React.memo(function AllocationCard({
 
 export default function OrdersTab() {
   useRequireStoreApproval();
+  const isFocused = useIsFocused();
   const [tab, setTab] = useState<"incoming" | "active" | "previous">("incoming");
   const { setIncomingCount } = useIncomingOrdersCount();
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -269,6 +274,19 @@ export default function OrdersTab() {
     return () => { cancelled = true; };
   }, []);
 
+  // Seed the Previous list from the persisted cache the moment the store id
+  // resolves — switching to that tab used to show "No previous orders" (an
+  // empty state presented as truth) until the first network fetch landed.
+  useEffect(() => {
+    if (!storeId) return;
+    let cancelled = false;
+    hydrateCache<any[]>(ordersCacheKey(storeId)).then((cached) => {
+      if (cancelled || !cached?.length) return;
+      setAllOrders((prev) => (prev.length > 0 ? prev : cached));
+    });
+    return () => { cancelled = true; };
+  }, [storeId]);
+
   const fetchPreviousOrdersRef = useRef<(() => Promise<void>) | null>(null);
 
   // Timestamp of the most recent local accept/reject mutation. A poll that
@@ -277,10 +295,16 @@ export default function OrdersTab() {
   // revert the just-completed action's optimistic update (e.g. an accepted
   // allocation flashing back to pending_acceptance) for one poll cycle.
   const lastLocalMutationRef = useRef(0);
+  const prevOrdersRequestIdRef = useRef(0);
+  // Mount effect + focus effect fire on the same dep changes — throttle so
+  // the same request doesn't go out 2-3 times back to back.
+  const lastActiveFetchRef = useRef(0);
+  const lastPrevFetchRef = useRef(0);
 
   const fetchActiveOrders = useCallback(async () => {
     if (!session?.token) return;
     const requestStartedAt = Date.now();
+    lastActiveFetchRef.current = requestStartedAt;
     try {
       const response = await apiClient.get("/shopkeeper/orders", {
         Authorization: `Bearer ${session.token}`,
@@ -302,10 +326,13 @@ export default function OrdersTab() {
 
         setAllocations((prev) => {
           const prevMap = new Map(prev.map((a) => [a.allocation_id, a]));
-          return active.map((o: Allocation) => ({
+          const next = active.map((o: Allocation) => ({
             ...o,
             pickup_code: o.pickup_code ?? prevMap.get(o.allocation_id)?.pickup_code ?? null,
           }));
+          // Identity-stable commit — this runs every 10s; an identical-but-new
+          // array re-rendered every card and the SectionList each tick.
+          return sameData(prev, next) ? prev : next;
         });
       } else if (__DEV__) {
         console.warn("[orders] fetchActiveOrders: success=false", json);
@@ -317,6 +344,10 @@ export default function OrdersTab() {
 
   const fetchPreviousOrders = useCallback(async () => {
     if (!session || !storeId) return;
+    lastPrevFetchRef.current = Date.now();
+    // Sequence guard: focus effect, 60s poll, and pull-to-refresh can overlap;
+    // only the most recently started request may commit.
+    const requestId = ++prevOrdersRequestIdRef.current;
     try {
       // "Previous" only ever shows terminal-state orders — a shopkeeper
       // reviewing history has no real need to see more than the most recent
@@ -326,12 +357,22 @@ export default function OrdersTab() {
       // (getOrdersFromDb(sid), no limit) since it needs a genuinely
       // complete total.
       const fromDb = await getOrdersFromDb(storeId, 200);
+      if (requestId !== prevOrdersRequestIdRef.current) return;
       setPreviousOrdersError(false);
-      if (!Array.isArray(fromDb) || fromDb.length === 0) { setAllOrders([]); return; }
+      if (!Array.isArray(fromDb) || fromDb.length === 0) {
+        setAllOrders((prev) => (prev.length === 0 ? prev : []));
+        writeCache(ordersCacheKey(storeId), []);
+        return;
+      }
 
+      // getOrdersFromDb already resolves placed_at for the normal path — only
+      // backfill the (rare) rows that still lack it, instead of re-querying
+      // customer_orders for all ~200 orders on every poll tick.
       const coIds = [
         ...new Set(
-          fromDb.map((o: any) => o.customer_order_id).filter(Boolean) as string[]
+          fromDb
+            .filter((o: any) => !o.placed_at && o.customer_order_id)
+            .map((o: any) => o.customer_order_id) as string[]
         ),
       ];
       const tsMap: Record<string, string> = {};
@@ -349,8 +390,8 @@ export default function OrdersTab() {
 
       const withPlacedAt = fromDb.map((o: any) => {
         const placedAt =
-          (o.customer_order_id && tsMap[o.customer_order_id]) ||
           o.placed_at ||
+          (o.customer_order_id && tsMap[o.customer_order_id]) ||
           undefined;
         return { ...o, ...(placedAt ? { placed_at: placedAt } : {}) };
       });
@@ -390,10 +431,25 @@ export default function OrdersTab() {
         const items = itemsByOrderId[String(o.id)];
         return items ? { ...o, order_items: items } : o;
       });
-      setAllOrders(withData);
+      if (requestId !== prevOrdersRequestIdRef.current) return;
+      setAllOrders((prev) => (sameData(prev, withData) ? prev : withData));
+      // Persist for instant paint next session — strip item images, the list
+      // only renders order codes/dates/counts.
+      writeCache(
+        ordersCacheKey(storeId),
+        withData.map((o: any) => ({
+          ...o,
+          order_items: Array.isArray(o.order_items)
+            ? o.order_items.map(({ image_url, ...it }: any) => it)
+            : [],
+        }))
+      );
     } catch (e) {
+      if (requestId !== prevOrdersRequestIdRef.current) return;
       if (e instanceof OrdersFetchFailedError) setPreviousOrdersError(true);
-      setAllOrders([]);
+      // Never wipe an already-displayed list over a transient failure — a
+      // background poll blip used to blank the whole Previous tab.
+      setAllOrders((prev) => (prev.length > 0 ? prev : []));
     }
   }, [session, storeId]);
 
@@ -511,7 +567,9 @@ export default function OrdersTab() {
   useSmartPoll(fetchActiveOrders, {
     intervalMs: 10_000,
     slowIntervalMs: 20_000,
-    enabled: !!(session?.token),
+    // Focus-gated: while another tab is up, IncomingOrdersProvider still
+    // polls for the badge — this screen's richer poll can pause.
+    enabled: !!(session?.token) && isFocused,
   });
 
   // fetchPreviousOrders fetches the store's *entire* order history (no
@@ -526,13 +584,16 @@ export default function OrdersTab() {
   useSmartPoll(fetchPreviousOrders, {
     intervalMs: 60_000,
     slowIntervalMs: 120_000,
-    enabled: !!(session && storeId),
+    enabled: !!(session && storeId) && isFocused,
   });
 
   useFocusEffect(
     React.useCallback(() => {
-      if (session?.token) fetchActiveOrders();
-      if (session?.token && storeId) fetchPreviousOrders();
+      if (session?.token && Date.now() - lastActiveFetchRef.current > 3_000) fetchActiveOrders();
+      // Terminal-state orders essentially never change — a focus refetch
+      // within half a poll interval of the last one is pure duplicate.
+      if (session?.token && storeId && Date.now() - lastPrevFetchRef.current > 30_000) fetchPreviousOrders();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [session?.token, storeId])
   );
 

@@ -110,11 +110,13 @@ export default function ProfileScreen() {
       if (cancelled) return;
       setSession(s);
 
-      // Load persisted owner image
-      const savedOwnerImg = await AsyncStorage.getItem(OWNER_IMAGE_KEY);
+      // Independent storage reads — no reason to serialize them behind each
+      // other while the loading spinner waits.
+      const [savedOwnerImg, selId] = await Promise.all([
+        AsyncStorage.getItem(OWNER_IMAGE_KEY),
+        AsyncStorage.getItem('selected_store_id'),
+      ]);
       if (!cancelled && savedOwnerImg) setOwnerImageUri(savedOwnerImg);
-
-      const selId = await AsyncStorage.getItem('selected_store_id');
       const cached = peekStores();
       if (cached?.length) {
         const picked = (selId && cached.find((s: any) => s.id === selId)) || cached[0];
@@ -215,7 +217,10 @@ export default function ProfileScreen() {
       void loadDocCount(storeInfo.id);
       void loadPendingChangeRequest(storeInfo.id);
       void loadStoreImages(storeInfo.id);
-    }, [storeInfo, loadDocCount, loadPendingChangeRequest, loadStoreImages])
+      // Keyed on the id, not the storeInfo object — every background hydrate
+      // commits a fresh object, and keying on identity re-fired all three
+      // fetches on each one even though the store never changed.
+    }, [storeInfo?.id, loadDocCount, loadPendingChangeRequest, loadStoreImages])
   );
 
   // While a change request is pending, poll for the admin's decision so the
@@ -258,10 +263,9 @@ export default function ProfileScreen() {
     if (store.image_url) {
       setStoreImages((prev) => (prev.length ? prev : [{ id: "__placeholder__", url: store.image_url }]));
     }
-    if (store?.id) {
-      void loadDocCount(store.id);
-      void loadStoreImages(store.id);
-    }
+    // Doc count / gallery loads live in the focus effect (keyed on the store
+    // id) — firing them from here too meant every background re-hydrate of
+    // the same store re-downloaded both for nothing.
   };
 
   const pickStoreImage = async () => {

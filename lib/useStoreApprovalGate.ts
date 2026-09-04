@@ -4,7 +4,9 @@ import { useFocusEffect } from "@react-navigation/native";
 import { getSession } from "../session";
 import { isStoreApproved, refreshStoreApproval, type ApprovalStore } from "./storeApproval";
 import { peekStores } from "./appCache";
+import { sameData } from "./persistCache";
 import { supabase } from "./supabase";
+import { useSmartPoll } from "./useSmartPoll";
 
 type GateMode = "require-approved" | "require-pending";
 
@@ -53,10 +55,19 @@ export function useStoreApprovalGate(mode: GateMode) {
   // screen's channel topic unique so they never collide.
   const instanceIdRef = useRef(Math.random().toString(36).slice(2));
 
-  const evaluate = useCallback(async () => {
+  // An evaluate() settling after this gate's screen unmounted (logout tore
+  // down the tabs, a redirect already happened) must not navigate — a stale
+  // router.replace here would hijack whatever screen the user is on now.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const evaluate = useCallback(async (force = false) => {
     const session = await getSession();
     if (!session?.token) {
-      router.replace("/landing");
+      if (mountedRef.current) router.replace("/landing");
       return null;
     }
 
@@ -67,9 +78,12 @@ export function useStoreApprovalGate(mode: GateMode) {
       // exactly what let an admin's revoke of an already-approved store go
       // undetected while the shopkeeper sat on a tab screen: the stale
       // cached (still-approved) store kept passing this check indefinitely.
-      result = await refreshStoreApproval(session.token, session.user?.id);
+      // Concurrent gate instances share one request and reuse results for a
+      // few seconds (see storeApproval.ts); force bypasses that reuse when
+      // realtime says the row genuinely changed.
+      result = await refreshStoreApproval(session.token, session.user?.id, { force });
     } catch {
-      if (mode === "require-approved" && !hasConfirmedApprovedRef.current) {
+      if (mode === "require-approved" && !hasConfirmedApprovedRef.current && mountedRef.current) {
         router.replace("/pending-verification");
       }
       // Already-confirmed-approved sessions fail open here so a transient
@@ -78,11 +92,14 @@ export function useStoreApprovalGate(mode: GateMode) {
       return null;
     }
 
-    setStore(result.store);
+    // Identity-stable commit — this hook re-runs every 30s on every mounted
+    // gated screen; committing a fresh object when nothing changed re-rendered
+    // the tabs navigator shell (and every screen under it) each tick.
+    setStore((prev) => (sameData(prev, result.store) ? prev : result.store));
     setApproved(result.approved);
     if (result.approved) hasConfirmedApprovedRef.current = true;
 
-    if (mode === "require-approved" && !result.approved) {
+    if (mode === "require-approved" && !result.approved && mountedRef.current) {
       router.replace("/pending-verification");
       return result;
     }
@@ -115,12 +132,9 @@ export function useStoreApprovalGate(mode: GateMode) {
   // next mount/focus. Fallback: the realtime subscription below delivers
   // near-instantly once it's connected; this covers the gap before that
   // first connects, or a store row we don't have an id for yet.
-  useEffect(() => {
-    const id = setInterval(() => {
-      void evaluate();
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [evaluate]);
+  // useSmartPoll (not raw setInterval) so it pauses in the background and
+  // fires an immediate re-check on foreground resume.
+  useSmartPoll(() => { void evaluate(); }, { intervalMs: POLL_INTERVAL_MS });
 
   // Realtime: near-instant re-check the moment an admin approves or revokes
   // this store, instead of waiting up to 30s for the poll above. This gate
@@ -142,7 +156,7 @@ export function useStoreApprovalGate(mode: GateMode) {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${store.id}` },
         () => {
-          void evaluate();
+          void evaluate(true);
         }
       )
       .subscribe();

@@ -2,6 +2,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { clearStoreCache } from "./lib/appCache";
 import { clearNotificationsCache } from "./lib/notificationsCache";
+import { clearAllCaches } from "./lib/persistCache";
+import { clearStoreApprovalCache } from "./lib/storeApproval";
 import { OWNER_IMAGE_KEY } from "./lib/storage";
 import { setShopkeeperAuthToken } from "./lib/supabase";
 
@@ -125,8 +127,14 @@ export async function clearSession() {
   // different shopkeeper logging in on the same device would see the
   // previous shopkeeper's cached notification list until the next refetch.
   clearNotificationsCache();
+  // The approval-refresh memo (lib/storeApproval.ts) would otherwise serve the
+  // previous account's store/approval to the next account for up to 15s.
+  clearStoreApprovalCache();
   await Promise.all([
     SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {}),
+    // Products/orders/payouts stale-while-revalidate caches (lib/persistCache)
+    // — same cross-account leak class.
+    clearAllCaches(),
     AsyncStorage.multiRemove([
       SESSION_KEY,
       "inventory_persisted_state",
@@ -156,8 +164,14 @@ export async function guardFreshInstall(): Promise<void> {
       // (both the AsyncStorage metadata and the SecureStore token, if present —
       // SecureStore/Keychain data can outlive an app's own AsyncStorage wipe).
       clearNotificationsCache();
+      clearStoreApprovalCache();
+      // Store cache too — a surviving nanow_store_cache_v2 from before the
+      // wipe would let the splash's approved fast-path route on the prior
+      // session's store.
+      clearStoreCache();
       await Promise.all([
         SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {}),
+        clearAllCaches(),
         AsyncStorage.multiRemove([SESSION_KEY, "inventory_persisted_state", "inventory_products_cache", OWNER_IMAGE_KEY]),
       ]);
       _memSession = null;

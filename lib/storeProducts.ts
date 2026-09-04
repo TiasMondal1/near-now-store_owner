@@ -17,8 +17,13 @@ export type StoreProductRow = {
 
 export type StoreProductWithName = StoreProductRow & { name: string };
 
-/** Fetch all active (non-deleted) product rows for a store from the DB */
-export async function getStoreProductsFromDb(
+/**
+ * Strict variant — throws on a query error instead of masking it as an empty
+ * store. Callers that persist results (home's stale-while-revalidate product
+ * cache) must be able to tell "you have no products" apart from "the network
+ * died", or a transient outage overwrites a good cache with [].
+ */
+export async function getStoreProductsFromDbStrict(
   storeId: string
 ): Promise<StoreProductRow[]> {
   if (!supabase) return [];
@@ -28,8 +33,19 @@ export async function getStoreProductsFromDb(
     .eq("store_id", storeId)
     .is("deleted_at", null)
     .order("created_at", { ascending: true });
-  if (error) return [];
+  if (error) throw new Error(`[storeProducts] products fetch failed: ${error.message}`);
   return (data ?? []) as StoreProductRow[];
+}
+
+/** Fetch all active (non-deleted) product rows for a store from the DB */
+export async function getStoreProductsFromDb(
+  storeId: string
+): Promise<StoreProductRow[]> {
+  try {
+    return await getStoreProductsFromDbStrict(storeId);
+  } catch {
+    return [];
+  }
 }
 
 /** Fetch master_products from DB (for names and units). Falls back to empty if not available. */
@@ -84,15 +100,24 @@ export async function getStoreProductsWithNames(
       .eq("store_id", storeId)
       .is("deleted_at", null)
       .order("created_at", { ascending: true });
-    if (!error && Array.isArray(data) && data.length > 0) {
+    // A successful-but-empty result is a real answer (the store simply has no
+    // products), not a failed join variant — the join relation is a left join
+    // on the same filtered rows, so it can never change the row count. Only
+    // an actual error (unknown relation name) should try the next variant.
+    // Treating empty as failure used to send every poll for a zero-product
+    // store through both probes AND the full master-catalog fallback below.
+    if (!error && Array.isArray(data)) {
       _workingJoinSelect = select;
       return mapJoinRows(data, select);
     }
   }
 
-  // Fallback: two parallel queries when neither join works
+  // Fallback: two parallel queries when neither join works. The store-rows
+  // read is strict — if it also fails here, every source has errored and the
+  // caller must see a rejection, not a fake empty store (getStockListFromDb's
+  // consumers persist results to the product cache).
   const [storeRows, masterList] = await Promise.all([
-    getStoreProductsFromDb(storeId),
+    getStoreProductsFromDbStrict(storeId),
     getMasterProductsFromDb(),
   ]);
   const nameByMasterId: Record<string, string> = {};
@@ -150,24 +175,31 @@ export async function upsertStoreProduct(
   if (!supabase) return { error: "Supabase not configured" };
   if (!storeId || !masterProductId) return { error: "Missing store_id or master_product_id" };
 
-  const { data: masterProduct, error: masterErr } = await supabase
-    .from("master_products")
-    .select("is_active")
-    .eq("id", masterProductId)
-    .maybeSingle();
+  // The catalog-availability check and the existing-row lookup are
+  // independent reads — run them together so the Add button's spinner covers
+  // two round trips instead of three.
+  const [masterRes, existingRes] = await Promise.all([
+    supabase
+      .from("master_products")
+      .select("is_active")
+      .eq("id", masterProductId)
+      .maybeSingle(),
+    // Include soft-deleted rows so we can restore them instead of inserting a duplicate
+    supabase
+      .from("products")
+      .select("id, deleted_at")
+      .eq("store_id", storeId)
+      .eq("master_product_id", masterProductId)
+      .maybeSingle(),
+  ]);
+
+  const { data: masterProduct, error: masterErr } = masterRes;
   if (masterErr) return { error: masterErr.message };
   if (!masterProduct || masterProduct.is_active === false) {
     return { error: "This product is no longer available in the Near&Now catalog" };
   }
 
-  // Include soft-deleted rows so we can restore them instead of inserting a duplicate
-  const { data: existing, error: selectErr } = await supabase
-    .from("products")
-    .select("id, deleted_at")
-    .eq("store_id", storeId)
-    .eq("master_product_id", masterProductId)
-    .maybeSingle();
-
+  const { data: existing, error: selectErr } = existingRes;
   if (selectErr) return { error: selectErr.message };
 
   if (existing?.id) {
@@ -422,9 +454,32 @@ export async function getMasterProductsFullFromDb(): Promise<any[]> {
   return allData;
 }
 
+// Category names change on an admin timescale, but the Inventory section
+// refetched them on every mount (every Inventory<->Add Custom toggle, every
+// tab remount). Cache per session with a modest TTL + in-flight dedup.
+const CATEGORIES_TTL_MS = 10 * 60 * 1000;
+let _categoriesCache: { list: string[]; ts: number } | null = null;
+let _categoriesInflight: Promise<string[]> | null = null;
+
 /** Fetch all unique category names. Queries the categories table first (no row-limit issue),
  *  then falls back to a paginated scan of master_products.category as a safety net. */
 export async function getMasterProductCategories(): Promise<string[]> {
+  if (_categoriesCache && Date.now() - _categoriesCache.ts < CATEGORIES_TTL_MS) {
+    return _categoriesCache.list;
+  }
+  if (_categoriesInflight) return _categoriesInflight;
+  _categoriesInflight = fetchMasterProductCategories()
+    .then((list) => {
+      if (list.length > 0) _categoriesCache = { list, ts: Date.now() };
+      return list;
+    })
+    .finally(() => {
+      _categoriesInflight = null;
+    });
+  return _categoriesInflight;
+}
+
+async function fetchMasterProductCategories(): Promise<string[]> {
   if (!supabase) return [];
 
   // Primary: categories table is small and has no 1000-row issue

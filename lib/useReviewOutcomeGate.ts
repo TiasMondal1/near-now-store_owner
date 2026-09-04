@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getSession } from "../session";
 import { config } from "./config";
+import { useSmartPoll } from "./useSmartPoll";
 
 const POLL_MS = 20_000;
 
@@ -28,53 +29,47 @@ export function useReviewOutcomeGate() {
   const [outcome, setOutcome] = useState<ReviewOutcome | null>(null);
   const dismissingRef = useRef(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const check = useCallback(async () => {
+    if (dismissingRef.current) return;
+    try {
+      const s: any = await getSession();
+      if (!s?.token) return;
+      const res = await fetch(`${config.API_BASE}/store-owner/notifications?unreadOnly=true`, {
+        headers: { Authorization: `Bearer ${s.token}` },
+      });
+      const data = await res.json().catch(() => null);
+      if (!Array.isArray(data)) return;
 
-    const check = async () => {
-      if (dismissingRef.current) return;
-      try {
-        const s: any = await getSession();
-        if (!s?.token || cancelled) return;
-        const res = await fetch(`${config.API_BASE}/store-owner/notifications?unreadOnly=true`, {
-          headers: { Authorization: `Bearer ${s.token}` },
+      const profileChange = data.find((n: any) => n.type === "profile_change_reviewed");
+      const productSubmission = data.find((n: any) => n.type === "product_submission_reviewed");
+      const next = profileChange ?? productSubmission;
+      if (!next) return;
+
+      if (next === profileChange) {
+        setOutcome({
+          notificationId: next.id,
+          kind: "profile_change",
+          approved: !!next.data?.approved,
+          rejectionReason: next.data?.rejectionReason ?? null,
         });
-        const data = await res.json().catch(() => null);
-        if (cancelled || !Array.isArray(data)) return;
-
-        const profileChange = data.find((n: any) => n.type === "profile_change_reviewed");
-        const productSubmission = data.find((n: any) => n.type === "product_submission_reviewed");
-        const next = profileChange ?? productSubmission;
-        if (!next) return;
-
-        if (next === profileChange) {
-          setOutcome({
-            notificationId: next.id,
-            kind: "profile_change",
-            approved: !!next.data?.approved,
-            rejectionReason: next.data?.rejectionReason ?? null,
-          });
-        } else {
-          setOutcome({
-            notificationId: next.id,
-            kind: "product_submission",
-            approved: !!next.data?.approved,
-            rejectionReason: next.data?.rejectionReason ?? null,
-            productName: next.data?.productName,
-          });
-        }
-      } catch {
-        // Non-critical — next poll tick tries again.
+      } else {
+        setOutcome({
+          notificationId: next.id,
+          kind: "product_submission",
+          approved: !!next.data?.approved,
+          rejectionReason: next.data?.rejectionReason ?? null,
+          productName: next.data?.productName,
+        });
       }
-    };
-
-    void check();
-    const id = setInterval(check, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
+    } catch {
+      // Non-critical — next poll tick tries again.
+    }
   }, []);
+
+  useEffect(() => { void check(); }, [check]);
+  // AppState-aware poll (raw setInterval kept firing while backgrounded) —
+  // also gives an immediate re-check when the app returns to foreground.
+  useSmartPoll(check, { intervalMs: POLL_MS });
 
   const dismiss = async () => {
     const current = outcome;

@@ -11,6 +11,8 @@ import { getSession } from '../session';
 import { apiClient } from '../lib/api-client';
 import { useRequireStoreApproval } from '../lib/useRequireStoreApproval';
 import {
+  lastNotificationsReadMutationTs,
+  noteNotificationsReadMutation,
   peekNotifications,
   persistNotifications,
   type CachedNotification,
@@ -49,7 +51,13 @@ export default function NotificationInboxScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
+  // A list fetch that was already in flight when the user tapped "mark
+  // read"/"mark all read" carries pre-mutation is_read flags — committing
+  // (and persisting) it would visibly flip the rows back to unread until the
+  // server round trip settled. The stamp lives in notificationsCache so
+  // Home's badge poll (a second writer to the same cache) honors it too.
   const fetchNotifications = useCallback(async (authToken: string, silent = false) => {
+    const requestStartedAt = Date.now();
     try {
       if (!silent) setLoading(true);
       const res = await apiClient.get<AppNotification[]>('/store-owner/notifications', {
@@ -57,16 +65,16 @@ export default function NotificationInboxScreen() {
       });
       if (!res.success) throw new Error(res.error || `Notifications fetch failed`);
       if (!Array.isArray(res.data)) throw new Error('Notifications fetch returned an unexpected shape');
+      if (lastNotificationsReadMutationTs() > requestStartedAt) return;
       setNotifications(res.data);
       setLoadError(false);
       await persistNotifications(res.data);
     } catch {
-      // Non-fatal when we already have cached data showing — only clobber
-      // to empty on a genuinely cold, cache-less first load. Either way,
-      // flag the failure so the empty state can tell "nothing to show" apart
-      // from "couldn't load" and offer a retry instead of looking identical
-      // to a genuinely empty inbox.
-      if (!cachedNotifications) setNotifications([]);
+      // Non-fatal when data is already showing (cache-seeded or from a prior
+      // fetch) — never wipe a visible list over a refresh failure. The flag
+      // still lets a genuinely empty inbox tell "nothing to show" apart from
+      // "couldn't load" and offer a retry.
+      setNotifications((prev) => (prev.length > 0 ? prev : []));
       setLoadError(true);
     } finally {
       setLoading(false);
@@ -98,6 +106,7 @@ export default function NotificationInboxScreen() {
     // server state (e.g. Home's bell badge, which always refetches fresh).
     const previous = notifications;
     const next = previous.map((n) => ({ ...n, is_read: true }));
+    noteNotificationsReadMutation();
     setNotifications(next);
     persistNotifications(next);
     try {
@@ -117,6 +126,7 @@ export default function NotificationInboxScreen() {
     if (!token) return;
     const previous = notifications;
     const next = previous.map((n) => (n.id === id ? { ...n, is_read: true } : n));
+    noteNotificationsReadMutation();
     setNotifications(next);
     persistNotifications(next);
     try {

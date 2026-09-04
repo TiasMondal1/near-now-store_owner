@@ -104,8 +104,13 @@ export default function BillingInfoScreen() {
     // would otherwise keep pointing this screen at bad data for up to the
     // cache's 10-minute TTL, and getBillingInfo's ownership check would
     // silently 403 if the cached id ever belonged to a different store.
-    const stores = await forceFetchStores(session.token, session.user?.id);
-    const store = stores[0];
+    const [stores, selId] = await Promise.all([
+      forceFetchStores(session.token, session.user?.id),
+      AsyncStorage.getItem("selected_store_id").catch(() => null),
+    ]);
+    // Respect the store the shopkeeper actually has selected — hardcoding
+    // stores[0] pointed multi-store owners at the wrong store's bank details.
+    const store = (selId && stores.find((s) => s.id === selId)) || stores[0];
     if (!store?.id) {
       setLoading(false);
       return;

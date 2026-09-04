@@ -15,7 +15,7 @@ import {
   Dimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { router } from "expo-router";
 import { getSession } from "../../session";
 import { Ionicons } from "@expo/vector-icons";
@@ -38,15 +38,20 @@ import {
   clearStoreCache,
   type CachedStore,
 } from "../../lib/appCache";
-import { isStoreApproved } from "../../lib/storeApproval";
+import { isStoreApproved, refreshStoreApproval } from "../../lib/storeApproval";
 import { notificationService } from "../../lib/notifications";
 import { useSmartPoll } from "../../lib/useSmartPoll";
 import { apiClient } from "../../lib/api-client";
+import { hydrateCache, peekCache, sameData, writeCache } from "../../lib/persistCache";
+import { lastNotificationsReadMutationTs, peekNotifications, persistNotifications } from "../../lib/notificationsCache";
 
 const SELECTED_STORE_KEY = "selected_store_id";
+// Legacy inventory cache keys — nothing writes them anymore (the old
+// InventoryScreen is gone); still removed defensively in invalidateAllCaches.
 const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
 const INVENTORY_CACHE_KEY = "inventory_products_cache";
-const CACHE_KEYS = [INVENTORY_PERSISTED_KEY, INVENTORY_CACHE_KEY];
+/** persistCache key for the "Your Stock" list — lets it paint instantly on cold start. */
+const productsCacheKey = (storeId: string) => `products:${storeId}`;
 const TILE_GAP = 10;
 const TILE_WIDTH = (Dimensions.get("window").width - spacing.lg * 2 - TILE_GAP) / 2;
 // Width of one "Your Stock" swipeable page — screen width minus the outer
@@ -140,14 +145,28 @@ export default function HomeTab() {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(16)).current;
 
+  const isFocused = useIsFocused();
   const [session, setSession] = useState<any | null>(null);
   const [stores, setStores] = useState<StoreRow[]>([]);
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [approvedBanner, setApprovedBanner] = useState(false);
-  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  // Seed the bell badge from the cached notification list (warmed at splash)
+  // so it doesn't flash 0 while the first count fetch is in flight.
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(
+    () => peekNotifications()?.filter((n) => !n.is_read).length ?? 0
+  );
   const approvedBannerAnim = useRef(new Animated.Value(0)).current;
-  const approvalPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Timestamp of the most recent local store mutation (go online/offline).
+  // A store fetch that was already in flight when the toggle landed carries
+  // pre-mutation is_active — committing it would visibly flip the status card
+  // back for up to a poll cycle. Same pattern as previous-orders.tsx.
+  const storesMutationRef = useRef(0);
+  const commitStores = useCallback((next: StoreRow[], requestStartedAt: number) => {
+    if (storesMutationRef.current > requestStartedAt) return;
+    setStores((prev) => (sameData(prev, next) ? prev : next));
+  }, []);
 
   const [storeProducts, setStoreProducts] = useState<
     Array<{ id: string; name: string; unit?: string; storeProductId?: string; is_active?: boolean; quantity?: number; is_loose?: boolean }>
@@ -277,21 +296,23 @@ export default function HomeTab() {
           // return the same cached array back while it's still warm (up to
           // 10 minutes), so a stale/wrong store name or address shown from
           // cache would never actually get corrected in the background.
+          const startedAt = Date.now();
           forceFetchStores(s.token, s.user?.id).then((fresh) => {
             if (!cancelled && fresh.length > 0) {
               if (!isStoreApproved(fresh[0])) {
                 router.replace("/pending-verification");
                 return;
               }
-              setStores(fresh);
+              commitStores(fresh, startedAt);
             }
           });
           return;
         }
+        const startedAt = Date.now();
         const currentStores = await fetchStoresCached(s.token, s.user?.id);
         if (cancelled) return;
         if (currentStores.length > 0) {
-          setStores(currentStores);
+          commitStores(currentStores, startedAt);
           if (!isStoreApproved(currentStores[0])) {
             if (!cancelled) router.replace("/pending-verification");
             return;
@@ -311,38 +332,44 @@ export default function HomeTab() {
   // subscription below; the actual redirect decision lives in the single
   // watcher effect further down so it fires no matter which of these two
   // mechanisms is the one that actually notices the change.
-  useEffect(() => {
-    if (!session?.token || !selectedStore?.id) {
-      if (approvalPollRef.current) { clearInterval(approvalPollRef.current); approvalPollRef.current = null; }
-      return;
-    }
+  // Routed through refreshStoreApproval so it shares one request (and a short
+  // reuse window) with the approval gates instead of adding another
+  // independent GET /store-owner/stores every 30s.
+  const checkApproval = useCallback(async () => {
+    if (!session?.token || !selectedStore?.id) return;
     const wasApproved = isStoreApproved(selectedStore);
-    const checkApproval = async () => {
-      try {
-        const res = await apiClient.get<{ stores?: StoreRow[] }>("/store-owner/stores", { Authorization: `Bearer ${session.token}` });
-        if (!res.success) return;
-        const fresh: StoreRow[] = res.data?.stores ?? [];
-        if (!fresh.length) return;
-        const updated = fresh.find(s => s.id === selectedStore?.id);
-        setStores(fresh);
-        if (updated && !wasApproved && isStoreApproved(updated)) {
-          setApprovedBanner(true);
-          Animated.sequence([
-            Animated.timing(approvedBannerAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
-            Animated.delay(4000),
-            Animated.timing(approvedBannerAnim, { toValue: 0, duration: 350, useNativeDriver: true }),
-          ]).start(() => setApprovedBanner(false));
-        }
-      } catch (error) {
-        if (__DEV__) console.warn('[home] Approval poll failed', error);
+    const startedAt = Date.now();
+    try {
+      await refreshStoreApproval(session.token, session.user?.id);
+      const fresh = peekStores();
+      if (!fresh?.length) return;
+      const updated = fresh.find(s => s.id === selectedStore?.id);
+      commitStores(fresh, startedAt);
+      if (updated && !wasApproved && isStoreApproved(updated)) {
+        setApprovedBanner(true);
+        Animated.sequence([
+          Animated.timing(approvedBannerAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
+          Animated.delay(4000),
+          Animated.timing(approvedBannerAnim, { toValue: 0, duration: 350, useNativeDriver: true }),
+        ]).start(() => setApprovedBanner(false));
       }
-    };
-    approvalPollRef.current = setInterval(checkApproval, 30_000);
-    return () => { if (approvalPollRef.current) { clearInterval(approvalPollRef.current); approvalPollRef.current = null; } };
-  }, [selectedStore?.is_approved, selectedStore?.id, session?.token]);
+    } catch (error) {
+      if (__DEV__) console.warn('[home] Approval poll failed', error);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.token, selectedStore?.id, selectedStore?.is_approved, commitStores]);
 
+  useSmartPoll(checkApproval, {
+    intervalMs: 30_000,
+    enabled: !!(session?.token && selectedStore?.id) && isFocused,
+  });
+
+  // The mount effect and useFocusEffect below both fire when deps resolve, so
+  // without this the same request went out 2-3 times back to back.
+  const lastCountFetchRef = useRef(0);
   const fetchActiveOrderCount = useCallback(async () => {
     if (!session?.token || !selectedStore?.id) return;
+    lastCountFetchRef.current = Date.now();
     try {
       const res = await apiClient.get<{ orders?: Array<{ store_id?: string; alloc_status?: string }> }>(
         "/shopkeeper/orders?active=true",
@@ -362,24 +389,37 @@ export default function HomeTab() {
   useSmartPoll(fetchActiveOrderCount, {
     intervalMs: 15_000,
     slowIntervalMs: 30_000,
-    enabled: !!(session?.token && selectedStore?.id),
+    enabled: !!(session?.token && selectedStore?.id) && isFocused,
   });
 
   useFocusEffect(
     React.useCallback(() => {
+      if (Date.now() - lastCountFetchRef.current < 3_000) return;
       fetchActiveOrderCount();
     }, [fetchActiveOrderCount])
   );
 
   const fetchUnreadNotificationCount = useCallback(async () => {
     if (!session?.token) return;
+    const requestStartedAt = Date.now();
     try {
-      const res = await apiClient.get<Array<{ is_read: boolean }>>(
+      const res = await apiClient.get<Parameters<typeof persistNotifications>[0]>(
         "/store-owner/notifications",
         { Authorization: `Bearer ${session.token}` }
       );
-      const notifications = Array.isArray(res.data) ? res.data : [];
+      // apiClient signals failure via success:false with no data — a failed
+      // tick must neither zero the badge nor overwrite the shared cache with
+      // an empty list.
+      if (!res.success || !Array.isArray(res.data)) return;
+      const notifications = res.data;
+      // The inbox may have optimistically marked rows read while this request
+      // was in flight — its pre-mutation payload must not clobber that.
+      if (lastNotificationsReadMutationTs() > requestStartedAt) return;
       setUnreadNotificationCount(notifications.filter((n) => !n.is_read).length);
+      // This poll already paid for the full list — persist it so the inbox
+      // screen opens instantly with current data instead of refetching the
+      // identical payload behind a spinner.
+      persistNotifications(notifications);
     } catch {
       // Non-fatal — bell keeps its last known count.
     }
@@ -388,11 +428,15 @@ export default function HomeTab() {
   useSmartPoll(fetchUnreadNotificationCount, {
     intervalMs: 15_000,
     slowIntervalMs: 30_000,
-    enabled: !!session?.token,
+    enabled: !!session?.token && isFocused,
   });
 
   useFocusEffect(
     React.useCallback(() => {
+      // Instant badge update from the shared cache (e.g. returning from the
+      // inbox after marking things read), then a background refresh.
+      const cached = peekNotifications();
+      if (cached) setUnreadNotificationCount(cached.filter((n) => !n.is_read).length);
       fetchUnreadNotificationCount();
     }, [fetchUnreadNotificationCount])
   );
@@ -465,8 +509,14 @@ export default function HomeTab() {
   }, [selectedStore?.id, session?.token]);
 
   const firstFocusRef = useRef(true);
+  const lastProductsFetchRef = useRef(0);
   useFocusEffect(React.useCallback(() => {
     if (firstFocusRef.current) { firstFocusRef.current = false; return; }
+    // The realtime products subscription and the 15s poll already cover data
+    // changes — this focus refetch is only a safety net, so skip it when a
+    // fetch went out moments ago (mount/dep-resolve and focus otherwise
+    // double-fire the same request).
+    if (Date.now() - lastProductsFetchRef.current < 10_000) return;
     if (session?.token && selectedStore?.id) fetchStoreProducts(true);
   }, [session?.token, selectedStore?.id]));
 
@@ -481,25 +531,52 @@ export default function HomeTab() {
   // result of the most-recently-*started* request avoids an older, in-flight
   // fetch clobbering a newer one's result.
   const fetchRequestIdRef = useRef(0);
+  // Timestamp of the most recent local product mutation (toggle/delete). A
+  // fetch already in flight when the mutation landed carries pre-mutation
+  // rows — committing it would visibly revert the optimistic update until the
+  // next refetch. Same pattern as previous-orders.tsx's lastLocalMutationRef.
+  const productsMutationRef = useRef(0);
   const fetchStoreProducts = useCallback(async (silent = false) => {
     if (!session?.token || !selectedStore?.id) return;
+    const storeId = selectedStore.id;
     const requestId = ++fetchRequestIdRef.current;
-    if (!silent) setStoreProductsLoading(true);
-    try {
-      const fromDb = await getStockListFromDb(selectedStore.id);
+    const startedAt = Date.now();
+    lastProductsFetchRef.current = startedAt;
+
+    // Stale-while-revalidate: on a foreground load, paint the last-known list
+    // from the persisted cache immediately and demote the network fetch to a
+    // background refresh — the spinner is reserved for a genuinely cold cache.
+    let spinnerShown = false;
+    if (!silent) {
+      const cached =
+        peekCache<StockProduct[]>(productsCacheKey(storeId)) ??
+        (await hydrateCache<StockProduct[]>(productsCacheKey(storeId)));
       if (requestId !== fetchRequestIdRef.current) return;
-      if (Array.isArray(fromDb) && fromDb.length > 0) {
-        setStoreProducts(fromDb.map((item: any) => ({ id: item.id, name: (item.name || item.product_name || "").trim() || "Product", unit: item.unit || "", storeProductId: item.storeProductId, is_active: item.is_active !== false, is_loose: item.is_loose === true })));
-        return;
+      if (cached && cached.length > 0) {
+        setStoreProducts((prev) => (sameData(prev, cached) ? prev : cached));
+        setStoreProductsLoading(false);
+      } else {
+        spinnerShown = true;
+        setStoreProductsLoading(true);
       }
-      setStoreProducts([]);
+    }
+
+    try {
+      const fromDb = await getStockListFromDb(storeId);
+      if (requestId !== fetchRequestIdRef.current) return;
+      if (productsMutationRef.current > startedAt) return;
+      const mapped: StockProduct[] = Array.isArray(fromDb)
+        ? fromDb.map((item: any) => ({ id: item.id, name: (item.name || item.product_name || "").trim() || "Product", unit: item.unit || "", storeProductId: item.storeProductId, is_active: item.is_active !== false, is_loose: item.is_loose === true }))
+        : [];
+      setStoreProducts((prev) => (sameData(prev, mapped) ? prev : mapped));
+      writeCache(productsCacheKey(storeId), mapped);
     } catch {
       if (requestId !== fetchRequestIdRef.current) return;
-      // Only clear on a genuinely empty/failed foreground load. A silent
+      // Only clear on a genuinely cold, cache-less foreground load. A silent
       // background refresh (realtime subscription, focus effect, post-toggle)
-      // failing shouldn't wipe a real, already-loaded product list over a
-      // transient network hiccup — better to show stale data than none.
-      if (!silent) setStoreProducts([]);
+      // — or a load that already painted cached data — failing shouldn't wipe
+      // a real product list over a transient network hiccup.
+      if (!silent && spinnerShown) setStoreProducts([]);
     }
     // Always clear the spinner this call raised, regardless of whether a
     // newer request has since superseded it for the purpose of committing
@@ -520,34 +597,49 @@ export default function HomeTab() {
   useSmartPoll(() => fetchStoreProducts(true), {
     intervalMs: 15_000,
     slowIntervalMs: 30_000,
-    enabled: !!(session?.token && selectedStore?.id),
+    // Focus-gated: while another tab is up, the realtime subscription still
+    // catches changes; polling a hidden dashboard is pure waste.
+    enabled: !!(session?.token && selectedStore?.id) && isFocused,
   });
 
   const fetchStores = useCallback(async (token: string, userId?: string): Promise<StoreRow[]> => {
-    try { const fetched = await fetchStoresCached(token, userId); if (fetched.length > 0) setStores(fetched); return fetched; } catch { return []; }
-  }, []);
+    const startedAt = Date.now();
+    try { const fetched = await fetchStoresCached(token, userId); if (fetched.length > 0) commitStores(fetched, startedAt); return fetched; } catch { return []; }
+  }, [commitStores]);
 
   const toggleOnline = (value: boolean) => {
     if (!session || !selectedStore) return;
     if (!isStoreApproved(selectedStore)) return;
     if (selectedStore.is_active === value) return;
+    // After the server confirms the PATCH: patch the shared cache in place
+    // (persisted; bumps the cache generation so any in-flight pre-toggle
+    // fetch can't overwrite it), stamp the local mutation time so this
+    // screen's own pollers drop pre-toggle responses, update the UI
+    // immediately, then reconcile with one forced refetch. The old
+    // clear-cache-and-refetch dance left a window where a concurrent poll
+    // re-persisted pre-toggle data as fresh and visibly flipped the card back.
+    const applyToggle = async (isActive: boolean) => {
+      const response = await apiClient.patch(`/store-owner/stores/${selectedStore.id}/online`, { is_active: isActive }, { Authorization: `Bearer ${session.token}` });
+      if (!response.success) throw new Error(response.error || `Failed to go ${isActive ? "online" : "offline"}`);
+      patchStoreActive(selectedStore.id, isActive);
+      storesMutationRef.current = Date.now();
+      setStores((prev) => prev.map((s) => (s.id === selectedStore.id ? { ...s, is_active: isActive } : s)));
+      const startedAt = Date.now();
+      await Promise.all([
+        forceFetchStores(session.token, session.user?.id).then((fresh) => { if (fresh.length > 0) commitStores(fresh, startedAt); }),
+        fetchStoreProducts(true).catch(() => {}),
+      ]);
+    };
     if (value) {
       setConfirmModal({ title: "Go Online?", message: "Your store will become visible to customers.", confirmText: "Go Online", confirmColor: colors.success, iconName: "storefront", onConfirm: async () => {
-        const response = await apiClient.patch(`/store-owner/stores/${selectedStore.id}/online`, { is_active: true }, { Authorization: `Bearer ${session.token}` });
-        if (!response.success) throw new Error(response.error || "Failed to go online");
-        await restoreActiveProductsOnline(selectedStore.id); patchStoreActive(selectedStore.id, true); clearStoreCache();
-        await fetchStores(session.token, session.user?.id); await fetchStoreProducts(true);
+        await restoreActiveProductsOnline(selectedStore.id);
+        await applyToggle(true);
       }});
     } else {
       setConfirmModal({ title: "Go Offline?", message: "Your store will be hidden from customers.", confirmText: "Go Offline", confirmColor: colors.error, iconName: "power", onConfirm: async () => {
-        setStoreProductsLoading(true);
-        try {
-          await setAllProductsOffline(selectedStore.id);
-          const response = await apiClient.patch(`/store-owner/stores/${selectedStore.id}/online`, { is_active: false }, { Authorization: `Bearer ${session.token}` });
-          if (!response.success) throw new Error(response.error || "Failed to go offline");
-          patchStoreActive(selectedStore.id, false); clearStoreCache(); await invalidateAllCaches();
-          await fetchStores(session.token, session.user?.id); fetchStoreProducts(true).catch(() => {});
-        } finally { setStoreProductsLoading(false); }
+        await setAllProductsOffline(selectedStore.id);
+        await applyToggle(false);
+        await invalidateAllCaches();
       }});
     }
   };
@@ -558,12 +650,22 @@ export default function HomeTab() {
     if (!product.storeProductId) return;
     const wasActive = product.is_active !== false; const nowActive = !wasActive;
     setTogglingProductId(product.id);
+    productsMutationRef.current = Date.now();
     setStoreProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, is_active: nowActive } : p));
     try {
       const success = await updateProductActiveState(product.storeProductId, nowActive, session?.token ?? null);
-      if (!success) { setStoreProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, is_active: wasActive } : p)); }
-      else { await AsyncStorage.multiRemove(CACHE_KEYS); fetchStoreProducts(true); }
-    } catch { setStoreProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, is_active: wasActive } : p)); }
+      if (!success) {
+        productsMutationRef.current = Date.now();
+        setStoreProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, is_active: wasActive } : p));
+      } else {
+        // The confirming refetch starts after the mutation stamp, so it's
+        // allowed to commit — and it rewrites the persisted cache too.
+        fetchStoreProducts(true);
+      }
+    } catch {
+      productsMutationRef.current = Date.now();
+      setStoreProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, is_active: wasActive } : p));
+    }
     finally { setTogglingProductId(null); }
   }, [session?.token, fetchStoreProducts]);
 
@@ -571,9 +673,18 @@ export default function HomeTab() {
     if (!product.storeProductId || !supabase) return;
     const { error } = await supabase.from("products").update({ deleted_at: new Date().toISOString() }).eq("id", product.storeProductId);
     if (error) { Alert.alert("Error", "Failed to remove product."); return; }
-    setStoreProducts((prev) => prev.filter((p) => p.id !== product.id));
-    await AsyncStorage.multiRemove(CACHE_KEYS);
-  }, []);
+    productsMutationRef.current = Date.now();
+    // Functional update — this handler is frozen inside the confirm modal's
+    // state at open time, so a closure snapshot of storeProducts could be
+    // stale by the time the user confirms (a poll tick in between). The cache
+    // write is deferred out of the updater so it stays pure.
+    const cacheKey = selectedStore?.id ? productsCacheKey(selectedStore.id) : null;
+    setStoreProducts((prev) => {
+      const next = prev.filter((p) => p.id !== product.id);
+      if (cacheKey) queueMicrotask(() => writeCache(cacheKey, next));
+      return next;
+    });
+  }, [selectedStore?.id]);
 
   // A single stray tap on the small trash icon (right next to the
   // active/off toggle) used to soft-delete a live product with no way to
@@ -596,10 +707,17 @@ export default function HomeTab() {
     if (ids.length === 0) return;
     const { error } = await supabase.from("products").update({ deleted_at: new Date().toISOString() }).in("id", ids);
     if (error) { Alert.alert("Error", "Failed to remove products."); return; }
+    productsMutationRef.current = Date.now();
+    // Functional update for the same modal-frozen-closure reason as
+    // deleteProduct above.
     const removedIds = new Set(section.map((p) => p.id));
-    setStoreProducts((prev) => prev.filter((p) => !removedIds.has(p.id)));
-    await AsyncStorage.multiRemove(CACHE_KEYS);
-  }, []);
+    const cacheKey = selectedStore?.id ? productsCacheKey(selectedStore.id) : null;
+    setStoreProducts((prev) => {
+      const next = prev.filter((p) => !removedIds.has(p.id));
+      if (cacheKey) queueMicrotask(() => writeCache(cacheKey, next));
+      return next;
+    });
+  }, [selectedStore?.id]);
 
   const confirmDeleteAllInSection = useCallback((section: Array<{ id: string; storeProductId?: string }>, sectionLabel: string) => {
     if (section.length === 0) return;

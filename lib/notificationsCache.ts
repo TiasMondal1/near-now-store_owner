@@ -60,3 +60,21 @@ export function clearNotificationsCache(): void {
   _mem = null;
   AsyncStorage.removeItem(NOTIFICATIONS_CACHE_KEY).catch(() => {});
 }
+
+// ── Read-mutation stamp ──────────────────────────────────────────────────────
+// The inbox writes optimistic mark-read state into this cache; Home's badge
+// poll is a second, independent writer. A poll response issued before a
+// mark-read tap but landing after it would overwrite the optimistic state (in
+// UI and on disk) with pre-mutation rows. Writers capture their request start
+// time and skip committing when a read mutation postdates it.
+let _lastReadMutationTs = 0;
+
+/** Call whenever read-state is optimistically mutated (mark one/all read). */
+export function noteNotificationsReadMutation(): void {
+  _lastReadMutationTs = Date.now();
+}
+
+/** Timestamp of the most recent optimistic read-state mutation. */
+export function lastNotificationsReadMutationTs(): number {
+  return _lastReadMutationTs;
+}
