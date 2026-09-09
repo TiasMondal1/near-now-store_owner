@@ -263,7 +263,14 @@ export default function PaymentsTab() {
 
   const filtered = period === "today" ? todayPayouts : period === "week" ? weekPayouts : payouts;
   const filteredTotal = period === "today" ? todayTotal : period === "week" ? weekTotal : allTotal;
-  const periodLabel = period === "today" ? "Today's Order Value" : period === "week" ? "This Week" : "All Time";
+  // Labeled "Last 7 Days," not "This Week" — the underlying filter (above)
+  // is a rolling `now - 7 days` window, not a real Mon-Sun calendar-week
+  // boundary. A shopkeeper checking Monday morning under a "This Week" label
+  // would have seen Tuesday-through-Sunday-last-week folded in, implying
+  // "since this week started" when it wasn't. Cosmetic/label fix only — the
+  // totals themselves are correct for what they actually compute, unchanged
+  // here. Found 2026-09-09.
+  const periodLabel = period === "today" ? "Today's Order Value" : period === "week" ? "Last 7 Days" : "All Time";
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -291,7 +298,7 @@ export default function PaymentsTab() {
               activeOpacity={0.8}
             >
               <Text style={[styles.periodTabText, period === p && styles.periodTabTextActive]}>
-                {p === "today" ? "Today" : p === "week" ? "This Week" : "All Time"}
+                {p === "today" ? "Today" : p === "week" ? "Last 7 Days" : "All Time"}
               </Text>
             </TouchableOpacity>
           ))}

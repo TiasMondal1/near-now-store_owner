@@ -18,6 +18,23 @@ export type StoreProductRow = {
 export type StoreProductWithName = StoreProductRow & { name: string };
 
 /**
+ * Defense-in-depth store-approval check for this file's Supabase-direct
+ * write path (upsertStoreProduct, updateProductActiveState). Today, the
+ * only protection on these writes is useStoreApprovalGate wrapping the
+ * whole tab stack they're called from, plus RLS (not visible from this
+ * repo) as the real backend enforcement — neither protects a hypothetical
+ * future caller that reuses these functions outside that gated stack (e.g.
+ * a deep link). Not exploitable today; this closes the gap for any future
+ * reuse without needing to remember to re-add the gate elsewhere. Found +
+ * fixed 2026-09-09.
+ */
+async function isStoreApprovedForWrite(storeId: string): Promise<boolean> {
+  if (!supabase) return false;
+  const { data } = await supabase.from("stores").select("is_approved").eq("id", storeId).maybeSingle();
+  return data?.is_approved !== false;
+}
+
+/**
  * Strict variant — throws on a query error instead of masking it as an empty
  * store. Callers that persist results (home's stale-while-revalidate product
  * cache) must be able to tell "you have no products" apart from "the network
@@ -175,10 +192,10 @@ export async function upsertStoreProduct(
   if (!supabase) return { error: "Supabase not configured" };
   if (!storeId || !masterProductId) return { error: "Missing store_id or master_product_id" };
 
-  // The catalog-availability check and the existing-row lookup are
-  // independent reads — run them together so the Add button's spinner covers
-  // two round trips instead of three.
-  const [masterRes, existingRes] = await Promise.all([
+  // The catalog-availability check, the existing-row lookup, and the
+  // store-approval check are independent reads — run them together so the
+  // Add button's spinner covers one round trip instead of three sequential.
+  const [masterRes, existingRes, storeApproved] = await Promise.all([
     supabase
       .from("master_products")
       .select("is_active")
@@ -191,7 +208,10 @@ export async function upsertStoreProduct(
       .eq("store_id", storeId)
       .eq("master_product_id", masterProductId)
       .maybeSingle(),
+    isStoreApprovedForWrite(storeId),
   ]);
+
+  if (!storeApproved) return { error: "This store is not approved to add products" };
 
   const { data: masterProduct, error: masterErr } = masterRes;
   if (masterErr) return { error: masterErr.message };
@@ -378,6 +398,17 @@ export async function addCustomMasterProduct(
  * Active   → is_active=true
  * Inactive → is_active=false
  * Uses Supabase first; if that fails and token is provided, falls back to backend API.
+ *
+ * Deliberately does NOT add the same isStoreApprovedForWrite() defense-in-depth
+ * check upsertStoreProduct now has (2026-09-09) — unlike that function (called
+ * once per new product, batched into an existing Promise.all at zero extra
+ * latency), this is called on every single Active/Off tap, and doing so here
+ * would mean a real extra sequential round trip (look up this product's
+ * store_id, then its approval) on a hot, frequently-tapped path for a gap
+ * that's still purely latent/non-exploitable today (same trust boundary:
+ * useStoreApprovalGate wraps the whole tab stack this is called from, RLS is
+ * the real backend enforcement). Revisit if this function is ever reused
+ * outside that gated stack.
  */
 export async function updateProductActiveState(
   storeProductId: string,

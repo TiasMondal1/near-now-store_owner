@@ -87,11 +87,13 @@ function resolveOrderDateStr(o: any): string {
 const AllocationCard = React.memo(function AllocationCard({
   alloc,
   accepting,
+  storeActive,
   onAccept,
   onReject,
 }: {
   alloc: Allocation;
   accepting: boolean;
+  storeActive: boolean;
   onAccept: (allocId: string, itemIds: string[]) => void;
   onReject: (allocId: string, orderCode: string) => void;
 }) {
@@ -167,16 +169,18 @@ const AllocationCard = React.memo(function AllocationCard({
             <Text style={allocStyles.rejectBtnText}>Reject</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[allocStyles.acceptBtn, (checkedIds.size === 0 || accepting) && allocStyles.acceptBtnDisabled]}
+            style={[allocStyles.acceptBtn, (checkedIds.size === 0 || accepting || !storeActive) && allocStyles.acceptBtnDisabled]}
             onPress={() => onAccept(alloc.allocation_id, Array.from(checkedIds))}
-            disabled={checkedIds.size === 0 || accepting}
+            disabled={checkedIds.size === 0 || accepting || !storeActive}
           >
             {accepting ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
               <>
                 <Ionicons name="checkmark-circle-outline" size={16} color="#fff" />
-                <Text style={allocStyles.acceptBtnText}>Accept ({checkedIds.size})</Text>
+                <Text style={allocStyles.acceptBtnText}>
+                  {storeActive ? `Accept (${checkedIds.size})` : "Store offline"}
+                </Text>
               </>
             )}
           </TouchableOpacity>
@@ -205,6 +209,12 @@ export default function OrdersTab() {
 
   const [session, setSession] = useState<any | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
+  // Mirrors home.tsx's storeActive gate on the product Active/Off toggle —
+  // this screen had no equivalent check on Accept, so a shopkeeper who took
+  // their store offline could still accept a still-pending incoming order in
+  // the same session. Defaults true so it never blocks before store data has
+  // loaded. Found 2026-09-09.
+  const [storeActive, setStoreActive] = useState(true);
 
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [allocLoading, setAllocLoading] = useState(true);
@@ -252,7 +262,10 @@ export default function OrdersTab() {
         const cached = peekStores();
         if (cached && cached.length > 0) {
           const picked = (selId && cached.find(s => s.id === selId)) || cached[0];
-          if (picked) setStoreId(picked.id);
+          if (picked) {
+            setStoreId(picked.id);
+            setStoreActive(picked.is_active !== false);
+          }
           setAllocLoading(false);
           setPrevLoading(false);
           return;
@@ -261,7 +274,10 @@ export default function OrdersTab() {
         const stores = await fetchStoresCached(s.token, s.user?.id);
         if (cancelled) return;
         const picked = (selId && stores.find(s => s.id === selId)) || stores[0];
-        if (picked) setStoreId(picked.id);
+        if (picked) {
+          setStoreId(picked.id);
+          setStoreActive(picked.is_active !== false);
+        }
       } catch (e) {
         if (__DEV__) console.warn("[orders-tab] Bootstrap error:", e);
       } finally {
@@ -593,6 +609,14 @@ export default function OrdersTab() {
       // Terminal-state orders essentially never change — a focus refetch
       // within half a poll interval of the last one is pure duplicate.
       if (session?.token && storeId && Date.now() - lastPrevFetchRef.current > 30_000) fetchPreviousOrders();
+      // Re-peek the shared store cache on every focus so a store toggled
+      // offline on the Home tab (via patchStoreActive, appCache.ts) is
+      // reflected here the moment the shopkeeper switches back — no network
+      // call, just reading the same in-memory cache Home already writes to.
+      if (storeId) {
+        const fresh = peekStores()?.find((s) => s.id === storeId);
+        if (fresh) setStoreActive(fresh.is_active !== false);
+      }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [session?.token, storeId])
   );
@@ -724,6 +748,7 @@ export default function OrdersTab() {
             <AllocationCard
               alloc={a}
               accepting={respondingId === a.allocation_id}
+              storeActive={storeActive}
               onAccept={acceptAllocation}
               onReject={rejectAllocation}
             />
