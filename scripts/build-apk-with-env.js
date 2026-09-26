@@ -154,7 +154,6 @@ const resolveAndroidSdkDir = () => {
   const candidates = [
     process.env.ANDROID_HOME,
     process.env.ANDROID_SDK_ROOT,
-    "/Users/tiasmondal166/Library/Android/sdk",
     path.join(process.env.HOME || "", "Library/Android/sdk"),
     "/opt/android-sdk",
     ...winCandidates,

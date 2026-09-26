@@ -1,7 +1,5 @@
-import React from "react";
-import { Modal, View, Text, TouchableOpacity, StyleSheet } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { colors, radius, spacing } from "../lib/theme";
+import React, { useRef } from "react";
+import { NoticeSheet } from "./ui";
 import { ReviewOutcome } from "../lib/useReviewOutcomeGate";
 
 interface Props {
@@ -11,9 +9,9 @@ interface Props {
 
 function titleFor(outcome: ReviewOutcome): string {
   if (outcome.kind === "profile_change") {
-    return outcome.approved ? "Profile Change Approved" : "Profile Change Rejected";
+    return outcome.approved ? "Profile change approved" : "Profile change rejected";
   }
-  return outcome.approved ? "Product Approved" : "Product Rejected";
+  return outcome.approved ? "Product approved" : "Product rejected";
 }
 
 function bodyFor(outcome: ReviewOutcome): string {
@@ -29,85 +27,29 @@ function bodyFor(outcome: ReviewOutcome): string {
 }
 
 /**
- * Blocking acknowledgment for a reviewed profile-change or product-submission
- * request. No backdrop dismiss and a no-op `onRequestClose` (Android back
- * button) — the shopkeeper can't swipe/back past it without tapping "Got it."
+ * Acknowledgment for a reviewed profile-change or product-submission request.
+ * A `NoticeSheet`: the button, backdrop tap and Android back all run
+ * `onDismiss`, so every way out of the sheet acknowledges the outcome.
  */
 export default function ReviewOutcomeModal({ outcome, onDismiss }: Props) {
-  if (!outcome) return null;
+  // Keep the last outcome so the sheet still has content while it animates
+  // out after `onDismiss` sets `outcome` to null.
+  const lastRef = useRef<ReviewOutcome | null>(null);
+  if (outcome) lastRef.current = outcome;
+  const shown = outcome ?? lastRef.current;
+  if (!shown) return null;
 
-  const approved = outcome.approved;
+  const approved = shown.approved;
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={() => {}}>
-      <View style={st.overlay}>
-        <View style={st.card}>
-          <View style={[st.iconWrap, { backgroundColor: approved ? colors.success + "18" : colors.error + "18" }]}>
-            <Ionicons
-              name={approved ? "checkmark-circle" : "close-circle"}
-              size={44}
-              color={approved ? colors.success : colors.error}
-            />
-          </View>
-          <Text style={st.title}>{titleFor(outcome)}</Text>
-          <Text style={st.body}>{bodyFor(outcome)}</Text>
-          <TouchableOpacity style={st.btn} onPress={onDismiss} activeOpacity={0.8}>
-            <Text style={st.btnText}>Got it</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
+    <NoticeSheet
+      visible={!!outcome}
+      tone={approved ? "success" : "error"}
+      icon={approved ? "checkmark-circle-outline" : "close-circle-outline"}
+      title={titleFor(shown)}
+      message={bodyFor(shown)}
+      actionLabel="Got it"
+      onAction={onDismiss}
+    />
   );
 }
-
-const st = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: spacing.xl,
-  },
-  card: {
-    width: "100%",
-    maxWidth: 360,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.xl,
-    alignItems: "center",
-  },
-  iconWrap: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: spacing.lg,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: colors.textPrimary,
-    textAlign: "center",
-    marginBottom: spacing.sm,
-  },
-  body: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    textAlign: "center",
-    lineHeight: 20,
-    marginBottom: spacing.xl,
-  },
-  btn: {
-    width: "100%",
-    paddingVertical: 14,
-    borderRadius: radius.md,
-    backgroundColor: colors.primary,
-    alignItems: "center",
-  },
-  btnText: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#fff",
-  },
-});

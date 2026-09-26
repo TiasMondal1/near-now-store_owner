@@ -80,14 +80,13 @@ Required variables in `.env`:
 
 ### Backend Setup
 
-The app requires a Node.js/Express backend. See `NAMECHEAP_MIGRATION.md` for deployment instructions.
+The app requires the Near & Now Node.js/Express backend (default production URL is set in `app.config.js`).
 
 ## 📖 Documentation
 
-- **[APP_STATUS.md](./APP_STATUS.md)** - Current app status and features
-- **[PROJECT_STATUS.md](./PROJECT_STATUS.md)** - Real-time done vs left tracker
-- **[IMPLEMENTATION_GUIDE.md](./IMPLEMENTATION_GUIDE.md)** - New features implementation guide
-- **[NAMECHEAP_MIGRATION.md](./NAMECHEAP_MIGRATION.md)** - Backend deployment guide
+- **[BUILD_COMMANDS.md](./BUILD_COMMANDS.md)** - Local and EAS build / release commands
+- **[docs/design-system.md](./docs/design-system.md)** - Design system: tokens, components, screen patterns and information architecture
+- **[components/ui/README.md](./components/ui/README.md)** - UI kit API reference (every component's props with usage examples)
 
 ## 🏗️ Project Structure
 
@@ -125,9 +124,11 @@ near-now-store_owner/
 ## 🔐 Security
 
 ### Production Checklist
-- [ ] Remove dev OTP bypass (123456)
-- [ ] Update API_BASE_URL to production
-- [ ] Enable error monitoring (Sentry)
+- [ ] `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY` set as EAS environment variables (the production build fails without them)
+- [ ] `GOOGLE_SERVICES_JSON` uploaded as an EAS file secret (push notifications)
+- [ ] `EXPO_PUBLIC_SENTRY_DSN` set (crash reporting) plus `SENTRY_AUTH_TOKEN/ORG/PROJECT` for source maps
+- [ ] `EXPO_PUBLIC_API_BASE_URL` points at the HTTPS production API
+- [ ] Verify one real push notification renders the small icon correctly on a device
 - [ ] Review RLS policies
 - [ ] Test all authentication flows
 - [ ] Verify environment variables
@@ -273,11 +274,6 @@ npx eslint .
 
 For issues or questions:
 - Check documentation in `/docs`
-- Review `APP_STATUS.md` for current features
-- See `IMPLEMENTATION_GUIDE.md` for new features
-
 ---
 
-**Version**: 1.0.0  
-**Last Updated**: March 4, 2026  
-**Status**: Production Ready ✅
+**Version**: 1.0.0

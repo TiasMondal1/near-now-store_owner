@@ -35,6 +35,16 @@ export function isJustLoggedIn(): boolean {
   return _memSession !== null;
 }
 
+/**
+ * Synchronous peek at the current in-memory session token (null when logged
+ * out). Used by the API client to tell whether a 401 belongs to the session
+ * that is *currently* active, or to a stale token captured by a request that
+ * was already in flight when the user logged out / switched accounts.
+ */
+export function peekSessionToken(): string | null {
+  return _memSession?.token ?? null;
+}
+
 export async function saveSession(session: Omit<UserSession, 'expiresAt'> & { expiresAt?: number }) {
   const withExpiry: UserSession = {
     ...session,
@@ -90,8 +100,16 @@ export async function getSession(): Promise<UserSession | null> {
     if (!token && rest.token) {
       token = rest.token;
       delete rest.token;
-      await SecureStore.setItemAsync(TOKEN_KEY, token);
-      await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(rest));
+      // Best-effort: if the Keystore write fails the session must still load
+      // for this run (the token is already in hand). Previously a throw here
+      // bubbled to the outer catch, so the user looked logged out on every
+      // launch while the plaintext token stayed behind in AsyncStorage.
+      try {
+        await SecureStore.setItemAsync(TOKEN_KEY, token);
+        await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(rest));
+      } catch (err) {
+        if (__DEV__) console.warn("getSession: legacy token migration failed", err);
+      }
     }
 
     if (!token) {

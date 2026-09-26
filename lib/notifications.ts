@@ -4,12 +4,13 @@
  */
 
 import * as Device from 'expo-device';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { apiClient } from './api-client';
 import { getSession } from '../session';
+import { emitOrdersChanged } from './orderEvents';
 
 const PUSH_TOKEN_KEY = 'push_notification_token';
 const NOTIFICATION_PREFERENCES_KEY = 'notification_preferences';
@@ -24,6 +25,8 @@ let Notifications: ExpoNotifications | null = null;
 
 if (!IS_EXPO_GO) {
   try {
+    // Skipped in Expo Go (no native module); resolved at runtime on purpose.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     Notifications = require('expo-notifications') as ExpoNotifications;
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
@@ -70,6 +73,13 @@ class NotificationService {
   getLastRegistrationError() {
     return this.lastRegistrationError;
   }
+
+  // Live OS notification listener subscriptions. initialize() runs on every
+  // Home mount (each login), and without tracking these each mount stacked
+  // another pair of listeners — one notification tap then pushed the Orders
+  // screen once per accumulated listener.
+  private receivedSub: { remove: () => void } | null = null;
+  private responseSub: { remove: () => void } | null = null;
 
   private constructor() {
     this.readyPromise = this.loadPreferences();
@@ -181,6 +191,7 @@ class NotificationService {
       this.registerTokenWithBackend(token.data).catch((err) => {
         if (__DEV__) console.warn('Failed to register token with backend:', err);
       });
+      this.startForegroundReRegistration();
 
       if (__DEV__) console.log('✅ Push notification token registered');
       return token.data;
@@ -194,20 +205,49 @@ class NotificationService {
   /**
    * Register token with backend
    */
+  // Re-send the stored token to the backend whenever the app returns to the
+  // foreground (throttled). Registration used to be a single fire-and-forget
+  // POST after login; if that one call failed the device got no pushes
+  // until the next cold start. Registration is idempotent server-side.
+  private appStateSub: { remove: () => void } | null = null;
+  private lastRegisterAt = 0;
+  private static readonly REREGISTER_THROTTLE_MS = 15 * 60 * 1000;
+
+  private startForegroundReRegistration(): void {
+    if (this.appStateSub) return;
+    this.appStateSub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      if (Date.now() - this.lastRegisterAt < NotificationService.REREGISTER_THROTTLE_MS) return;
+      AsyncStorage.getItem(PUSH_TOKEN_KEY)
+        .then(async (stored) => {
+          if (stored) await this.registerTokenWithBackend(stored);
+        })
+        .catch(() => {});
+    });
+  }
+
   private async registerTokenWithBackend(token: string): Promise<void> {
     try {
       const authToken = await this.getAuthToken();
       if (!authToken) return;
 
-      await apiClient.post(
+      const res = await apiClient.request(
         '/store-owner/notifications/register',
         {
-          pushToken: token,
-          platform: Platform.OS,
-          deviceId: Device.modelName,
-        },
-        { Authorization: `Bearer ${authToken}` }
+          method: 'POST',
+          body: {
+            pushToken: token,
+            platform: Platform.OS,
+            deviceId: Device.modelName,
+          },
+          headers: { Authorization: `Bearer ${authToken}` },
+          // Idempotent upsert on the backend, so replaying it on a timeout
+          // is safe — opt back into the retry budget POSTs no longer get by
+          // default.
+          retries: 2,
+        }
       );
+      if (res.success) this.lastRegisterAt = Date.now();
     } catch (error) {
       if (__DEV__) console.error('Failed to register token with backend:', error);
     }
@@ -219,15 +259,23 @@ class NotificationService {
   private setupNotificationListeners(): void {
     if (!Notifications) return;
     try {
-      Notifications.addNotificationReceivedListener((notification) => {
+      this.receivedSub?.remove();
+      this.responseSub?.remove();
+      this.receivedSub = Notifications.addNotificationReceivedListener((notification) => {
         try {
           if (__DEV__) console.log('Notification received:', notification);
+          // A push arriving while the app is open used to do nothing — the
+          // order list still waited up to a full poll interval (10–15s) to
+          // show the order that just buzzed the phone. Nudge every orders
+          // poller to refetch right now.
+          const type = notification?.request?.content?.data?.type;
+          if (!type || String(type).includes('order')) emitOrdersChanged();
         } catch (error) {
           if (__DEV__) console.warn('Error handling notification:', error);
         }
       });
 
-      Notifications.addNotificationResponseReceivedListener((response) => {
+      this.responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
         try {
           if (__DEV__) console.log('Notification tapped:', response);
           this.handleNotificationTap(response.notification);

@@ -1,26 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  Animated,
-  Easing,
-  FlatList,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Animated, Easing, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { router } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getSession } from "../../session";
 import { getOrdersFromDb, OrdersFetchFailedError, type OrderForStore } from "../../lib/orders-db";
-import { fetchStoresCached, peekStores } from "../../lib/appCache";
-import { colors, radius, spacing, shadows } from "../../lib/theme";
+import { colors, radius, spacing } from "../../lib/theme";
+import { useLayout, useBottomPadding } from "../../lib/useLayout";
 import { useRequireStoreApproval } from "../../lib/useRequireStoreApproval";
+import { useSelectedStore } from "../../lib/useSelectedStore";
 import { hydrateCache, sameData, writeCache } from "../../lib/persistCache";
+import { formatINR, formatStatus, isDelivered, parseDbDate } from "../../lib/order-utils";
+import { EmptyState, ErrorState, InlineNotice, Screen, Skeleton, triggerHaptic } from "../../components/ui";
+import { dateFromOrderCode } from "../../components/orders";
+import { PayoutSummaryCard } from "../../components/payouts/PayoutSummaryCard";
+import { PayoutRow } from "../../components/payouts/PayoutRow";
 
 /** persistCache key for the delivered-order rows — instant Payouts paint. */
 const payoutsCacheKey = (storeId: string) => `payouts:${storeId}`;
@@ -35,34 +27,44 @@ const payoutsCacheKey = (storeId: string) => `payouts:${storeId}`;
  */
 const PAYOUTS_CACHE_MAX_ROWS = 5000;
 
-function safeDate(str: string | null | undefined): Date | null {
-  if (!str) return null;
-  const s = str.trim().replace(/^(\d{4}-\d{2}-\d{2})\s/, "$1T");
-  const d = new Date(s);
-  return Number.isFinite(d.getTime()) ? d : null;
-}
-
-function formatDateTime(dateStr: string | null | undefined): string {
-  const d = safeDate(dateStr);
-  if (!d) return "";
+/** "Today" / "Yesterday" for the two most recent days, otherwise null. */
+function relativeDayLabel(d: Date): string | null {
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return null;
+}
+
+function formatDateTime(d: Date | null): string {
+  if (!d) return "";
   const time = d.toLocaleString("en-IN", { hour: "2-digit", minute: "2-digit" });
-  if (d.toDateString() === today.toDateString()) return `Today, ${time}`;
-  if (d.toDateString() === yesterday.toDateString()) return `Yesterday, ${time}`;
+  const relative = relativeDayLabel(d);
+  if (relative) return `${relative}, ${time}`;
   return d.toLocaleDateString("en-IN", {
     day: "numeric", month: "short", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   });
 }
 
-function formatINR(value: number): string {
-  const n = Number(value ?? 0);
-  if (!Number.isFinite(n)) return "₹0";
-  return `₹${n.toFixed(2).replace(/\.00$/, "")}`;
+/**
+ * The moment an order counts toward a payout period. These are *delivered*
+ * orders, so bucket by when they were delivered — an order placed on Sunday
+ * night and delivered Monday morning belongs to Monday's payouts. Falls back
+ * to placed/created time for rows the backend hasn't stamped.
+ *
+ * Mirrors components/home/TodayCard.tsx; candidate for lib/order-utils.
+ */
+function payoutDate(order: OrderForStore): Date | null {
+  return (
+    parseDbDate(order.delivered_at) ??
+    parseDbDate(order.placed_at) ??
+    parseDbDate(order.created_at)
+  );
 }
 
+/** Order value: priced line items → subtotal_amount → total_amount. */
 function computeSubtotal(order: OrderForStore): number {
   const items = Array.isArray(order.order_items) ? order.order_items : [];
   const fromItems = items.reduce((sum, it: any) => {
@@ -71,81 +73,66 @@ function computeSubtotal(order: OrderForStore): number {
     return sum + (Number.isFinite(price) && price > 0 ? price * qty : 0);
   }, 0);
   if (fromItems > 0) return fromItems;
-  const stored = Number((order as any).subtotal_amount ?? 0);
+  const stored = Number(order.subtotal_amount ?? 0);
   if (Number.isFinite(stored) && stored > 0) return stored;
   const total = Number(order.total_amount ?? 0);
   return Number.isFinite(total) ? total : 0;
 }
 
-function dateFromOrderCode(code: string | null | undefined): string {
-  if (!code) return "";
-  const m = code.match(/(\d{4})(\d{2})(\d{2})/);
-  if (!m) return "";
-  const d = new Date(`${m[1]}-${m[2]}-${m[3]}`);
-  if (!Number.isFinite(d.getTime())) return "";
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  if (d.toDateString() === today.toDateString()) return "Today";
-  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+/**
+ * Row caption: the same timestamp the period filter uses (delivered time
+ * first), so a card never shows a "placed" date that disagrees with the
+ * bucket it sits in. Falls back to the date encoded in the order code.
+ */
+function rowDateLabel(order: OrderForStore): string {
+  const label = formatDateTime(payoutDate(order));
+  if (label) return order.delivered_at ? `Delivered ${label}` : label;
+  const fromCode = dateFromOrderCode(order.order_code);
+  if (!fromCode) return "";
+  return (
+    relativeDayLabel(fromCode) ??
+    fromCode.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+  );
 }
 
-const DELIVERED = new Set(["delivered", "order_delivered", "completed"]);
 type Period = "today" | "week" | "all";
-type PayoutRow = { order: OrderForStore; amount: number };
+type PayoutRowData = { order: OrderForStore; amount: number };
 
-const PayoutCard = React.memo(function PayoutCard({
-  item,
-  onPress,
-}: {
-  item: PayoutRow;
-  onPress: () => void;
-}) {
-  const { order, amount } = item;
-  const dateLabel = formatDateTime(order.placed_at ?? order.created_at) || dateFromOrderCode(order.order_code);
+// Labeled "Last 7 Days," not "This Week" — the underlying filter is a
+// rolling `now - 7 days` window, not a real Mon-Sun calendar-week boundary.
+const PERIOD_ITEMS: readonly { key: Period; label: string }[] = [
+  { key: "today", label: "Today" },
+  { key: "week", label: "Last 7 Days" },
+  { key: "all", label: "All Time" },
+];
 
-  return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.72}>
-      <View style={styles.cardAccent} />
-      <View style={styles.cardInner}>
-        <View style={{ flex: 1, gap: 4 }}>
-          <Text style={styles.cardCode}>#{order.order_code ?? "—"}</Text>
-          {dateLabel ? (
-            <View style={styles.cardMetaRow}>
-              <Ionicons name="calendar-outline" size={11} color={colors.primary} />
-              <Text style={styles.cardMetaText}>{dateLabel}</Text>
-            </View>
-          ) : null}
-        </View>
-        <View style={styles.earningWrap}>
-          <Text style={styles.earningLabel}>ORDER VALUE</Text>
-          <Text style={styles.earningText}>{formatINR(amount)}</Text>
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-});
+/** Eyebrow on the summary card, as the pre-redesign screen worded it. */
+const PERIOD_LABEL: Record<Period, string> = {
+  today: "Today's Order Value",
+  week: "Last 7 Days",
+  all: "All Time",
+};
 
 export default function PaymentsTab() {
   useRequireStoreApproval();
+  const { gutter, contentWidth } = useLayout();
+  const paddingBottom = useBottomPadding();
+  const { session, storeId, loading: storeLoading } = useSelectedStore();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [payouts, setPayouts] = useState<PayoutRow[]>([]);
+  const [payouts, setPayouts] = useState<PayoutRowData[]>([]);
   const [payoutsError, setPayoutsError] = useState(false);
   const [period, setPeriod] = useState<Period>("today");
-  const sessionRef = useRef<any>(null);
-  const storeIdRef = useRef<string | null>(null);
 
+  // Pre-redesign header entrance: 400ms fade + 16dp slide-up on mount.
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(16)).current;
-
   useEffect(() => {
     Animated.parallel([
       Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
       Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
     ]).start();
-  }, []);
+  }, [fadeAnim, slideAnim]);
 
   // getOrdersFromDb intentionally fetches this store's entire delivered-order
   // history, unbounded — the "All Time" total needs a genuinely complete sum,
@@ -161,6 +148,9 @@ export default function PaymentsTab() {
   const FOCUS_REFETCH_THROTTLE_MS = 60_000;
 
   const load = useCallback(async (showLoader = false) => {
+    // useSelectedStore owns session + store resolution (and the /landing
+    // redirect). Until it has resolved there is nothing to fetch.
+    if (!storeId || !session?.token) return;
     // Mount effect + the initial focus callback both fire before the first
     // load finishes — without this, the full-history fetch went out twice
     // concurrently on every visit to the tab.
@@ -168,53 +158,33 @@ export default function PaymentsTab() {
     loadInFlightRef.current = true;
     if (showLoader) setLoading(true);
     try {
-      const s: any = await getSession();
-      if (!s?.token) { router.replace("/landing"); return; }
-      sessionRef.current = s;
-
-      let sid = storeIdRef.current;
-      if (!sid) {
-        const selId = await AsyncStorage.getItem('selected_store_id');
-        const cached = peekStores();
-        if (cached?.length) {
-          const picked = (selId && cached.find(s => s.id === selId)) || cached[0];
-          sid = picked?.id ?? null;
-        } else {
-          const stores = await fetchStoresCached(s.token, s.user?.id);
-          const picked = (selId && stores.find(s => s.id === selId)) || stores[0];
-          sid = picked?.id ?? null;
-        }
-        storeIdRef.current = sid;
-      }
-      if (!sid) return;
-
       // Stale-while-revalidate: paint last-known rows immediately instead of
-      // blocking the whole tab behind a spinner for the full-history fetch.
+      // blocking the whole tab behind a skeleton for the full-history fetch.
       if (showLoader) {
-        const cachedRows = await hydrateCache<PayoutRow[]>(payoutsCacheKey(sid));
+        const cachedRows = await hydrateCache<PayoutRowData[]>(payoutsCacheKey(storeId));
         if (cachedRows?.length) {
           setPayouts((prev) => (prev.length > 0 ? prev : cachedRows));
           setLoading(false);
         }
       }
 
-      const orders = await getOrdersFromDb(sid);
+      const orders = await getOrdersFromDb(storeId);
       setPayoutsError(false);
-      const delivered = orders.filter((o) => DELIVERED.has(o.status));
+      const delivered = orders.filter((o) => isDelivered(o.status));
 
-      const rows: PayoutRow[] = delivered.map((o) => ({
+      const rows: PayoutRowData[] = delivered.map((o) => ({
         order: o,
         amount: computeSubtotal(o),
       }));
       rows.sort((a, b) => {
-        const ta = safeDate(a.order.created_at)?.getTime() ?? 0;
-        const tb = safeDate(b.order.created_at)?.getTime() ?? 0;
+        const ta = payoutDate(a.order)?.getTime() ?? 0;
+        const tb = payoutDate(b.order)?.getTime() ?? 0;
         return tb - ta;
       });
       setPayouts((prev) => (sameData(prev, rows) ? prev : rows));
       // Persist a trimmed copy — the list/totals only need code, dates, amount.
       writeCache(
-        payoutsCacheKey(sid),
+        payoutsCacheKey(storeId),
         rows.slice(0, PAYOUTS_CACHE_MAX_ROWS).map((r) => ({
           amount: r.amount,
           order: {
@@ -224,21 +194,37 @@ export default function PaymentsTab() {
             total_amount: r.order.total_amount,
             created_at: r.order.created_at,
             placed_at: r.order.placed_at,
+            // Needed by payoutDate() — without it, cache-hydrated rows were
+            // bucketed by placed time while fresh rows used delivered time,
+            // so the totals visibly changed once the network fetch landed.
+            delivered_at: r.order.delivered_at,
             order_items: [],
           },
         }))
       );
       lastLoadedAtRef.current = Date.now();
     } catch (e) {
-      if (e instanceof OrdersFetchFailedError) setPayoutsError(true);
+      // OrdersFetchFailedError is the query/RLS/network failure from
+      // orders-db. Any other throw (storage, unexpected) is still a failed
+      // load: surface it too rather than painting an empty "no orders" view
+      // over a first-load failure.
+      setPayoutsError(true);
+      if (!(e instanceof OrdersFetchFailedError)) {
+        console.warn("[payouts] load failed:", e);
+      }
     } finally {
       loadInFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [storeId, session?.token]);
 
-  useEffect(() => { load(true); }, [load]);
+  // `load` changes identity when the store resolves, so this fires once the
+  // id is known; the focus effect below is still throttled via lastLoadedAtRef.
+  useEffect(() => { if (storeId) load(true); }, [storeId, load]);
+  // Store resolution finished with nothing to load (no stores on the
+  // account): drop the cold skeleton so the empty state can render.
+  useEffect(() => { if (!storeLoading && !storeId) setLoading(false); }, [storeLoading, storeId]);
   useFocusEffect(
     useCallback(() => {
       if (Date.now() - lastLoadedAtRef.current < FOCUS_REFETCH_THROTTLE_MS) return;
@@ -246,12 +232,25 @@ export default function PaymentsTab() {
     }, [load]),
   );
 
+  // The period buckets depend on "now", but the memo below only re-ran when
+  // `payouts` changed. A tab left open (or restored from the SWR cache with
+  // identical rows) across midnight kept yesterday's Today/Last-7-Days
+  // totals. Re-key the memo on the current calendar day, refreshed on focus.
+  const [dayKey, setDayKey] = useState(() => new Date().toDateString());
+  useFocusEffect(
+    useCallback(() => {
+      const today = new Date().toDateString();
+      setDayKey((prev) => (prev === today ? prev : today));
+    }, []),
+  );
+
   const { todayPayouts, weekPayouts, todayTotal, weekTotal, allTotal } = useMemo(() => {
     const now = new Date();
     const todayStr = now.toDateString();
+    // Rolling 7×24h window ending now, matching the "Last 7 days" label.
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const today = payouts.filter((p) => safeDate(p.order.created_at)?.toDateString() === todayStr);
-    const week = payouts.filter((p) => { const d = safeDate(p.order.created_at); return d != null && d >= weekAgo; });
+    const today = payouts.filter((p) => payoutDate(p.order)?.toDateString() === todayStr);
+    const week = payouts.filter((p) => { const d = payoutDate(p.order); return d != null && d >= weekAgo; });
     return {
       todayPayouts: today,
       weekPayouts: week,
@@ -259,166 +258,225 @@ export default function PaymentsTab() {
       weekTotal: week.reduce((s, p) => s + p.amount, 0),
       allTotal: payouts.reduce((s, p) => s + p.amount, 0),
     };
-  }, [payouts]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dayKey is the intentional "now" invalidator
+  }, [payouts, dayKey]);
 
   const filtered = period === "today" ? todayPayouts : period === "week" ? weekPayouts : payouts;
   const filteredTotal = period === "today" ? todayTotal : period === "week" ? weekTotal : allTotal;
-  // Labeled "Last 7 Days," not "This Week" — the underlying filter (above)
-  // is a rolling `now - 7 days` window, not a real Mon-Sun calendar-week
-  // boundary. A shopkeeper checking Monday morning under a "This Week" label
-  // would have seen Tuesday-through-Sunday-last-week folded in, implying
-  // "since this week started" when it wasn't. Cosmetic/label fix only — the
-  // totals themselves are correct for what they actually compute, unchanged
-  // here. Found 2026-09-09.
-  const periodLabel = period === "today" ? "Today's Order Value" : period === "week" ? "Last 7 Days" : "All Time";
 
-  return (
-    <SafeAreaView style={styles.safe}>
-      <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
-        <View style={styles.headerRow}>
-          <Text style={styles.header}>Delivered Orders</Text>
-          {payouts.length > 0 && (
-            <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>{payouts.length}</Text>
-            </View>
-          )}
+  const coldLoading = loading && payouts.length === 0;
+  const showStaleNotice = payoutsError && payouts.length > 0;
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    load(false);
+  }, [load]);
+
+  const retry = useCallback(() => { load(true); }, [load]);
+
+  const openInvoice = useCallback((id: string) => {
+    router.push(`/invoice/${id}`);
+  }, []);
+
+  const selectPeriod = useCallback(
+    (p: Period) => {
+      // Same semantics as the SegmentedControl this replaces visually: no-op
+      // on the active tab, light haptic on change.
+      if (p === period) return;
+      void triggerHaptic("light");
+      setPeriod(p);
+    },
+    [period],
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: PayoutRowData }) => {
+      const code = item.order.order_code ?? "—";
+      const dateLabel = rowDateLabel(item.order);
+      // The spoken label adds status and the delivery time, which the visual
+      // row omits.
+      const spoken = [`Order #${code}`, formatStatus(item.order.status) || null, dateLabel || null, formatINR(item.amount)]
+        .filter(Boolean)
+        .join(", ");
+      return (
+        <View style={{ paddingHorizontal: gutter }}>
+          <PayoutRow
+            orderCode={code}
+            dateLabel={dateLabel}
+            amount={item.amount}
+            accessibilityLabel={spoken}
+            accessibilityHint="Opens the order summary"
+            onPress={() => openInvoice(item.order.id)}
+          />
         </View>
+      );
+    },
+    [gutter, openInvoice],
+  );
 
-        <Text style={{ color: colors.textTertiary, fontSize: 12, paddingHorizontal: spacing.lg, marginTop: -4, marginBottom: spacing.sm }}>
-          Shows the value of your delivered orders. Your actual settlement amount (after platform fees) is confirmed separately.
+  const keyExtractor = useCallback((item: PayoutRowData) => item.order.id, []);
+
+  const header = (
+    <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
+      <View style={[styles.headerRow, { paddingHorizontal: gutter }]}>
+        <Text style={styles.header} accessibilityRole="header">
+          Payouts
         </Text>
+        {payouts.length > 0 && (
+          <View style={styles.countBadge} accessibilityLabel={`${payouts.length} delivered orders`}>
+            <Text style={styles.countBadgeText}>{payouts.length}</Text>
+          </View>
+        )}
+      </View>
+      <Text style={[styles.subtitle, { paddingHorizontal: gutter }]}>Value of your delivered orders</Text>
 
-        {/* Period tabs */}
-        <View style={styles.periodRow}>
-          {(["today", "week", "all"] as const).map((p) => (
+      {/* Period tabs */}
+      <View
+        style={[styles.periodRow, { paddingHorizontal: gutter }]}
+        accessibilityRole="tablist"
+        accessibilityLabel="Payout period"
+      >
+        {PERIOD_ITEMS.map((item) => {
+          const active = period === item.key;
+          return (
             <TouchableOpacity
-              key={p}
-              style={[styles.periodTab, period === p && styles.periodTabActive]}
-              onPress={() => setPeriod(p)}
+              key={item.key}
+              style={[styles.periodTab, active && styles.periodTabActive]}
+              onPress={() => selectPeriod(item.key)}
               activeOpacity={0.8}
+              accessibilityRole="tab"
+              accessibilityLabel={item.label}
+              accessibilityState={{ selected: active }}
             >
-              <Text style={[styles.periodTabText, period === p && styles.periodTabTextActive]}>
-                {p === "today" ? "Today" : p === "week" ? "Last 7 Days" : "All Time"}
-              </Text>
+              <Text style={[styles.periodTabText, active && styles.periodTabTextActive]}>{item.label}</Text>
             </TouchableOpacity>
-          ))}
-        </View>
+          );
+        })}
+      </View>
 
-        {/* Summary card */}
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryTop}>
-            <View style={styles.summaryIconWrap}>
-              <Ionicons name="wallet-outline" size={24} color={colors.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.summaryLabel}>{periodLabel}</Text>
-              <Text style={styles.summaryValue}>{formatINR(filteredTotal)}</Text>
-            </View>
-          </View>
-          <View style={styles.summaryDivider} />
-          <View style={styles.summaryBottom}>
-            <View style={styles.summaryMeta}>
-              <Ionicons name="bag-handle-outline" size={15} color={colors.textTertiary} />
-              <Text style={styles.summaryMetaText}>{filtered.length} order{filtered.length !== 1 ? "s" : ""}</Text>
-            </View>
-            {filtered.length > 0 && (
-              <View style={styles.summaryMeta}>
-                <Ionicons name="trending-up-outline" size={15} color={colors.success} />
-                <Text style={[styles.summaryMetaText, { color: colors.success }]}>
-                  Avg {formatINR(filteredTotal / filtered.length)}/order
-                </Text>
-              </View>
-            )}
-          </View>
-        </View>
+      {showStaleNotice ? (
+        <InlineNotice
+          tone="warning"
+          title="Couldn't refresh"
+          message="Showing saved data"
+          action={{ label: "Retry", onPress: onRefresh }}
+          style={[styles.staleNotice, { marginHorizontal: gutter }]}
+        />
+      ) : null}
 
-        {/* Quick stats */}
-        <View style={styles.quickStatsRow}>
-          <View style={[styles.quickStat, { backgroundColor: colors.primary + "0A" }]}>
-            <Text style={[styles.quickStatValue, { color: colors.primary }]}>{formatINR(todayTotal)}</Text>
-            <Text style={styles.quickStatLabel}>Today</Text>
-          </View>
-          <View style={[styles.quickStat, { backgroundColor: colors.warning + "0C" }]}>
-            <Text style={[styles.quickStatValue, { color: colors.warning }]}>{formatINR(weekTotal)}</Text>
-            <Text style={styles.quickStatLabel}>This Week</Text>
-          </View>
-          <View style={[styles.quickStat, { backgroundColor: colors.success + "0A" }]}>
-            <Text style={[styles.quickStatValue, { color: colors.success }]}>{formatINR(allTotal)}</Text>
-            <Text style={styles.quickStatLabel}>All Time</Text>
-          </View>
-        </View>
+      {/* Summary card */}
+      <View style={[styles.summaryWrap, { paddingHorizontal: gutter }]}>
+        <PayoutSummaryCard
+          periodLabel={PERIOD_LABEL[period]}
+          total={filteredTotal}
+          count={filtered.length}
+          loading={coldLoading}
+        />
+      </View>
 
-        <Text style={styles.sectionTitle}>Order History</Text>
-      </Animated.View>
-
-      {loading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator color={colors.primary} size="large" />
+      {/* Quick stats */}
+      <View style={[styles.quickStatsRow, { paddingHorizontal: gutter }]}>
+        <View
+          style={[styles.quickStat, { backgroundColor: colors.primary + "0A" }]}
+          accessible
+          accessibilityLabel={`Today ${formatINR(todayTotal)}`}
+        >
+          <Text style={[styles.quickStatValue, { color: colors.primary }]} numberOfLines={1} adjustsFontSizeToFit>
+            {formatINR(todayTotal)}
+          </Text>
+          <Text style={styles.quickStatLabel}>Today</Text>
         </View>
+        <View
+          style={[styles.quickStat, { backgroundColor: colors.warning + "0C" }]}
+          accessible
+          accessibilityLabel={`Last 7 Days ${formatINR(weekTotal)}`}
+        >
+          <Text style={[styles.quickStatValue, { color: colors.warning }]} numberOfLines={1} adjustsFontSizeToFit>
+            {formatINR(weekTotal)}
+          </Text>
+          <Text style={styles.quickStatLabel}>Last 7 Days</Text>
+        </View>
+        <View
+          style={[styles.quickStat, { backgroundColor: colors.success + "0A" }]}
+          accessible
+          accessibilityLabel={`All Time ${formatINR(allTotal)}`}
+        >
+          <Text style={[styles.quickStatValue, { color: colors.success }]} numberOfLines={1} adjustsFontSizeToFit>
+            {formatINR(allTotal)}
+          </Text>
+          <Text style={styles.quickStatLabel}>All Time</Text>
+        </View>
+      </View>
+
+      <Text style={[styles.sectionTitle, { paddingHorizontal: gutter }]} accessibilityRole="header">
+        Order History
+      </Text>
+    </Animated.View>
+  );
+
+  const empty = (
+    <View style={[styles.emptyWrap, { paddingHorizontal: gutter }]}>
+      {coldLoading ? (
+        <View style={styles.skeletonStack}>
+          <Skeleton.Card lines={1} />
+          <Skeleton.Card lines={1} />
+          <Skeleton.Card lines={1} />
+          <Skeleton.Card lines={1} />
+        </View>
+      ) : payoutsError && payouts.length === 0 ? (
+        <ErrorState
+          title="Couldn't load orders"
+          message="Check your connection and try again."
+          action={{ onPress: retry }}
+        />
       ) : (
-        <FlatList
-          data={filtered}
-          keyExtractor={(item) => item.order.id}
-          contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => { setRefreshing(true); load(false); }}
-              tintColor={colors.primary}
-            />
-          }
-          renderItem={({ item }) => (
-            <PayoutCard
-              item={item}
-              onPress={() => router.push(`/invoice/${item.order.id}`)}
-            />
-          )}
-          ListEmptyComponent={
-            payoutsError ? (
-              <View style={styles.emptyContainer}>
-                <View style={styles.emptyIconWrap}>
-                  <Ionicons name="alert-circle-outline" size={36} color={colors.error} />
-                </View>
-                <Text style={styles.emptyText}>Couldn&apos;t load orders</Text>
-                <Text style={styles.emptySub}>Check your connection and try again.</Text>
-                <TouchableOpacity
-                  style={{ backgroundColor: colors.error, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, marginTop: spacing.md, borderRadius: radius.md }}
-                  onPress={() => load(true)}
-                >
-                  <Text style={{ color: "#fff", fontWeight: "600" }}>Try Again</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <View style={styles.emptyContainer}>
-                <View style={styles.emptyIconWrap}>
-                  <Ionicons name="wallet-outline" size={36} color={colors.primary} />
-                </View>
-                <Text style={styles.emptyText}>
-                  {period === "today" ? "No orders today" : period === "week" ? "No orders this week" : "No delivered orders yet"}
-                </Text>
-                <Text style={styles.emptySub}>
-                  {period === "all"
-                    ? "Delivered orders appear here"
-                    : "Completed orders in this period will show here"}
-                </Text>
-              </View>
-            )
+        <EmptyState
+          icon="wallet-outline"
+          title={period === "all" ? "No delivered orders yet" : "Nothing delivered in this period"}
+          message={
+            period === "all"
+              ? "Delivered orders appear here."
+              : period === "today"
+                ? "Orders delivered today will show here."
+                : "Orders delivered in the last 7 days will show here."
           }
         />
       )}
-    </SafeAreaView>
+    </View>
+  );
+
+  return (
+    <Screen>
+      <FlatList
+        data={coldLoading ? [] : filtered}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+        style={[styles.list, { maxWidth: contentWidth + gutter * 2 }]}
+        contentContainerStyle={[styles.listContent, { paddingBottom }]}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
+        ListHeaderComponent={header}
+        ListEmptyComponent={empty}
+        showsVerticalScrollIndicator={false}
+      />
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
-  centered: { flex: 1, alignItems: "center", justifyContent: "center" },
+  list: { flex: 1, width: "100%", alignSelf: "center" },
+  listContent: { flexGrow: 1, gap: spacing.sm },
 
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
     paddingBottom: spacing.sm,
   },
@@ -432,11 +490,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 7,
   },
-  countBadgeText: { color: "#fff", fontSize: 11, fontWeight: "800" },
+  countBadgeText: { color: colors.onPrimary, fontSize: 11, fontWeight: "800" },
+  subtitle: { color: colors.textTertiary, fontSize: 12, marginTop: -4, marginBottom: spacing.sm },
 
   periodRow: {
     flexDirection: "row",
-    paddingHorizontal: spacing.lg,
     gap: spacing.sm,
     marginBottom: spacing.md,
   },
@@ -454,44 +512,13 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   periodTabText: { color: colors.textTertiary, fontSize: 13, fontWeight: "600" },
-  periodTabTextActive: { color: "#fff" },
+  periodTabTextActive: { color: colors.onPrimary },
 
-  summaryCard: {
-    marginHorizontal: spacing.lg,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.xl,
-    borderWidth: 1,
-    borderColor: colors.primary + "18",
-    marginBottom: spacing.md,
-    ...shadows.md,
-  },
-  summaryTop: { flexDirection: "row", alignItems: "center", gap: spacing.md },
-  summaryIconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: radius.md,
-    backgroundColor: colors.primaryBg,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  summaryLabel: {
-    color: colors.textTertiary,
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 0.5,
-    textTransform: "uppercase",
-    marginBottom: 2,
-  },
-  summaryValue: { color: colors.textPrimary, fontSize: 30, fontWeight: "900", letterSpacing: -0.5 },
-  summaryDivider: { height: 1, backgroundColor: colors.borderLight, marginVertical: spacing.md },
-  summaryBottom: { flexDirection: "row", justifyContent: "space-between" },
-  summaryMeta: { flexDirection: "row", alignItems: "center", gap: 6 },
-  summaryMetaText: { color: colors.textTertiary, fontSize: 13, fontWeight: "500" },
+  staleNotice: { marginBottom: spacing.md },
+  summaryWrap: { marginBottom: spacing.md },
 
   quickStatsRow: {
     flexDirection: "row",
-    paddingHorizontal: spacing.lg,
     gap: spacing.sm,
     marginBottom: spacing.md,
   },
@@ -510,72 +537,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1,
-    paddingHorizontal: spacing.lg,
     marginBottom: spacing.sm,
     textTransform: "uppercase",
   },
 
-  list: { padding: spacing.lg, paddingTop: 0, paddingBottom: spacing.xxxl, gap: spacing.sm },
-
-  card: {
-    flexDirection: "row",
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    overflow: "hidden",
-    ...shadows.md,
-  },
-  cardAccent: {
-    width: 4,
-    backgroundColor: colors.primary,
-    alignSelf: "stretch",
-  },
-  cardInner: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    gap: spacing.sm,
-  },
-  cardCode: { color: colors.textPrimary, fontSize: 15, fontWeight: "700" },
-  cardMetaRow: { flexDirection: "row", alignItems: "center", gap: 4 },
-  cardMetaText: { color: colors.primary, fontSize: 12, fontWeight: "600" },
-  earningWrap: {
-    alignItems: "flex-end",
-    backgroundColor: colors.success + "0D",
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    minWidth: 90,
-  },
-  earningLabel: {
-    color: colors.success,
-    fontSize: 9,
-    fontWeight: "800",
-    letterSpacing: 0.8,
-    marginBottom: 2,
-  },
-  earningText: { color: colors.success, fontSize: 16, fontWeight: "800" },
-
-  emptyContainer: { alignItems: "center", justifyContent: "center", paddingTop: 60 },
-  emptyIconWrap: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.primary + "0C",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: spacing.md,
-  },
-  emptyText: { color: colors.textPrimary, fontSize: 17, fontWeight: "700", letterSpacing: -0.2 },
-  emptySub: {
-    color: colors.textTertiary,
-    fontSize: 13,
-    marginTop: 4,
-    textAlign: "center",
-    paddingHorizontal: spacing.xl,
-    fontWeight: "400",
-  },
+  skeletonStack: { gap: spacing.sm },
+  emptyWrap: { flexGrow: 1 },
 });

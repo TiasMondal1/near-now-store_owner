@@ -1,5 +1,14 @@
 ## Near & Now Shopkeeper - Build Commands
 
+> **Read first.** The `android/` directory is **not** tracked in git. Every
+> command below that does `cd android` or runs Gradle fails until you generate
+> it with `npm run prebuild:android` (which runs `expo prebuild`). The
+> recommended release path is EAS (`npm run build:android`), which prebuilds
+> automatically. Production EAS builds refuse to start unless
+> `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY` and the
+> `GOOGLE_SERVICES_JSON` file secret are set on the EAS project — see the
+> `assertProductionEnv` guard in `app.config.js`.
+
 ### 1. Local AAB (Play Store upload, built on this machine — no EAS)
 
 From project root, after native prebuild is done once:
@@ -168,6 +177,6 @@ Requirements on the machine:
 - **Android SDK** installed, with `android/local.properties` containing:
 
 ```properties
-sdk.dir=C:\\Users\\Tias\\AppData\\Local\\Android\\Sdk
+sdk.dir=C:\\Users\\<your-user>\\AppData\\Local\\Android\\Sdk
 ```
 

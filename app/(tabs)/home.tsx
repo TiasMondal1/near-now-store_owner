@@ -1,162 +1,96 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ActivityIndicator,
-  FlatList,
-  ScrollView,
-  Modal,
-  Alert,
-  Animated,
-  TextInput,
-  Easing,
-  Dimensions,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Animated, Easing, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { router } from "expo-router";
-import { getSession } from "../../session";
-import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as Haptics from "expo-haptics";
-import { colors, radius, spacing, shadows } from "../../lib/theme";
+import { Ionicons } from "@expo/vector-icons";
+import { colors, radius, shadows, spacing } from "../../lib/theme";
+import { useBottomPadding, useLayout } from "../../lib/useLayout";
 import { supabase } from "../../lib/supabase";
-import {
-  getStockListFromDb,
-  updateProductActiveState,
-  setAllProductsOffline,
-  restoreActiveProductsOnline,
-} from "../../lib/storeProducts";
+import { setAllProductsOffline, restoreActiveProductsOnline } from "../../lib/storeProducts";
 import { StoreStatusCard } from "../../components/StoreStatusCard";
-import {
-  fetchStoresCached,
-  forceFetchStores,
-  peekStores,
-  patchStoreActive,
-  clearStoreCache,
-  type CachedStore,
-} from "../../lib/appCache";
+import { StockList, type StockListHandle } from "../../components/stock";
+import { ConfirmSheet, ErrorState, Screen, Skeleton, useToast, type IoniconName } from "../../components/ui";
+import { forceFetchStores, peekStores, patchStoreActive, type CachedStore } from "../../lib/appCache";
+import { useSelectedStore } from "../../lib/useSelectedStore";
 import { isStoreApproved, refreshStoreApproval } from "../../lib/storeApproval";
 import { notificationService } from "../../lib/notifications";
+import { onOrdersChanged } from "../../lib/orderEvents";
+import { maybePromptBatteryOptimization } from "../../lib/batteryOptimization";
 import { useSmartPoll } from "../../lib/useSmartPoll";
+import { useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
 import { apiClient } from "../../lib/api-client";
-import { hydrateCache, peekCache, sameData, writeCache } from "../../lib/persistCache";
+import { hydrateCache, peekCache, sameData } from "../../lib/persistCache";
+import { productsCacheKey, type StockProduct } from "../../lib/useStoreStock";
 import { lastNotificationsReadMutationTs, peekNotifications, persistNotifications } from "../../lib/notificationsCache";
+import { TodayCard, useTodayStats } from "../../components/home/TodayCard";
+import { HomeCard, HomePrimaryButton } from "../../components/home/HomeCard";
 
+// Same key lib/useSelectedStore reads. Home only persists the default pick
+// when nothing is stored yet (see the effect below).
 const SELECTED_STORE_KEY = "selected_store_id";
-// Legacy inventory cache keys — nothing writes them anymore (the old
-// InventoryScreen is gone); still removed defensively in invalidateAllCaches.
-const INVENTORY_PERSISTED_KEY = "inventory_persisted_state";
-const INVENTORY_CACHE_KEY = "inventory_products_cache";
-/** persistCache key for the "Your Stock" list — lets it paint instantly on cold start. */
-const productsCacheKey = (storeId: string) => `products:${storeId}`;
-const TILE_GAP = 10;
-const TILE_WIDTH = (Dimensions.get("window").width - spacing.lg * 2 - TILE_GAP) / 2;
-// Width of one "Your Stock" swipeable page — screen width minus the outer
-// scroll's own padding (s.scroll) and the stock card's own padding (s.stockCard),
-// both spacing.lg on each side.
-const STOCK_PAGE_WIDTH = Dimensions.get("window").width - spacing.lg * 4;
-
+/** How long the "approved" notice stays up. */
+const APPROVED_BANNER_MS = 4_700;
 type StoreRow = CachedStore;
-
-type StockProduct = { id: string; name: string; unit?: string; storeProductId?: string; is_active?: boolean; quantity?: number; is_loose?: boolean };
-
-/** One of the two "Your Stock" boxes — packaged/branded products, or loose products. */
-function StockSection({
-  products,
-  togglingProductId,
-  storeActive,
-  onToggle,
-  onDeleteOne,
-  onDeleteAll,
-  emptyText,
-}: {
-  products: StockProduct[];
-  togglingProductId: string | null;
-  storeActive: boolean;
-  onToggle: (p: StockProduct) => void;
-  onDeleteOne: (p: StockProduct) => void;
-  onDeleteAll: () => void;
-  emptyText: string;
-}) {
-  return (
-    <View style={s.stockSection}>
-      {products.length > 0 && (
-        <View style={s.stockSectionHeader}>
-          <TouchableOpacity onPress={onDeleteAll} style={s.stockSectionDeleteAllBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Ionicons name="trash-outline" size={13} color={colors.error} />
-            <Text style={s.stockSectionDeleteAllText}>Delete all</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-      {products.length === 0 ? (
-        <Text style={s.stockSectionEmptyText}>{emptyText}</Text>
-      ) : (
-        <FlatList
-          data={products}
-          keyExtractor={(p) => p.id}
-          style={{ maxHeight: 320 }}
-          nestedScrollEnabled
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ gap: spacing.sm }}
-          renderItem={({ item: p }) => {
-            const isActive = p.is_active !== false;
-            return (
-              <View style={s.productRow}>
-                <View style={[s.productDot, { backgroundColor: isActive ? colors.success : colors.border }]} />
-                <Text style={s.productName} numberOfLines={1}>{p.name}</Text>
-                {p.unit ? <Text style={s.productUnit}>{p.unit}</Text> : null}
-                <TouchableOpacity
-                  style={[s.toggleBtn, isActive ? s.toggleBtnOn : s.toggleBtnOff]}
-                  onPress={() => onToggle(p)}
-                  disabled={togglingProductId === p.id || !storeActive}
-                  activeOpacity={0.75}
-                >
-                  {togglingProductId === p.id ? (
-                    <ActivityIndicator size="small" color={isActive ? "#fff" : colors.textTertiary} />
-                  ) : (
-                    <Text style={isActive ? s.toggleTextOn : s.toggleTextOff}>{isActive ? "Active" : "Off"}</Text>
-                  )}
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => onDeleteOne(p)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <Ionicons name="trash-outline" size={15} color={colors.error + "80"} />
-                </TouchableOpacity>
-              </View>
-            );
-          }}
-        />
-      )}
-    </View>
-  );
+const TILE_GAP = 10;
+/** How often the stat row re-reads the stock cache StockList writes (in-memory, no network). */
+const STOCK_COUNTS_TICK_MS = 1_500;
+type StockCounts = { total: number; active: number };
+const EMPTY_STOCK_COUNTS: StockCounts = { total: 0, active: 0 };
+function countStock(products: StockProduct[] | null | undefined): StockCounts {
+  if (!products) return EMPTY_STOCK_COUNTS;
+  return { total: products.length, active: products.filter((p) => p.is_active !== false).length };
 }
 
-/* ─── Quick-action tile data ─────────────────────────────────────────────── */
 const TILES = [
-  { key: "orders", label: "Orders", desc: "View & manage", icon: "receipt-outline" as const, route: "/(tabs)/previous-orders" },
-  { key: "payouts", label: "Payouts", desc: "Earnings & history", icon: "wallet-outline" as const, route: "/(tabs)/payments" },
-  { key: "inventory", label: "Inventory", desc: "Add products", icon: "cube-outline" as const, route: "/(tabs)/stock" },
-  { key: "settings", label: "Settings", desc: "Store config", icon: "settings-outline" as const, route: "/settings" },
+  { key: "orders", label: "Orders", desc: "View & manage", icon: "receipt-outline", route: "/(tabs)/previous-orders" },
+  { key: "payouts", label: "Payouts", desc: "Earnings & history", icon: "wallet-outline", route: "/(tabs)/payments" },
+  { key: "inventory", label: "Inventory", desc: "Add products", icon: "cube-outline", route: "/(tabs)/stock" },
+  { key: "settings", label: "Settings", desc: "Store config", icon: "settings-outline", route: "/settings" },
 ] as const;
 
+type ConfirmSpec = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  destructive: boolean;
+  icon: IoniconName;
+  fallbackErrorMessage: string;
+  onConfirm: () => Promise<void>;
+};
+
 export default function HomeTab() {
-  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const isFocused = useIsFocused();
+  const { gutter, contentWidth } = useLayout();
+  const paddingBottom = useBottomPadding();
+  const { incomingCount } = useIncomingOrdersCount();
+  const toast = useToast();
+
+  // 450ms fade + slide entrance for the whole dashboard (pre-redesign look).
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(16)).current;
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 450, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 450, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
+    ]).start();
+  }, [fadeAnim, slideAnim]);
 
-  const isFocused = useIsFocused();
-  const [session, setSession] = useState<any | null>(null);
+  // Store resolution (session → selected_store_id → store cache → fetch) is
+  // the shared hook's job. `stores` below is only the fresh-data override
+  // layer written by commitStores (forced refetch / realtime / toggle) so the
+  // card reflects a change before the hook's next focus re-read.
+  const { session, store: pickedStore, storeId, loading: storeLoading, retry } = useSelectedStore();
   const [stores, setStores] = useState<StoreRow[]>([]);
-  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Push registration + battery nudge run once per screen mount, not per retry.
+  const bootedOnceRef = useRef(false);
   const [approvedBanner, setApprovedBanner] = useState(false);
+  const approvedBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Seed the bell badge from the cached notification list (warmed at splash)
   // so it doesn't flash 0 while the first count fetch is in flight.
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(
     () => peekNotifications()?.filter((n) => !n.is_read).length ?? 0
   );
-  const approvedBannerAnim = useRef(new Animated.Value(0)).current;
 
   // Timestamp of the most recent local store mutation (go online/offline).
   // A store fetch that was already in flight when the toggle landed carries
@@ -168,80 +102,18 @@ export default function HomeTab() {
     setStores((prev) => (sameData(prev, next) ? prev : next));
   }, []);
 
-  const [storeProducts, setStoreProducts] = useState<
-    Array<{ id: string; name: string; unit?: string; storeProductId?: string; is_active?: boolean; quantity?: number; is_loose?: boolean }>
-  >([]);
-  const [storeProductsLoading, setStoreProductsLoading] = useState(true);
-  const [togglingProductId, setTogglingProductId] = useState<string | null>(null);
-  const [stockSearchOpen, setStockSearchOpen] = useState(false);
-  const [stockSearchQuery, setStockSearchQuery] = useState("");
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stockRef = useRef<StockListHandle>(null);
 
-  // "Your Stock" tab bar (Packaged/Loose) — swipeable pager plus tap-to-jump
-  // buttons, matching the segmented-control pattern already used for
-  // Inventory/Add Custom in app/(tabs)/stock.tsx. Each page's natural height
-  // is measured via onLayout (lines below) since a horizontal ScrollView
-  // nested inside this screen's outer vertical ScrollView has no way to
-  // auto-size to variable-height content otherwise.
-  const [activeStockTab, setActiveStockTab] = useState<"packaged" | "loose">("packaged");
-  const stockPagerRef = useRef<ScrollView>(null);
-  const [stockPageHeights, setStockPageHeights] = useState({ packaged: 0, loose: 0 });
+  const [confirm, setConfirm] = useState<ConfirmSpec | null>(null);
+  const [confirmVisible, setConfirmVisible] = useState(false);
 
-  const [confirmModal, setConfirmModal] = useState<{
-    title: string;
-    message: string;
-    confirmText: string;
-    confirmColor: string;
-    iconName: React.ComponentProps<typeof Ionicons>["name"];
-    onConfirm: () => Promise<void>;
-  } | null>(null);
-  const [confirmLoading, setConfirmLoading] = useState(false);
-
-  const handleStockSearchChange = useCallback((text: string) => {
-    setStockSearchQuery(text);
-    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-    searchDebounceRef.current = setTimeout(() => setDebouncedSearchQuery(text), 200);
-  }, []);
-
-  // Clears both the input text and the debounced value that actually drives
-  // filteredStoreProducts, and cancels any pending debounce timer — closing
-  // the search bar with only setStockSearchQuery("") left debouncedSearchQuery
-  // holding the last-typed text, so "Your Stock" stayed invisibly filtered
-  // with no search box visible to explain why.
-  const closeStockSearch = useCallback(() => {
-    if (searchDebounceRef.current) { clearTimeout(searchDebounceRef.current); searchDebounceRef.current = null; }
-    setStockSearchQuery("");
-    setDebouncedSearchQuery("");
-    setStockSearchOpen(false);
-  }, []);
-
-  const selectStockTab = useCallback((tab: "packaged" | "loose") => {
-    setActiveStockTab(tab);
-    stockPagerRef.current?.scrollTo({ x: tab === "packaged" ? 0 : STOCK_PAGE_WIDTH, animated: true });
-  }, []);
-
-  const handleStockPagerScrollEnd = useCallback((e: any) => {
-    const page = Math.round(e.nativeEvent.contentOffset.x / STOCK_PAGE_WIDTH);
-    setActiveStockTab(page === 0 ? "packaged" : "loose");
-  }, []);
-
-  const selectedStore = (selectedStoreId ? stores.find(s => s.id === selectedStoreId) : undefined) ?? stores[0] ?? null;
+  const selectedStore = (storeId ? stores.find((s) => s.id === storeId) : undefined) ?? pickedStore ?? stores[0] ?? null;
   const isStoreOnline = !!selectedStore?.is_active;
+  // Cold start with no store cache and a failed / empty stores fetch -> the
+  // dashboard has nothing to show. Surfaced as an ErrorState with Try again
+  // instead of an empty screen with a skeleton that never resolves.
+  const storeError = !storeLoading && !selectedStore;
 
-  const filteredStoreProducts = useMemo(() => {
-    const q = debouncedSearchQuery.trim().toLowerCase();
-    if (!q) return storeProducts;
-    return storeProducts.filter((p) => (p.name || "").toLowerCase().includes(q));
-  }, [storeProducts, debouncedSearchQuery]);
-
-  const activeProductCount = useMemo(() => storeProducts.filter((p) => p.is_active !== false).length, [storeProducts]);
-
-  const packagedProducts = useMemo(() => filteredStoreProducts.filter((p) => !p.is_loose), [filteredStoreProducts]);
-  const looseProducts = useMemo(() => filteredStoreProducts.filter((p) => p.is_loose), [filteredStoreProducts]);
-  const searchActive = debouncedSearchQuery.trim().length > 0;
-  const packagedEmptyText = searchActive ? `No packaged products match "${stockSearchQuery.trim()}"` : "No packaged products yet";
-  const looseEmptyText = searchActive ? `No loose products match "${stockSearchQuery.trim()}"` : "No loose products added yet";
   // Was hardcoded to 0 — the dashboard always showed "Waiting for orders..."
   // even with real orders in progress. "Active" here means accepted-but-not-yet-
   // handed-off allocations, matching previous-orders.tsx's own activeAllocations
@@ -249,85 +121,73 @@ export default function HomeTab() {
   // surfaced separately, not counted as already-active here.
   const [activeOrderCount, setActiveOrderCount] = useState(0);
 
-  // Entrance animation
+  // One-time per mount, once a session is known.
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 450, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 450, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
-    ]).start();
-  }, []);
+    if (!session?.token || bootedOnceRef.current) return;
+    bootedOnceRef.current = true;
+    // Push registration on every app-session start (login already implies
+    // it). Fire-and-forget: never blocks or fails the screen — no permission,
+    // Expo Go, etc. are all handled internally and are non-fatal.
+    notificationService.initialize().catch(() => {});
+    // One-time nudge on OEMs whose battery optimiser delays pushes.
+    maybePromptBatteryOptimization().catch(() => {});
+  }, [session?.token]);
 
+  // Warm start: the hook painted from the store cache, which can hold a stale
+  // name / address for up to 10 minutes — genuinely refetch once in the
+  // background (forceFetchStores, not fetchStoresCached, which would hand the
+  // same warm array back). A cold start already came from the network.
+  const warmStartRef = useRef(peekStores() != null);
   useEffect(() => {
-    if (!isStoreOnline) return;
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.35, duration: 800, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      ])
-    );
-    pulse.start();
-    return () => pulse.stop();
-  }, [isStoreOnline, pulseAnim]);
-
-  useEffect(() => {
+    if (storeLoading || !session?.token || !warmStartRef.current) return;
+    warmStartRef.current = false;
     let cancelled = false;
-    (async () => {
-      try {
-        const s: any = await getSession();
-        if (!s?.token) { if (!cancelled) router.replace("/landing"); return; }
-        if (cancelled) return;
-        setSession(s);
-        // Push notifications were never actually turned on for anyone — the only
-        // way a token got registered was a shopkeeper manually finding
-        // Settings → Notifications → Enable. Register on every app-session start
-        // instead, matching what login already implies. Fire-and-forget: this
-        // must never block or fail the screen (no permission, Expo Go, etc. are
-        // all handled internally and are non-fatal).
-        notificationService.initialize().catch(() => {});
-        const cached = peekStores();
-        if (cached && cached.length > 0) {
-          setStores(cached);
-          if (!isStoreApproved(cached[0])) {
-            if (!cancelled) router.replace("/pending-verification");
-            return;
-          }
-          setLoading(false);
-          // Genuinely refetch here, not fetchStoresCached — that would just
-          // return the same cached array back while it's still warm (up to
-          // 10 minutes), so a stale/wrong store name or address shown from
-          // cache would never actually get corrected in the background.
-          const startedAt = Date.now();
-          forceFetchStores(s.token, s.user?.id).then((fresh) => {
-            if (!cancelled && fresh.length > 0) {
-              if (!isStoreApproved(fresh[0])) {
-                router.replace("/pending-verification");
-                return;
-              }
-              commitStores(fresh, startedAt);
-            }
-          });
-          return;
-        }
-        const startedAt = Date.now();
-        const currentStores = await fetchStoresCached(s.token, s.user?.id);
-        if (cancelled) return;
-        if (currentStores.length > 0) {
-          commitStores(currentStores, startedAt);
-          if (!isStoreApproved(currentStores[0])) {
-            if (!cancelled) router.replace("/pending-verification");
-            return;
-          }
-          if (!currentStores[0].is_active) await invalidateAllCaches();
-        }
-      } catch (error) { if (__DEV__) console.warn("[home] Bootstrap failed", error); }
-      finally { if (!cancelled) setLoading(false); }
-    })();
-    return () => { cancelled = true; };
+    const startedAt = Date.now();
+    forceFetchStores(session.token, session.user?.id)
+      .then((fresh) => {
+        if (!cancelled && fresh.length > 0) commitStores(fresh, startedAt);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [storeLoading, session?.token, session?.user?.id, commitStores]);
+
+  // Persist the default pick when nothing is stored yet, so Settings / Payouts
+  // (which resolve through the same key) agree with Home for multi-store
+  // owners. Belongs in lib/useSelectedStore after pickStore; kept here until
+  // that file's owner folds it in.
+  useEffect(() => {
+    if (!storeId) return;
+    AsyncStorage.getItem(SELECTED_STORE_KEY)
+      .then((id) => (id ? undefined : AsyncStorage.setItem(SELECTED_STORE_KEY, storeId)))
+      .catch(() => {});
+  }, [storeId]);
+
+  // Approved banner: show for APPROVED_BANNER_MS, then auto-dismiss.
+  const showApprovedBanner = useCallback(() => {
+    setApprovedBanner(true);
+    if (approvedBannerTimerRef.current) clearTimeout(approvedBannerTimerRef.current);
+    approvedBannerTimerRef.current = setTimeout(() => {
+      approvedBannerTimerRef.current = null;
+      setApprovedBanner(false);
+    }, APPROVED_BANNER_MS);
+  }, []);
+  const dismissApprovedBanner = useCallback(() => {
+    if (approvedBannerTimerRef.current) {
+      clearTimeout(approvedBannerTimerRef.current);
+      approvedBannerTimerRef.current = null;
+    }
+    setApprovedBanner(false);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (approvedBannerTimerRef.current) clearTimeout(approvedBannerTimerRef.current);
+    };
   }, []);
 
-  // Poll every 30s in BOTH directions — was pending-only (stopped entirely
-  // once approved), so an admin revoking an already-approved store while the
-  // shopkeeper sat on this screen was never detected at all. This is a
+  // Poll every 30s in BOTH directions so an admin revoking an already-approved
+  // store while the shopkeeper sits on this screen is detected. This is a
   // robustness fallback independent of the stores-table realtime
   // subscription below; the actual redirect decision lives in the single
   // watcher effect further down so it fires no matter which of these two
@@ -343,21 +203,16 @@ export default function HomeTab() {
       await refreshStoreApproval(session.token, session.user?.id);
       const fresh = peekStores();
       if (!fresh?.length) return;
-      const updated = fresh.find(s => s.id === selectedStore?.id);
+      const updated = fresh.find((s) => s.id === selectedStore?.id);
       commitStores(fresh, startedAt);
       if (updated && !wasApproved && isStoreApproved(updated)) {
-        setApprovedBanner(true);
-        Animated.sequence([
-          Animated.timing(approvedBannerAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
-          Animated.delay(4000),
-          Animated.timing(approvedBannerAnim, { toValue: 0, duration: 350, useNativeDriver: true }),
-        ]).start(() => setApprovedBanner(false));
+        showApprovedBanner();
       }
     } catch (error) {
-      if (__DEV__) console.warn('[home] Approval poll failed', error);
+      if (__DEV__) console.warn("[home] Approval poll failed", error);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.token, selectedStore?.id, selectedStore?.is_approved, commitStores]);
+  }, [session?.token, selectedStore?.id, selectedStore?.is_approved, commitStores, showApprovedBanner]);
 
   useSmartPoll(checkApproval, {
     intervalMs: 30_000,
@@ -371,12 +226,12 @@ export default function HomeTab() {
     if (!session?.token || !selectedStore?.id) return;
     lastCountFetchRef.current = Date.now();
     try {
-      const res = await apiClient.get<{ orders?: Array<{ store_id?: string; alloc_status?: string }> }>(
+      const res = await apiClient.get<{ orders?: { store_id?: string; alloc_status?: string }[] }>(
         "/shopkeeper/orders?active=true",
         { Authorization: `Bearer ${session.token}` }
       );
       if (!res.success) return;
-      const orders: Array<{ store_id?: string; alloc_status?: string }> = res.data?.orders ?? [];
+      const orders: { store_id?: string; alloc_status?: string }[] = res.data?.orders ?? [];
       const count = orders.filter((o) => o.store_id === selectedStore.id && o.alloc_status === "accepted").length;
       setActiveOrderCount(count);
     } catch {
@@ -384,7 +239,11 @@ export default function HomeTab() {
     }
   }, [session?.token, selectedStore?.id]);
 
-  useEffect(() => { fetchActiveOrderCount(); }, [fetchActiveOrderCount]);
+  useEffect(() => {
+    fetchActiveOrderCount();
+  }, [fetchActiveOrderCount]);
+  // Push / realtime nudge — refresh the dashboard count immediately.
+  useEffect(() => onOrdersChanged(fetchActiveOrderCount), [fetchActiveOrderCount]);
 
   useSmartPoll(fetchActiveOrderCount, {
     intervalMs: 15_000,
@@ -398,6 +257,9 @@ export default function HomeTab() {
       fetchActiveOrderCount();
     }, [fetchActiveOrderCount])
   );
+
+  // Today stat card (delivered · order value -> Payouts); see components/home/TodayCard.
+  const { stats: todayStats, refresh: fetchTodayStats } = useTodayStats(selectedStore?.id, session?.token);
 
   const fetchUnreadNotificationCount = useCallback(async () => {
     if (!session?.token) return;
@@ -447,585 +309,430 @@ export default function HomeTab() {
   // refetch, etc.), instead of duplicating a redirect check into every
   // individual place that can update `stores`.
   useEffect(() => {
-    if (loading || !selectedStore) return;
+    if (storeLoading || !selectedStore) return;
     if (!isStoreApproved(selectedStore)) {
       router.replace("/pending-verification");
     }
-  }, [selectedStore?.is_approved, selectedStore?.id, loading]);
-
-  // Resolve & persist the selected store whenever the store list changes.
-  useEffect(() => {
-    if (stores.length === 0) return;
-    AsyncStorage.getItem(SELECTED_STORE_KEY).then((id) => {
-      const picked = (id && stores.find(s => s.id === id)) || stores[0];
-      if (picked) {
-        setSelectedStoreId(picked.id);
-        if (!id) AsyncStorage.setItem(SELECTED_STORE_KEY, picked.id).catch(() => {});
-      }
-    }).catch(() => {
-      if (stores[0]) setSelectedStoreId(stores[0].id);
-    });
-  }, [stores]);
-
-  const invalidateAllCaches = useCallback(async () => {
-    try {
-      await AsyncStorage.removeItem(INVENTORY_PERSISTED_KEY);
-      await AsyncStorage.removeItem(INVENTORY_CACHE_KEY);
-    } catch (error) {
-      if (__DEV__) console.warn('[home] Cache invalidation failed', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!session?.token || !selectedStore?.id) return;
-    fetchStoreProducts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.token, selectedStore?.id]);
-
-  const fetchStoreProductsRef = useRef<((silent?: boolean) => Promise<void>) | null>(null);
-
-  useEffect(() => {
-    if (!selectedStore?.id || !supabase) return;
-    // Stable channel name (no Date.now() suffix) so switching stores doesn't
-    // churn out a brand-new, never-reused channel identity on every switch —
-    // cleanup below already unsubscribes the old one before this re-fires.
-    const channel = supabase.channel(`products-${selectedStore.id}`).on("postgres_changes", { event: "*", schema: "public", table: "products", filter: `store_id=eq.${selectedStore.id}` }, () => { fetchStoreProductsRef.current?.(true); }).subscribe();
-    return () => { supabase?.removeChannel(channel); };
-  }, [selectedStore?.id]);
+  }, [selectedStore?.is_approved, selectedStore?.id, storeLoading]);
 
   useEffect(() => {
     if (!selectedStore?.id || !session?.token || !supabase) return;
-    const token = session.token; const userId = session.user?.id;
-    // Stable channel name — see the products-channel effect above for why.
-    const channel = supabase.channel(`store-${selectedStore.id}`).on("postgres_changes", { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${selectedStore.id}` }, () => {
-      // fetchStores() -> fetchStoresCached() is cache-first (up to a 10min
-      // TTL) — without clearing it here, this event firing because the row
-      // genuinely changed could still just hand back the stale cached data,
-      // defeating the entire point of the realtime nudge.
-      clearStoreCache();
-      fetchStores(token, userId);
-    }).subscribe();
-    return () => { supabase?.removeChannel(channel); };
+    const token = session.token;
+    const userId = session.user?.id;
+    // Stable channel name (no Date.now() suffix) so switching stores doesn't
+    // churn out a brand-new, never-reused channel identity on every switch —
+    // cleanup below already unsubscribes the old one before this re-fires.
+    const channel = supabase
+      .channel(`store-${selectedStore.id}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "stores", filter: `id=eq.${selectedStore.id}` }, () => {
+        // The row genuinely changed, so bypass the warm cache — but do NOT
+        // clearStoreCache() first. Clearing nulls the last-known-good copy that
+        // forceFetchStores/refreshStoreApproval fall back to when the follow-up
+        // GET fails, so a flaky connection at this moment would leave every
+        // tab with no store id (empty "No orders yet" states shown as truth),
+        // and let an older in-flight pre-toggle GET win the generation guard
+        // and flip the status card back. forceFetchStores already skips the
+        // cache and handles its own generation/mutation checks.
+        const startedAt = Date.now();
+        forceFetchStores(token, userId)
+          .then((fresh) => {
+            if (fresh.length > 0) commitStores(fresh, startedAt);
+          })
+          .catch(() => {});
+      })
+      .subscribe();
+    return () => {
+      supabase?.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStore?.id, session?.token]);
 
-  const firstFocusRef = useRef(true);
-  const lastProductsFetchRef = useRef(0);
-  useFocusEffect(React.useCallback(() => {
-    if (firstFocusRef.current) { firstFocusRef.current = false; return; }
-    // The realtime products subscription and the 15s poll already cover data
-    // changes — this focus refetch is only a safety net, so skip it when a
-    // fetch went out moments ago (mount/dep-resolve and focus otherwise
-    // double-fire the same request).
-    if (Date.now() - lastProductsFetchRef.current < 10_000) return;
-    if (session?.token && selectedStore?.id) fetchStoreProducts(true);
-  }, [session?.token, selectedStore?.id]));
+  // Products / Active stat cards. The compact StockList owns the product
+  // fetch + poll + realtime and writes every result to the shared persistCache
+  // entry; reading that entry here (in-memory, no network) keeps the stat row
+  // in step without a second fetcher. Re-read on a cheap tick while focused
+  // and right after the refresh flows below.
+  const [stockCounts, setStockCounts] = useState<StockCounts>(() =>
+    countStock(selectedStore?.id ? peekCache<StockProduct[]>(productsCacheKey(selectedStore.id)) : null)
+  );
+  const readStockCounts = useCallback(() => {
+    if (!selectedStore?.id) return;
+    const next = countStock(peekCache<StockProduct[]>(productsCacheKey(selectedStore.id)));
+    setStockCounts((prev) => (sameData(prev, next) ? prev : next));
+  }, [selectedStore?.id]);
+  useEffect(() => {
+    if (!selectedStore?.id) return;
+    const key = productsCacheKey(selectedStore.id);
+    let cancelled = false;
+    if (peekCache<StockProduct[]>(key)) readStockCounts();
+    else
+      hydrateCache<StockProduct[]>(key)
+        .then(() => {
+          if (!cancelled) readStockCounts();
+        })
+        .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedStore?.id, readStockCounts]);
+  useEffect(() => {
+    if (!isFocused || !selectedStore?.id) return;
+    readStockCounts();
+    const id = setInterval(readStockCounts, STOCK_COUNTS_TICK_MS);
+    return () => clearInterval(id);
+  }, [isFocused, selectedStore?.id, readStockCounts]);
 
-  // Multiple independent triggers can call this concurrently (realtime
-  // subscription firing on the products table, useFocusEffect firing on
-  // screen focus, the initial mount effect) — e.g. add a product from the
-  // Inventory tab, then immediately navigate to Home: both the realtime
-  // INSERT event and the focus effect kick off a fetch, and without
-  // sequencing, whichever network response lands *last* wins the
-  // setStoreProducts call even if it started first and is now stale/slower.
-  // Tracking a monotonically-increasing request id and only committing the
-  // result of the most-recently-*started* request avoids an older, in-flight
-  // fetch clobbering a newer one's result.
-  const fetchRequestIdRef = useRef(0);
-  // Timestamp of the most recent local product mutation (toggle/delete). A
-  // fetch already in flight when the mutation landed carries pre-mutation
-  // rows — committing it would visibly revert the optimistic update until the
-  // next refetch. Same pattern as previous-orders.tsx's lastLocalMutationRef.
-  const productsMutationRef = useRef(0);
-  const fetchStoreProducts = useCallback(async (silent = false) => {
-    if (!session?.token || !selectedStore?.id) return;
-    const storeId = selectedStore.id;
-    const requestId = ++fetchRequestIdRef.current;
+  // Pull-to-refresh for the dashboard: force a store refetch (status, name)
+  // and a background product refresh. Both already carry their own
+  // generation/mutation guards, so this can't clobber a toggle in flight.
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    if (!session?.token) return;
+    setRefreshing(true);
     const startedAt = Date.now();
-    lastProductsFetchRef.current = startedAt;
-
-    // Stale-while-revalidate: on a foreground load, paint the last-known list
-    // from the persisted cache immediately and demote the network fetch to a
-    // background refresh — the spinner is reserved for a genuinely cold cache.
-    let spinnerShown = false;
-    if (!silent) {
-      const cached =
-        peekCache<StockProduct[]>(productsCacheKey(storeId)) ??
-        (await hydrateCache<StockProduct[]>(productsCacheKey(storeId)));
-      if (requestId !== fetchRequestIdRef.current) return;
-      if (cached && cached.length > 0) {
-        setStoreProducts((prev) => (sameData(prev, cached) ? prev : cached));
-        setStoreProductsLoading(false);
-      } else {
-        spinnerShown = true;
-        setStoreProductsLoading(true);
-      }
-    }
-
     try {
-      const fromDb = await getStockListFromDb(storeId);
-      if (requestId !== fetchRequestIdRef.current) return;
-      if (productsMutationRef.current > startedAt) return;
-      const mapped: StockProduct[] = Array.isArray(fromDb)
-        ? fromDb.map((item: any) => ({ id: item.id, name: (item.name || item.product_name || "").trim() || "Product", unit: item.unit || "", storeProductId: item.storeProductId, is_active: item.is_active !== false, is_loose: item.is_loose === true }))
-        : [];
-      setStoreProducts((prev) => (sameData(prev, mapped) ? prev : mapped));
-      writeCache(productsCacheKey(storeId), mapped);
-    } catch {
-      if (requestId !== fetchRequestIdRef.current) return;
-      // Only clear on a genuinely cold, cache-less foreground load. A silent
-      // background refresh (realtime subscription, focus effect, post-toggle)
-      // — or a load that already painted cached data — failing shouldn't wipe
-      // a real product list over a transient network hiccup.
-      if (!silent && spinnerShown) setStoreProducts([]);
+      await Promise.all([
+        forceFetchStores(session.token, session.user?.id).then((fresh) => {
+          if (fresh.length > 0) commitStores(fresh, startedAt);
+        }),
+        stockRef.current?.refresh(true).catch(() => {}),
+        fetchActiveOrderCount(),
+        fetchTodayStats(true),
+      ]);
+      readStockCounts();
+    } finally {
+      setRefreshing(false);
     }
-    // Always clear the spinner this call raised, regardless of whether a
-    // newer request has since superseded it for the purpose of committing
-    // data above — otherwise a silent refetch starting before the initial
-    // non-silent load resolves permanently strands storeProductsLoading at
-    // true (the requestId guard would never let this call turn it off).
-    finally { if (!silent) setStoreProductsLoading(false); }
-  }, [session?.token, selectedStore?.id]);
-  useEffect(() => { fetchStoreProductsRef.current = fetchStoreProducts; }, [fetchStoreProducts]);
-
-  // Safety net for the realtime channel + focus-effect refresh above: mobile
-  // Supabase realtime sockets can drop silently across app backgrounding, and
-  // if that coincides with a missed focus event (e.g. the app resumes from
-  // background rather than the Home tab regaining navigation focus), a newly
-  // added product would otherwise stay invisible until a full app restart.
-  // Mirrors the same self-healing pattern already used for the active-order
-  // and unread-notification counters above.
-  useSmartPoll(() => fetchStoreProducts(true), {
-    intervalMs: 15_000,
-    slowIntervalMs: 30_000,
-    // Focus-gated: while another tab is up, the realtime subscription still
-    // catches changes; polling a hidden dashboard is pure waste.
-    enabled: !!(session?.token && selectedStore?.id) && isFocused,
-  });
-
-  const fetchStores = useCallback(async (token: string, userId?: string): Promise<StoreRow[]> => {
-    const startedAt = Date.now();
-    try { const fetched = await fetchStoresCached(token, userId); if (fetched.length > 0) commitStores(fetched, startedAt); return fetched; } catch { return []; }
-  }, [commitStores]);
+  }, [session?.token, session?.user?.id, commitStores, fetchActiveOrderCount, fetchTodayStats, readStockCounts]);
 
   const toggleOnline = (value: boolean) => {
     if (!session || !selectedStore) return;
     if (!isStoreApproved(selectedStore)) return;
     if (selectedStore.is_active === value) return;
+    const target = selectedStore;
     // After the server confirms the PATCH: patch the shared cache in place
     // (persisted; bumps the cache generation so any in-flight pre-toggle
     // fetch can't overwrite it), stamp the local mutation time so this
     // screen's own pollers drop pre-toggle responses, update the UI
-    // immediately, then reconcile with one forced refetch. The old
-    // clear-cache-and-refetch dance left a window where a concurrent poll
-    // re-persisted pre-toggle data as fresh and visibly flipped the card back.
+    // immediately, then reconcile with one forced refetch. Clearing the cache
+    // and refetching instead would leave a window where a concurrent poll
+    // re-persists pre-toggle data as fresh and visibly flips the card back.
     const applyToggle = async (isActive: boolean) => {
-      const response = await apiClient.patch(`/store-owner/stores/${selectedStore.id}/online`, { is_active: isActive }, { Authorization: `Bearer ${session.token}` });
+      const response = await apiClient.patch(
+        `/store-owner/stores/${target.id}/online`,
+        { is_active: isActive },
+        { Authorization: `Bearer ${session.token}` }
+      );
       if (!response.success) throw new Error(response.error || `Failed to go ${isActive ? "online" : "offline"}`);
-      patchStoreActive(selectedStore.id, isActive);
+      patchStoreActive(target.id, isActive);
       storesMutationRef.current = Date.now();
-      setStores((prev) => prev.map((s) => (s.id === selectedStore.id ? { ...s, is_active: isActive } : s)));
+      // Seed the override layer from the hook's pick if no fresh fetch has
+      // landed yet, so the card flips immediately either way.
+      setStores((prev) => (prev.length > 0 ? prev : [target]).map((s) => (s.id === target.id ? { ...s, is_active: isActive } : s)));
       const startedAt = Date.now();
       await Promise.all([
-        forceFetchStores(session.token, session.user?.id).then((fresh) => { if (fresh.length > 0) commitStores(fresh, startedAt); }),
-        fetchStoreProducts(true).catch(() => {}),
+        forceFetchStores(session.token, session.user?.id).then((fresh) => {
+          if (fresh.length > 0) commitStores(fresh, startedAt);
+        }),
+        stockRef.current?.refresh(true).catch(() => {}),
       ]);
+      readStockCounts();
+      toast.show({ message: isActive ? "Your store is online" : "Your store is offline", tone: "success" });
     };
     if (value) {
-      setConfirmModal({ title: "Go Online?", message: "Your store will become visible to customers.", confirmText: "Go Online", confirmColor: colors.success, iconName: "storefront", onConfirm: async () => {
-        await restoreActiveProductsOnline(selectedStore.id);
-        await applyToggle(true);
-      }});
+      setConfirm({
+        title: "Go online?",
+        message: "Your store will become visible to customers.",
+        confirmLabel: "Go online",
+        destructive: false,
+        icon: "storefront-outline",
+        fallbackErrorMessage: "Couldn't take your store online. Please try again.",
+        onConfirm: async () => {
+          await restoreActiveProductsOnline(target.id);
+          await applyToggle(true);
+        },
+      });
     } else {
-      setConfirmModal({ title: "Go Offline?", message: "Your store will be hidden from customers.", confirmText: "Go Offline", confirmColor: colors.error, iconName: "power", onConfirm: async () => {
-        await setAllProductsOffline(selectedStore.id);
-        await applyToggle(false);
-        await invalidateAllCaches();
-      }});
+      setConfirm({
+        title: "Go offline?",
+        message: "Your store will be hidden from customers.",
+        confirmLabel: "Go offline",
+        destructive: true,
+        icon: "power-outline",
+        fallbackErrorMessage: "Couldn't take your store offline. Please try again.",
+        onConfirm: async () => {
+          await setAllProductsOffline(target.id);
+          await applyToggle(false);
+        },
+      });
     }
+    setConfirmVisible(true);
   };
 
-  const handleStatusToggle = async (value: boolean) => { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); toggleOnline(value); };
-
-  const toggleProductActive = useCallback(async (product: any) => {
-    if (!product.storeProductId) return;
-    const wasActive = product.is_active !== false; const nowActive = !wasActive;
-    setTogglingProductId(product.id);
-    productsMutationRef.current = Date.now();
-    setStoreProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, is_active: nowActive } : p));
-    try {
-      const success = await updateProductActiveState(product.storeProductId, nowActive, session?.token ?? null);
-      if (!success) {
-        productsMutationRef.current = Date.now();
-        setStoreProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, is_active: wasActive } : p));
-      } else {
-        // The confirming refetch starts after the mutation stamp, so it's
-        // allowed to commit — and it rewrites the persisted cache too.
-        fetchStoreProducts(true);
-      }
-    } catch {
-      productsMutationRef.current = Date.now();
-      setStoreProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, is_active: wasActive } : p));
-    }
-    finally { setTogglingProductId(null); }
-  }, [session?.token, fetchStoreProducts]);
-
-  const deleteProduct = useCallback(async (product: any) => {
-    if (!product.storeProductId || !supabase) return;
-    const { error } = await supabase.from("products").update({ deleted_at: new Date().toISOString() }).eq("id", product.storeProductId);
-    if (error) { Alert.alert("Error", "Failed to remove product."); return; }
-    productsMutationRef.current = Date.now();
-    // Functional update — this handler is frozen inside the confirm modal's
-    // state at open time, so a closure snapshot of storeProducts could be
-    // stale by the time the user confirms (a poll tick in between). The cache
-    // write is deferred out of the updater so it stays pure.
-    const cacheKey = selectedStore?.id ? productsCacheKey(selectedStore.id) : null;
-    setStoreProducts((prev) => {
-      const next = prev.filter((p) => p.id !== product.id);
-      if (cacheKey) queueMicrotask(() => writeCache(cacheKey, next));
-      return next;
-    });
-  }, [selectedStore?.id]);
-
-  // A single stray tap on the small trash icon (right next to the
-  // active/off toggle) used to soft-delete a live product with no way to
-  // undo — every other destructive action in this file (going online/
-  // offline) already confirms first, so this now matches that convention.
-  const confirmDeleteProduct = useCallback((product: any) => {
-    setConfirmModal({
-      title: "Remove product?",
-      message: `"${product.name}" will be removed from your store. This can't be undone from here.`,
-      confirmText: "Remove",
-      confirmColor: colors.error,
-      iconName: "trash-outline",
-      onConfirm: () => deleteProduct(product),
-    });
-  }, [deleteProduct]);
-
-  const deleteAllInSection = useCallback(async (section: Array<{ id: string; storeProductId?: string }>) => {
-    if (!supabase) return;
-    const ids = section.map((p) => p.storeProductId).filter(Boolean) as string[];
-    if (ids.length === 0) return;
-    const { error } = await supabase.from("products").update({ deleted_at: new Date().toISOString() }).in("id", ids);
-    if (error) { Alert.alert("Error", "Failed to remove products."); return; }
-    productsMutationRef.current = Date.now();
-    // Functional update for the same modal-frozen-closure reason as
-    // deleteProduct above.
-    const removedIds = new Set(section.map((p) => p.id));
-    const cacheKey = selectedStore?.id ? productsCacheKey(selectedStore.id) : null;
-    setStoreProducts((prev) => {
-      const next = prev.filter((p) => !removedIds.has(p.id));
-      if (cacheKey) queueMicrotask(() => writeCache(cacheKey, next));
-      return next;
-    });
-  }, [selectedStore?.id]);
-
-  const confirmDeleteAllInSection = useCallback((section: Array<{ id: string; storeProductId?: string }>, sectionLabel: string) => {
-    if (section.length === 0) return;
-    setConfirmModal({
-      title: `Delete all ${sectionLabel.toLowerCase()}?`,
-      message: `${section.length} product${section.length !== 1 ? "s" : ""} will be removed from your store. This can't be undone from here.`,
-      confirmText: "Delete All",
-      confirmColor: colors.error,
-      iconName: "trash-outline",
-      onConfirm: () => deleteAllInSection(section),
-    });
-  }, [deleteAllInSection]);
-
-  if (loading) {
-    return (
-      <SafeAreaView style={s.safe}>
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator color={colors.primary} size="large" />
-        </View>
-      </SafeAreaView>
-    );
-  }
+  // The Button's own light haptic covers the tap; ConfirmSheet's confirm
+  // button carries the success haptic.
+  const handleStatusToggle = (value: boolean) => toggleOnline(value);
 
   const ownerName = session?.user?.name || "Shopkeeper";
   const firstName = ownerName.split(" ")[0];
+  const storeName = selectedStore?.name || "My Store";
+  const approved = selectedStore ? isStoreApproved(selectedStore) : false;
+  const tileWidth = (contentWidth - TILE_GAP) / 2;
 
   return (
-    <SafeAreaView style={s.safe}>
-      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
-        <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
-
-          {/* ── Header ────────────────────────────────────────────── */}
-          <View style={s.header}>
-            <View>
-              <Text style={s.greeting}>Hello, {firstName}</Text>
-              <Text style={s.storeName}>{selectedStore?.name || "My Store"}</Text>
-            </View>
-            <View style={s.headerActions}>
-              <TouchableOpacity onPress={() => router.push("/notification-inbox")} style={s.bellBtn}>
-                <Ionicons name="notifications-outline" size={22} color={colors.textPrimary} />
-                {unreadNotificationCount > 0 && (
-                  <View style={s.bellBadge}>
-                    <Text style={s.bellBadgeText}>
-                      {unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => router.push("/profile")} style={s.avatarBtn}>
-                <Text style={s.avatarText}>{firstName.charAt(0).toUpperCase()}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* ── Approval success banner ───────────────────────────── */}
-          {approvedBanner && (
-            <Animated.View style={[s.approvedBanner, { opacity: approvedBannerAnim, transform: [{ translateY: approvedBannerAnim.interpolate({ inputRange: [0, 1], outputRange: [-8, 0] }) }] }]}>
-              <Ionicons name="checkmark-circle" size={16} color="#065F46" />
-              <Text style={s.approvedBannerText}>Your store has been approved! You can now go online.</Text>
-            </Animated.View>
-          )}
-
-          {/* ── Store Status ──────────────────────────────────────── */}
-          {selectedStore && (
-            <StoreStatusCard store={selectedStore} isOnline={isStoreOnline} activeOrderCount={activeOrderCount} onToggle={handleStatusToggle} pendingApproval={!isStoreApproved(selectedStore)} />
-          )}
-
-          {/* ── Quick Stats Row ───────────────────────────────────── */}
-          <View style={s.statsRow}>
-            <View style={s.statCard}>
-              <Text style={s.statValue}>{storeProducts.length}</Text>
-              <Text style={s.statLabel}>Products</Text>
-            </View>
-            <View style={[s.statCard, { borderColor: colors.success + "30" }]}>
-              <Text style={[s.statValue, { color: colors.success }]}>{activeProductCount}</Text>
-              <Text style={s.statLabel}>Active</Text>
-            </View>
-            <View style={[s.statCard, { borderColor: colors.primary + "30" }]}>
-              <Text style={[s.statValue, { color: colors.primary }]}>{isStoreOnline ? "ON" : "OFF"}</Text>
-              <Text style={s.statLabel}>Status</Text>
-            </View>
-          </View>
-
-          {/* ── Quick Actions (Tiles) ─────────────────────────────── */}
-          <Text style={s.sectionLabel}>Quick Actions</Text>
-          <View style={s.tilesGrid}>
-            {TILES.map((tile) => (
-              <TouchableOpacity
-                key={tile.key}
-                style={s.tile}
-                onPress={() => router.push(tile.route as any)}
-                activeOpacity={0.6}
-              >
-                <View style={s.tileTop}>
-                  <Ionicons name={tile.icon} size={20} color={colors.textSecondary} />
-                  <Ionicons name="chevron-forward" size={14} color={colors.textTertiary} />
-                </View>
-                <Text style={s.tileLabel}>{tile.label}</Text>
-                <Text style={s.tileDesc}>{tile.desc}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* ── Your Stock ────────────────────────────────────────── */}
-          <View style={s.stockCard}>
-            <View style={s.stockHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={s.stockTitle}>Your Stock</Text>
-                <Text style={s.stockSub}>
-                  {storeProducts.length} product{storeProducts.length !== 1 ? "s" : ""} in store
+    <Screen>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom, paddingTop: spacing.lg }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />}
+      >
+        <View style={[styles.column, { paddingHorizontal: gutter }]}>
+          <Animated.View style={[{ width: contentWidth }, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+            {/* ── Header ────────────────────────────────────────────── */}
+            <View style={styles.header}>
+              {/* flex:1 + numberOfLines so a long store name can't push the
+                  buttons off the right edge of the screen. */}
+              <View style={styles.headerText}>
+                <Text style={styles.greeting} numberOfLines={1}>
+                  Hello, {firstName}
+                </Text>
+                <Text style={styles.storeName} numberOfLines={1} ellipsizeMode="tail">
+                  {storeName}
                 </Text>
               </View>
-              <TouchableOpacity
-                onPress={() => { if (stockSearchOpen) { closeStockSearch(); } else { setStockSearchOpen(true); } }}
-                style={s.stockIconBtn}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons name={stockSearchOpen ? "close" : "search"} size={18} color={colors.textSecondary} />
-              </TouchableOpacity>
+              <View style={styles.headerActions}>
+                <TouchableOpacity
+                  onPress={() => router.push("/notification-inbox")}
+                  style={styles.circleBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel={unreadNotificationCount > 0 ? `Notifications, ${unreadNotificationCount} unread` : "Notifications"}
+                >
+                  <Ionicons name="notifications-outline" size={22} color={colors.textPrimary} />
+                  {unreadNotificationCount > 0 && (
+                    <View style={styles.bellBadge}>
+                      <Text style={styles.bellBadgeText}>{unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => router.push("/settings")} style={styles.circleBtn} accessibilityRole="button" accessibilityLabel="Settings">
+                  <Ionicons name="settings-outline" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => router.push("/profile")} style={styles.circleBtn} accessibilityRole="button" accessibilityLabel="Profile">
+                  <Text style={styles.avatarText}>{firstName.charAt(0).toUpperCase()}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
-            {stockSearchOpen && (
-              <View style={s.searchBar}>
-                <Ionicons name="search" size={16} color={colors.textTertiary} />
-                <TextInput
-                  value={stockSearchQuery}
-                  onChangeText={handleStockSearchChange}
-                  placeholder="Search products..."
-                  placeholderTextColor={colors.textTertiary}
-                  style={s.searchInput}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                {stockSearchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => handleStockSearchChange("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
-                  </TouchableOpacity>
-                )}
+            {storeLoading ? (
+              <View style={styles.sections}>
+                <Skeleton.Card lines={3} />
+                <Skeleton.Card lines={1} />
+                <Skeleton.Card lines={1} />
               </View>
-            )}
-
-            {storeProductsLoading ? (
-              <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.xl }} />
-            ) : storeProducts.length === 0 ? (
-              <View style={s.emptyStock}>
-                <Ionicons name="cube-outline" size={32} color={colors.textTertiary} />
-                <Text style={s.emptyStockTitle}>{selectedStore?.is_active ? "No products yet" : "Store is Offline"}</Text>
-                <Text style={s.emptyStockText}>
-                  {selectedStore?.is_active ? "Go to Inventory tab to add products" : "Go online to manage your stock"}
-                </Text>
-              </View>
+            ) : storeError || !selectedStore ? (
+              <ErrorState
+                icon="cloud-offline-outline"
+                title="Couldn't load your store"
+                message="Check your connection and try again."
+                action={{ onPress: retry }}
+              />
             ) : (
               <>
-                <View style={s.stockTabRow}>
-                  <TouchableOpacity
-                    style={[s.stockTabBtn, activeStockTab === "packaged" && s.stockTabBtnActive]}
-                    onPress={() => selectStockTab("packaged")}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons name="pricetag-outline" size={14} color={activeStockTab === "packaged" ? "#fff" : colors.textSecondary} />
-                    <Text style={[s.stockTabBtnText, activeStockTab === "packaged" && s.stockTabBtnTextActive]} numberOfLines={1}>
-                      Packaged ({packagedProducts.length})
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[s.stockTabBtn, activeStockTab === "loose" && s.stockTabBtnActive]}
-                    onPress={() => selectStockTab("loose")}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons name="scale-outline" size={14} color={activeStockTab === "loose" ? "#fff" : colors.textSecondary} />
-                    <Text style={[s.stockTabBtnText, activeStockTab === "loose" && s.stockTabBtnTextActive]} numberOfLines={1}>
-                      Loose ({looseProducts.length})
-                    </Text>
-                  </TouchableOpacity>
+                {/* ── Approval success banner ───────────────────────────── */}
+                {approvedBanner ? <ApprovedBanner onDismiss={dismissApprovedBanner} /> : null}
+
+                {/* ── Store Status ──────────────────────────────────────── */}
+                <View style={styles.block}>
+                  <StoreStatusCard
+                    store={selectedStore}
+                    isOnline={isStoreOnline}
+                    activeOrderCount={activeOrderCount}
+                    onToggle={handleStatusToggle}
+                    pendingApproval={!approved}
+                  />
                 </View>
 
-                <ScrollView
-                  ref={stockPagerRef}
-                  horizontal
-                  pagingEnabled
-                  showsHorizontalScrollIndicator={false}
-                  onMomentumScrollEnd={handleStockPagerScrollEnd}
-                  style={{ height: (activeStockTab === "packaged" ? stockPageHeights.packaged : stockPageHeights.loose) || undefined }}
-                >
-                  <View
-                    style={{ width: STOCK_PAGE_WIDTH }}
-                    onLayout={(e) => {
-                      const height = e.nativeEvent.layout.height;
-                      setStockPageHeights((prev) => ({ ...prev, packaged: height }));
-                    }}
+                {/* ── Incoming orders ───────────────────────────────────── */}
+                {incomingCount > 0 ? (
+                  <HomeCard
+                    title={`Incoming orders · ${incomingCount}`}
+                    style={styles.block}
+                    footer={
+                      <HomePrimaryButton
+                        label="Review orders"
+                        onPress={() => router.push("/(tabs)/previous-orders")}
+                        accessibilityHint="Opens the Orders tab"
+                      />
+                    }
                   >
-                    <StockSection
-                      products={packagedProducts}
-                      togglingProductId={togglingProductId}
-                      storeActive={!!selectedStore?.is_active}
-                      onToggle={toggleProductActive}
-                      onDeleteOne={confirmDeleteProduct}
-                      onDeleteAll={() => confirmDeleteAllInSection(packagedProducts, "packaged products")}
-                      emptyText={packagedEmptyText}
-                    />
+                    <Text style={styles.body}>Accept or reject {incomingCount === 1 ? "it" : "them"} before the customer moves on.</Text>
+                  </HomeCard>
+                ) : null}
+
+                {/* ── Quick Stats Row ───────────────────────────────────── */}
+                <View style={styles.statsRow}>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statValue}>{stockCounts.total}</Text>
+                    <Text style={styles.statLabel}>Products</Text>
                   </View>
-                  <View
-                    style={{ width: STOCK_PAGE_WIDTH }}
-                    onLayout={(e) => {
-                      const height = e.nativeEvent.layout.height;
-                      setStockPageHeights((prev) => ({ ...prev, loose: height }));
-                    }}
-                  >
-                    <StockSection
-                      products={looseProducts}
-                      togglingProductId={togglingProductId}
-                      storeActive={!!selectedStore?.is_active}
-                      onToggle={toggleProductActive}
-                      onDeleteOne={confirmDeleteProduct}
-                      onDeleteAll={() => confirmDeleteAllInSection(looseProducts, "loose products")}
-                      emptyText={looseEmptyText}
-                    />
+                  <View style={[styles.statCard, { borderColor: colors.success + "30" }]}>
+                    <Text style={[styles.statValue, { color: colors.success }]}>{stockCounts.active}</Text>
+                    <Text style={styles.statLabel}>Active</Text>
                   </View>
-                </ScrollView>
+                  <View style={[styles.statCard, { borderColor: colors.primary + "30" }]}>
+                    <Text style={[styles.statValue, { color: colors.primary }]}>{isStoreOnline ? "ON" : "OFF"}</Text>
+                    <Text style={styles.statLabel}>Status</Text>
+                  </View>
+                </View>
+
+                {/* ── Today ─────────────────────────────────────────────── */}
+                <View style={styles.block}>
+                  <TodayCard stats={todayStats} />
+                </View>
+
+                {/* ── Quick Actions (Tiles) ─────────────────────────────── */}
+                <Text style={styles.sectionLabel}>Quick Actions</Text>
+                <View style={styles.tilesGrid}>
+                  {TILES.map((tile) => (
+                    <TouchableOpacity
+                      key={tile.key}
+                      style={[styles.tile, { width: tileWidth }]}
+                      onPress={() => router.push(tile.route)}
+                      activeOpacity={0.6}
+                      accessibilityRole="button"
+                      accessibilityLabel={tile.label}
+                      accessibilityHint={tile.desc}
+                    >
+                      <View style={styles.tileTop}>
+                        <View style={styles.tileIcon}>
+                          <Ionicons name={tile.icon} size={20} color={colors.textSecondary} />
+                        </View>
+                        <Ionicons name="chevron-forward" size={14} color={colors.textTertiary} />
+                      </View>
+                      <Text style={styles.tileLabel}>{tile.label}</Text>
+                      <Text style={styles.tileDesc}>{tile.desc}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* ── Your Stock (compact summary; visuals owned by components/stock) ── */}
+                <StockList
+                  ref={stockRef}
+                  variant="compact"
+                  storeId={selectedStore.id}
+                  token={session?.token}
+                  storeActive={isStoreOnline}
+                  enabled={isFocused}
+                />
               </>
             )}
-          </View>
-
-        </Animated.View>
+          </Animated.View>
+        </View>
       </ScrollView>
 
-      {/* ── Confirm Modal ──────────────────────────────────────── */}
-      <Modal
-        visible={!!confirmModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => { if (!confirmLoading) setConfirmModal(null); }}
-      >
-        <View style={s.modalOverlay}>
-          <View style={s.modalSheet}>
-            {confirmModal && (
-              <>
-                <View style={s.modalHandle} />
-                <View style={[s.modalIconWrap, { backgroundColor: confirmModal.confirmColor + "12" }]}>
-                  <Ionicons name={confirmModal.iconName} size={28} color={confirmModal.confirmColor} />
-                </View>
-                <Text style={s.modalTitle}>{confirmModal.title}</Text>
-                <Text style={s.modalMsg}>{confirmModal.message}</Text>
-                <TouchableOpacity
-                  style={[s.modalConfirmBtn, { backgroundColor: confirmModal.confirmColor }]}
-                  activeOpacity={0.85}
-                  disabled={confirmLoading}
-                  onPress={async () => {
-                    setConfirmLoading(true);
-                    try { await confirmModal.onConfirm(); }
-                    catch { Alert.alert("Error", "Failed to update store status."); }
-                    finally { setConfirmLoading(false); setConfirmModal(null); }
-                  }}
-                >
-                  {confirmLoading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.modalConfirmText}>{confirmModal.confirmText}</Text>}
-                </TouchableOpacity>
-                <TouchableOpacity style={s.modalCancelBtn} activeOpacity={0.75} disabled={confirmLoading} onPress={() => setConfirmModal(null)}>
-                  <Text style={s.modalCancelText}>Cancel</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        </View>
-      </Modal>
-    </SafeAreaView>
+      <ConfirmSheet
+        visible={confirmVisible && !!confirm}
+        onClose={() => setConfirmVisible(false)}
+        title={confirm?.title ?? ""}
+        message={confirm?.message}
+        confirmLabel={confirm?.confirmLabel ?? "Confirm"}
+        destructive={confirm?.destructive ?? false}
+        tone={confirm?.destructive ? "error" : "success"}
+        icon={confirm?.icon}
+        onConfirm={confirm?.onConfirm ?? (async () => {})}
+        fallbackErrorMessage={confirm?.fallbackErrorMessage}
+      />
+    </Screen>
   );
 }
 
-const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
-  scroll: { padding: spacing.lg, paddingBottom: 100 },
-  approvedBanner: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#D1FAE5", borderRadius: 10, paddingHorizontal: spacing.md, paddingVertical: 10, marginBottom: spacing.md, borderWidth: 1, borderColor: "#6EE7B7" },
-  approvedBannerText: { color: "#065F46", fontSize: 13, fontWeight: "600", flex: 1 },
+/** Pre-redesign green "approved" banner: fades/slides in; the X dismisses it early (it also auto-hides). */
+function ApprovedBanner({ onDismiss }: { onDismiss: () => void }) {
+  const anim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(anim, { toValue: 1, duration: 350, useNativeDriver: true }).start();
+  }, [anim]);
+  return (
+    <Animated.View
+      style={[styles.approvedBanner, { opacity: anim, transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [-8, 0] }) }] }]}
+    >
+      <Ionicons name="checkmark-circle" size={16} color={APPROVED_TEXT} />
+      <Text style={styles.approvedBannerText}>Your store has been approved! You can now go online.</Text>
+      <TouchableOpacity onPress={onDismiss} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} accessibilityRole="button" accessibilityLabel="Dismiss">
+        <Ionicons name="close" size={16} color={APPROVED_TEXT} />
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+// Literal greens kept for fidelity with the pre-redesign banner.
+const APPROVED_TEXT = "#065F46";
+const APPROVED_BG = "#D1FAE5";
+const APPROVED_BORDER = "#6EE7B7";
+
+const styles = StyleSheet.create({
+  column: { alignItems: "center" },
+  sections: { gap: spacing.xl },
+  block: { marginBottom: spacing.lg },
+  body: { fontSize: 14, lineHeight: 20, color: colors.textSecondary },
+
+  // Approved banner
+  approvedBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: APPROVED_BG,
+    borderRadius: 10,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: APPROVED_BORDER,
+  },
+  approvedBannerText: { color: APPROVED_TEXT, fontSize: 13, fontWeight: "600", flex: 1 },
 
   // Header
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.xl },
+  headerText: { flex: 1, marginRight: spacing.sm },
   greeting: { fontSize: 14, color: colors.textSecondary },
   storeName: { fontSize: 22, fontWeight: "700", color: colors.textPrimary, marginTop: 2 },
-  avatarBtn: {
-    width: 44, height: 44, borderRadius: 22,
+  headerActions: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  circleBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: colors.primaryBg,
-    alignItems: "center", justifyContent: "center",
-    borderWidth: 1.5, borderColor: colors.primary + "25",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: colors.primary + "25",
   },
   avatarText: { fontSize: 18, fontWeight: "700", color: colors.primary },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  bellBtn: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: colors.primaryBg,
-    alignItems: "center", justifyContent: "center",
-    borderWidth: 1.5, borderColor: colors.primary + "25",
-  },
   bellBadge: {
-    position: "absolute", top: 4, right: 4,
-    minWidth: 16, height: 16, borderRadius: 8,
+    position: "absolute",
+    top: 4,
+    right: 4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
     backgroundColor: colors.error,
-    alignItems: "center", justifyContent: "center",
+    alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: 3,
   },
-  bellBadgeText: { fontSize: 9, fontWeight: "700", color: "#FFFFFF" },
+  bellBadgeText: { fontSize: 9, fontWeight: "700", color: colors.onPrimary },
 
   // Stats
-  statsRow: { flexDirection: "row", gap: TILE_GAP, marginBottom: spacing.xl },
+  statsRow: { flexDirection: "row", gap: TILE_GAP, marginBottom: spacing.lg },
   statCard: {
-    flex: 1, alignItems: "center",
-    backgroundColor: colors.surface, borderRadius: radius.md,
+    flex: 1,
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     paddingVertical: spacing.md,
-    borderWidth: 1, borderColor: colors.border,
+    borderWidth: 1,
+    borderColor: colors.border,
     ...shadows.sm,
   },
   statValue: { fontSize: 20, fontWeight: "800", color: colors.textPrimary },
@@ -1035,99 +742,17 @@ const s = StyleSheet.create({
   sectionLabel: { fontSize: 14, fontWeight: "600", color: colors.textSecondary, marginBottom: spacing.md },
 
   // Tiles
-  tilesGrid: { flexDirection: "row", flexWrap: "wrap", gap: TILE_GAP, marginBottom: spacing.xl },
+  tilesGrid: { flexDirection: "row", flexWrap: "wrap", gap: TILE_GAP, marginBottom: spacing.lg },
   tile: {
-    width: TILE_WIDTH, backgroundColor: colors.surface,
-    borderRadius: radius.md, padding: spacing.lg,
-    borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
     ...shadows.sm,
   },
-  tileTop: {
-    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-    marginBottom: spacing.md,
-  },
+  tileTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.md },
+  tileIcon: { width: 36, height: 36, borderRadius: radius.sm, backgroundColor: colors.background, alignItems: "center", justifyContent: "center" },
   tileLabel: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
   tileDesc: { fontSize: 12, color: colors.textTertiary, marginTop: 2 },
-
-  // Stock card
-  stockCard: {
-    backgroundColor: colors.surface, borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1, borderColor: colors.border,
-    ...shadows.sm,
-  },
-  stockHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.md },
-  stockTitle: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
-  stockSub: { fontSize: 12, color: colors.textTertiary, marginTop: 2 },
-  stockIconBtn: {
-    width: 34, height: 34, borderRadius: radius.sm,
-    backgroundColor: colors.background,
-    alignItems: "center", justifyContent: "center",
-  },
-
-  // Search
-  searchBar: {
-    flexDirection: "row", alignItems: "center", gap: spacing.sm,
-    backgroundColor: colors.background, borderRadius: radius.sm,
-    paddingHorizontal: spacing.md, marginBottom: spacing.md,
-  },
-  searchInput: { flex: 1, paddingVertical: 10, fontSize: 14, color: colors.textPrimary },
-
-  // Stock tab bar (Packaged / Loose swipeable pager)
-  stockTabRow: {
-    flexDirection: "row", gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  stockTabBtn: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-    paddingVertical: 10, borderRadius: radius.md,
-    backgroundColor: colors.background,
-    borderWidth: 1, borderColor: colors.border,
-  },
-  stockTabBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  stockTabBtnText: { fontSize: 12, fontWeight: "700", color: colors.textSecondary },
-  stockTabBtnTextActive: { color: "#fff" },
-
-  // Stock sections (Packaged / Loose boxes)
-  stockSection: { gap: spacing.sm },
-  stockSectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", marginBottom: spacing.xs },
-  stockSectionDeleteAllBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4 },
-  stockSectionDeleteAllText: { fontSize: 11, fontWeight: "600", color: colors.error },
-  stockSectionEmptyText: { fontSize: 13, color: colors.textTertiary, paddingVertical: spacing.md },
-
-  // Product list
-  productRow: {
-    flexDirection: "row", alignItems: "center", gap: spacing.sm,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1, borderBottomColor: colors.borderLight,
-  },
-  productDot: { width: 6, height: 6, borderRadius: 3 },
-  productName: { flex: 1, fontSize: 14, fontWeight: "500", color: colors.textPrimary },
-  productUnit: { fontSize: 11, color: colors.textTertiary },
-  toggleBtn: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: radius.full, minWidth: 56, alignItems: "center" },
-  toggleBtnOn: { backgroundColor: colors.success },
-  toggleBtnOff: { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border },
-  toggleTextOn: { color: "#fff", fontSize: 11, fontWeight: "700" },
-  toggleTextOff: { color: colors.textTertiary, fontSize: 11, fontWeight: "600" },
-
-  // Empty
-  emptyStock: { alignItems: "center", paddingVertical: spacing.xxl, gap: spacing.sm },
-  emptyStockTitle: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
-  emptyStockText: { fontSize: 13, color: colors.textTertiary, textAlign: "center" },
-
-  // Modal
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
-  modalSheet: {
-    backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingHorizontal: spacing.xl, paddingTop: spacing.md, paddingBottom: 40,
-    alignItems: "center", gap: spacing.md,
-  },
-  modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: spacing.sm },
-  modalIconWrap: { width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center" },
-  modalTitle: { fontSize: 20, fontWeight: "700", color: colors.textPrimary, textAlign: "center" },
-  modalMsg: { fontSize: 14, color: colors.textSecondary, textAlign: "center", lineHeight: 20, marginBottom: spacing.sm },
-  modalConfirmBtn: { width: "100%", paddingVertical: 15, borderRadius: radius.md, alignItems: "center" },
-  modalConfirmText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  modalCancelBtn: { width: "100%", paddingVertical: 14, borderRadius: radius.md, alignItems: "center", backgroundColor: colors.background },
-  modalCancelText: { color: colors.textSecondary, fontSize: 15, fontWeight: "500" },
 });

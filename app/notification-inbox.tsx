@@ -1,12 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  View, Text, StyleSheet, TouchableOpacity, FlatList,
-  ActivityIndicator, RefreshControl, Alert,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing, shadows } from '../lib/theme';
+import { colors, spacing } from '../lib/theme';
+import { useLayout, useBottomPadding } from '../lib/useLayout';
 import { getSession } from '../session';
 import { apiClient } from '../lib/api-client';
 import { useRequireStoreApproval } from '../lib/useRequireStoreApproval';
@@ -17,10 +13,23 @@ import {
   persistNotifications,
   type CachedNotification,
 } from '../lib/notificationsCache';
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  InlineNotice,
+  Screen,
+  Skeleton,
+  TopBar,
+  useToast,
+  type IoniconName,
+} from '../components/ui';
+import { GroupedRow, NotificationRow } from '../components/profile';
 
 type AppNotification = CachedNotification;
 
-const TYPE_ICON: Record<string, React.ComponentProps<typeof Ionicons>['name']> = {
+const TYPE_ICON: Record<string, IoniconName> = {
   new_order: 'bag-check-outline',
 };
 
@@ -36,6 +45,9 @@ function timeAgo(iso: string): string {
 
 export default function NotificationInboxScreen() {
   useRequireStoreApproval();
+  const { contentWidth } = useLayout();
+  const paddingBottom = useBottomPadding();
+  const toast = useToast();
   // Read fresh on every mount (cheap synchronous in-memory read) — not
   // module-scoped, since a module-level const would only ever capture
   // whatever was cached the very first time this route was imported and
@@ -43,7 +55,7 @@ export default function NotificationInboxScreen() {
   // session. Seeds the very first render with whatever
   // hydrateNotificationsCache() warmed at splash (app/index.tsx), instead of
   // every visit blocking on getSession() + a network round-trip behind a
-  // blank spinner.
+  // blank skeleton.
   const [cachedNotifications] = useState(() => peekNotifications());
   const [token, setToken] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<AppNotification[]>(cachedNotifications ?? []);
@@ -83,20 +95,24 @@ export default function NotificationInboxScreen() {
 
   useEffect(() => {
     (async () => {
-      const s: any = await getSession();
+      const s = await getSession();
       if (!s?.token) { router.replace('/landing'); return; }
       setToken(s.token);
       // Cache already showing real content (if any) — this is a background
-      // refresh, not the thing the spinner is gating.
-      fetchNotifications(s.token, !!cachedNotifications);
+      // refresh, not the thing the skeleton is gating.
+      void fetchNotifications(s.token, !!cachedNotifications);
     })();
-  }, [fetchNotifications]);
+  }, [fetchNotifications, cachedNotifications]);
 
   const onRefresh = useCallback(async () => {
     if (!token) return;
     setRefreshing(true);
     await fetchNotifications(token, true);
     setRefreshing(false);
+  }, [token, fetchNotifications]);
+
+  const retry = useCallback(() => {
+    if (token) void fetchNotifications(token);
   }, [token, fetchNotifications]);
 
   const markAllRead = useCallback(async () => {
@@ -108,7 +124,7 @@ export default function NotificationInboxScreen() {
     const next = previous.map((n) => ({ ...n, is_read: true }));
     noteNotificationsReadMutation();
     setNotifications(next);
-    persistNotifications(next);
+    void persistNotifications(next);
     try {
       const res = await apiClient.put('/store-owner/notifications/read-all', undefined, {
         Authorization: `Bearer ${token}`,
@@ -117,10 +133,10 @@ export default function NotificationInboxScreen() {
     } catch (error) {
       if (__DEV__) console.warn('[notification-inbox] Mark all read failed', error);
       setNotifications(previous);
-      persistNotifications(previous);
-      Alert.alert("Couldn't mark all as read", 'Please check your connection and try again.');
+      void persistNotifications(previous);
+      toast.show({ message: "Couldn't mark all as read. Check your connection and try again.", tone: 'error' });
     }
-  }, [token, notifications]);
+  }, [token, notifications, toast]);
 
   const markOneRead = useCallback(async (id: string) => {
     if (!token) return;
@@ -128,7 +144,7 @@ export default function NotificationInboxScreen() {
     const next = previous.map((n) => (n.id === id ? { ...n, is_read: true } : n));
     noteNotificationsReadMutation();
     setNotifications(next);
-    persistNotifications(next);
+    void persistNotifications(next);
     try {
       const res = await apiClient.put(`/store-owner/notifications/${id}/read`, undefined, {
         Authorization: `Bearer ${token}`,
@@ -137,14 +153,14 @@ export default function NotificationInboxScreen() {
     } catch (error) {
       if (__DEV__) console.warn('[notification-inbox] Mark one read failed', error);
       setNotifications(previous);
-      persistNotifications(previous);
-      Alert.alert("Couldn't mark as read", 'Please check your connection and try again.');
+      void persistNotifications(previous);
+      toast.show({ message: "Couldn't mark as read. Check your connection and try again.", tone: 'error' });
     }
-  }, [token, notifications]);
+  }, [token, notifications, toast]);
 
   const openNotification = useCallback(
     (item: AppNotification) => {
-      markOneRead(item.id);
+      void markOneRead(item.id);
       // No single-order detail screen exists in this app — orders live only
       // as rows within the Orders tab's incoming/active/previous lists — so
       // the deep link is "go to the tab that actually shows it" rather than
@@ -158,122 +174,97 @@ export default function NotificationInboxScreen() {
   );
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
+  const hasContent = notifications.length > 0;
+  const showSkeleton = loading && !hasContent;
+  const showError = !loading && loadError && !hasContent;
 
-  if (loading) {
-    return (
-      <SafeAreaView style={st.safe}>
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator color={colors.primary} />
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const renderItem = useCallback(
+    ({ item, index }: { item: AppNotification; index: number }) => (
+      <GroupedRow first={index === 0} last={index === notifications.length - 1}>
+        <NotificationRow
+          icon={TYPE_ICON[item.type] ?? 'notifications-outline'}
+          title={item.title}
+          message={item.message}
+          time={timeAgo(item.created_at)}
+          unread={!item.is_read}
+          showSeparator={index < notifications.length - 1}
+          onPress={() => openNotification(item)}
+        />
+      </GroupedRow>
+    ),
+    [notifications.length, openNotification]
+  );
 
   return (
-    <SafeAreaView style={st.safe}>
-      <View style={st.header}>
-        <TouchableOpacity onPress={() => router.back()} style={st.backBtn}>
-          <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
-        </TouchableOpacity>
-        <Text style={st.title}>Notifications</Text>
-        {unreadCount > 0 ? (
-          <TouchableOpacity onPress={markAllRead}>
-            <Text style={st.markAll}>Mark all read</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={{ width: 40 }} />
-        )}
-      </View>
+    <Screen>
+      <TopBar
+        title="Inbox"
+        backHref="/(tabs)/home"
+        right={
+          <Button
+            label="Mark all read"
+            variant="text"
+            size="sm"
+            onPress={markAllRead}
+            disabled={unreadCount === 0 || !token}
+            accessibilityLabel="Mark all notifications as read"
+          />
+        }
+      />
 
       <FlatList
         data={notifications}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={st.list}
+        renderItem={renderItem}
+        contentContainerStyle={[styles.list, { width: contentWidth, paddingBottom }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+            enabled={!!token}
+          />
+        }
+        ListHeaderComponent={
+          loadError && hasContent ? (
+            <View style={styles.header}>
+              <InlineNotice
+                tone="warning"
+                title="Couldn't refresh"
+                message="Showing saved data"
+                action={{ label: 'Retry', onPress: retry }}
+              />
+            </View>
+          ) : null
         }
         ListEmptyComponent={
-          loadError ? (
-            <View style={st.empty}>
-              <Ionicons name="alert-circle-outline" size={48} color={colors.error} />
-              <Text style={st.emptyTitle}>Couldn&apos;t load notifications</Text>
-              <Text style={st.emptyText}>Check your connection and try again.</Text>
-              <TouchableOpacity
-                style={st.retryBtn}
-                onPress={() => token && fetchNotifications(token)}
-              >
-                <Text style={st.retryBtnText}>Try Again</Text>
-              </TouchableOpacity>
-            </View>
+          showSkeleton ? (
+            <Card padded={false}>
+              <Skeleton.ListRow count={6} />
+            </Card>
+          ) : showError ? (
+            <ErrorState
+              icon="cloud-offline-outline"
+              title="Couldn't load notifications"
+              message="Check your connection and try again."
+              action={{ onPress: retry, loading }}
+            />
           ) : (
-            <View style={st.empty}>
-              <Ionicons name="notifications-outline" size={48} color={colors.textTertiary} />
-              <Text style={st.emptyTitle}>No notifications yet</Text>
-              <Text style={st.emptyText}>New order alerts will appear here</Text>
-            </View>
+            <EmptyState
+              icon="notifications-outline"
+              title="You're all caught up"
+              message="New order alerts will appear here."
+            />
           )
         }
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={[st.card, !item.is_read && st.cardUnread]}
-            activeOpacity={0.7}
-            onPress={() => openNotification(item)}
-          >
-            <View style={st.iconWrap}>
-              <Ionicons name={TYPE_ICON[item.type] ?? 'notifications-outline'} size={18} color={colors.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <View style={st.cardHeaderRow}>
-                <Text style={st.cardTitle} numberOfLines={1}>{item.title}</Text>
-                {!item.is_read && <View style={st.dot} />}
-              </View>
-              <Text style={st.cardMessage} numberOfLines={2}>{item.message}</Text>
-              <Text style={st.cardTime}>{timeAgo(item.created_at)}</Text>
-            </View>
-          </TouchableOpacity>
-        )}
       />
-    </SafeAreaView>
+    </Screen>
   );
 }
 
-const st = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
-    backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
-  backBtn: { width: 40, height: 40, borderRadius: radius.md, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
-  markAll: { fontSize: 13, fontWeight: '600', color: colors.primary },
-
-  list: { padding: spacing.lg, paddingBottom: 60, gap: spacing.sm },
-
-  card: {
-    flexDirection: 'row', gap: spacing.md,
-    backgroundColor: colors.surface, borderRadius: radius.md,
-    borderWidth: 1, borderColor: colors.border, padding: spacing.md,
-    ...shadows.sm,
-  },
-  cardUnread: { backgroundColor: colors.surfaceVariant },
-  iconWrap: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center',
-  },
-  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  cardTitle: { fontSize: 14, fontWeight: '700', color: colors.textPrimary, flexShrink: 1 },
-  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.primary },
-  cardMessage: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
-  cardTime: { fontSize: 11, color: colors.textTertiary, marginTop: 6 },
-
-  empty: { marginTop: 80, alignItems: 'center', gap: 10, padding: 32 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
-  emptyText: { fontSize: 13, color: colors.textSecondary, textAlign: 'center' },
-  retryBtn: {
-    backgroundColor: colors.error, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
-    marginTop: spacing.md, borderRadius: radius.md,
-  },
-  retryBtnText: { color: '#fff', fontWeight: '600' },
+const styles = StyleSheet.create({
+  list: { flexGrow: 1, alignSelf: 'center', paddingTop: spacing.lg },
+  header: { paddingBottom: spacing.lg },
 });

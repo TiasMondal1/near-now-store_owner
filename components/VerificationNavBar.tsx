@@ -1,71 +1,68 @@
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import React, { useCallback } from "react";
+import { StyleProp, StyleSheet, View, ViewStyle } from "react-native";
 import { router } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
-import { colors, spacing, radius } from "../lib/theme";
+import { SegmentedControl, type SegmentItem } from "./ui";
+import { colors, spacing } from "../lib/theme";
+import { useLayout } from "../lib/useLayout";
 
 type TabKey = "details" | "status" | "documents" | "billing";
+type TabRoute = "/store-owner-signup" | "/pending-verification" | "/upload-documents" | "/billing-info";
 
-const TABS: {
-  key: TabKey;
-  label: string;
-  icon: React.ComponentProps<typeof Ionicons>["name"];
-  route: "/store-owner-signup" | "/pending-verification" | "/upload-documents" | "/billing-info";
-}[] = [
-  { key: "details", label: "Details", icon: "person-outline", route: "/store-owner-signup" },
-  { key: "status", label: "Status", icon: "hourglass-outline", route: "/pending-verification" },
-  { key: "documents", label: "Documents", icon: "document-text-outline", route: "/upload-documents" },
-  { key: "billing", label: "Billing", icon: "card-outline", route: "/billing-info" },
+/**
+ * Flow order: Details → Documents → Billing → Status. The Status tab is last
+ * because it summarises the other three.
+ */
+const TABS: readonly (SegmentItem<TabKey> & { route: TabRoute })[] = [
+  { key: "details", label: "Details", route: "/store-owner-signup" },
+  { key: "documents", label: "Documents", route: "/upload-documents" },
+  { key: "billing", label: "Billing", route: "/billing-info" },
+  { key: "status", label: "Status", route: "/pending-verification" },
 ];
+
+const ITEMS: readonly SegmentItem<TabKey>[] = TABS.map(({ key, label }) => ({ key, label }));
+
+export type VerificationNavBarProps = {
+  active: TabKey;
+  style?: StyleProp<ViewStyle>;
+};
 
 /**
  * Lets a shopkeeper who has completed signup (but isn't yet verified) freely
- * jump between their submitted details, verification status, and document
- * uploads — mirrors the rider app's own VerificationNavBar exactly. Only
- * rendered post-signup; the pre-signup form itself never shows it.
+ * jump between their submitted details, document uploads, billing details
+ * and verification status. Tabs `router.replace` so the stack stays flat;
+ * tapping the active tab is a no-op. Only rendered post-signup, and only
+ * while the store is still unapproved — the bar pads itself so it can sit
+ * fixed directly under a `TopBar`.
  */
-export default function VerificationNavBar({ active }: { active: TabKey }) {
+export default function VerificationNavBar({ active, style }: VerificationNavBarProps) {
+  const { gutter } = useLayout();
+
+  const handleChange = useCallback(
+    (key: TabKey) => {
+      if (key === active) return;
+      const tab = TABS.find((t) => t.key === key);
+      if (tab) router.replace(tab.route);
+    },
+    [active]
+  );
+
   return (
-    <View style={styles.bar}>
-      {TABS.map((tab) => {
-        const isActive = tab.key === active;
-        return (
-          <TouchableOpacity
-            key={tab.key}
-            style={[styles.tab, isActive && styles.tabActive]}
-            onPress={() => {
-              if (!isActive) router.replace(tab.route);
-            }}
-            activeOpacity={0.7}
-          >
-            <Ionicons name={tab.icon} size={16} color={isActive ? colors.primary : colors.textTertiary} />
-            <Text style={[styles.tabText, isActive && styles.tabTextActive]}>{tab.label}</Text>
-          </TouchableOpacity>
-        );
-      })}
+    <View style={[styles.bar, { paddingHorizontal: gutter }]}>
+      <SegmentedControl<TabKey>
+        items={ITEMS}
+        value={active}
+        onChange={handleChange}
+        size="sm"
+        accessibilityLabel="Verification steps"
+        style={style}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   bar: {
-    flexDirection: "row",
-    backgroundColor: colors.surface,
-    borderRadius: radius.full,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 4,
-    marginBottom: spacing.lg,
+    backgroundColor: colors.background,
+    paddingTop: spacing.md,
   },
-  tab: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 5,
-    paddingVertical: 8,
-    borderRadius: radius.full,
-  },
-  tabActive: { backgroundColor: colors.primaryBg },
-  tabText: { fontSize: 12, fontWeight: "600", color: colors.textTertiary },
-  tabTextActive: { color: colors.primary },
 });

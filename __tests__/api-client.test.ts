@@ -79,6 +79,64 @@ describe("ApiClient.request", () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores a 401 carrying a STALE token so it can't wipe a newer session", async () => {
+    // Account B is now logged in (in-memory session) — a poll still holding
+    // account A's token resolves with 401. B must stay signed in.
+    const { saveSession } = require("../session") as typeof import("../session");
+    await saveSession({
+      token: "token-B",
+      user: { id: "uB", name: "B", role: "shopkeeper", isActivated: true },
+    });
+
+    global.fetch = jest.fn().mockResolvedValue(jsonResponse(401, { error: "expired" }));
+
+    const res = await apiClient.get("/shopkeeper/orders", { Authorization: "Bearer token-A" });
+
+    expect(res.success).toBe(false);
+    expect(mockRouterReplace).not.toHaveBeenCalled();
+    expect(mockSecureStore["nearandnow_shopkeeper_token"]).toBe("token-B");
+    expect(mockStore["nearandnow_session"]).toBeDefined();
+
+    // …but a 401 for the CURRENT token still logs out.
+    const res2 = await apiClient.get("/shopkeeper/orders", { Authorization: "Bearer token-B" });
+    expect(res2.success).toBe(false);
+    expect(mockRouterReplace).toHaveBeenCalledWith("/landing");
+    expect(mockSecureStore["nearandnow_shopkeeper_token"]).toBeUndefined();
+  });
+
+  it("does NOT retry non-idempotent methods (POST/PUT/PATCH/DELETE) by default", async () => {
+    jest.useFakeTimers();
+    global.fetch = jest.fn().mockResolvedValue(jsonResponse(500, { message: "boom" }));
+
+    const p1 = apiClient.post("/support/message", { text: "hi" });
+    await jest.runAllTimersAsync();
+    await p1;
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    (global.fetch as jest.Mock).mockClear();
+    const p2 = apiClient.patch("/store-owner/stores/s1/online", { is_active: true });
+    await jest.runAllTimersAsync();
+    await p2;
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    // GET keeps the default retry budget (1 + 2 retries).
+    (global.fetch as jest.Mock).mockClear();
+    const p3 = apiClient.get("/shopkeeper/orders");
+    await jest.runAllTimersAsync();
+    await p3;
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports a timed-out request as 'Request timeout', not 'Aborted'", async () => {
+    const abortErr = Object.assign(new Error("Aborted"), { name: "AbortError" });
+    global.fetch = jest.fn().mockRejectedValue(abortErr);
+
+    const res = await apiClient.request("/slow", { retries: 0 });
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe("Request timeout");
+  });
+
   it("returns success with parsed data on 200", async () => {
     global.fetch = jest.fn().mockResolvedValue(jsonResponse(200, { hello: "world" }));
 

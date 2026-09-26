@@ -30,8 +30,12 @@ export type StoreProductWithName = StoreProductRow & { name: string };
  */
 async function isStoreApprovedForWrite(storeId: string): Promise<boolean> {
   if (!supabase) return false;
-  const { data } = await supabase.from("stores").select("is_approved").eq("id", storeId).maybeSingle();
-  return data?.is_approved !== false;
+  const { data, error } = await supabase.from("stores").select("is_approved").eq("id", storeId).maybeSingle();
+  // Fail closed: a read error or a row we're not allowed to see must not be
+  // treated as "approved" — that was exactly the case (RLS blocking the read)
+  // in which this guard is supposed to hold.
+  if (error || !data) return false;
+  return data.is_approved === true;
 }
 
 /**
@@ -67,12 +71,12 @@ export async function getStoreProductsFromDb(
 
 /** Fetch master_products from DB (for names and units). Falls back to empty if not available. */
 export async function getMasterProductsFromDb(): Promise<
-  Array<{ id: string; name: string; unit?: string; is_loose?: boolean }>
+  { id: string; name: string; unit?: string; is_loose?: boolean; image_url?: string | null }[]
 > {
   if (!supabase) return [];
-  const { data, error } = await supabase.from("master_products").select("id, name, unit, is_loose");
+  const { data, error } = await supabase.from("master_products").select("id, name, unit, is_loose, image_url");
   if (error) return [];
-  return (data ?? []) as Array<{ id: string; name: string; unit?: string; is_loose?: boolean }>;
+  return (data ?? []) as { id: string; name: string; unit?: string; is_loose?: boolean; image_url?: string | null }[];
 }
 
 // Cached join select — avoids re-probing both variants on every call.
@@ -87,8 +91,9 @@ function mapJoinRows(rows: any[], select: string): StoreProductWithName[] {
     const resolvedName = (fromMaster && String(fromMaster).trim()) || row.name || "Product";
     const unitFromMaster = rel?.unit ? String(rel.unit) : "";
     const isLoose = rel?.is_loose === true;
+    const imageUrl = rel?.image_url ? String(rel.image_url) : null;
     const { master_products, master_product, ...rest } = row;
-    return { ...rest, name: resolvedName, unit: unitFromMaster, is_loose: isLoose } as StoreProductWithName;
+    return { ...rest, name: resolvedName, unit: unitFromMaster, is_loose: isLoose, image_url: imageUrl } as StoreProductWithName;
   });
 }
 
@@ -102,8 +107,8 @@ export async function getStoreProductsWithNames(
   if (!supabase) return [];
 
   const allSelects = [
-    "id, store_id, master_product_id, is_active, name, phone, master_products(name, unit, is_loose)",
-    "id, store_id, master_product_id, is_active, name, phone, master_product(name, unit, is_loose)",
+    "id, store_id, master_product_id, is_active, name, phone, master_products(name, unit, is_loose, image_url)",
+    "id, store_id, master_product_id, is_active, name, phone, master_product(name, unit, is_loose, image_url)",
   ];
   // Put the cached winner first so we skip the probe on warm calls
   const toTry = _workingJoinSelect
@@ -140,7 +145,9 @@ export async function getStoreProductsWithNames(
   const nameByMasterId: Record<string, string> = {};
   const unitByMasterId: Record<string, string> = {};
   const isLooseByMasterId: Record<string, boolean> = {};
+  const imageByMasterId: Record<string, string> = {};
   masterList.forEach((m) => {
+    if (m.image_url) imageByMasterId[String(m.id)] = String(m.image_url);
     const n = (m as any).name ?? (m as any).product_name;
     const nameStr = n && String(n).trim() ? String(n).trim() : "";
     if (nameStr) nameByMasterId[String(m.id)] = nameStr;
@@ -157,6 +164,7 @@ export async function getStoreProductsWithNames(
       name: name && String(name).trim() ? String(name).trim() : "Product",
       unit: unitByMasterId[key] || "",
       is_loose: isLooseByMasterId[key] === true,
+      image_url: imageByMasterId[key] ?? null,
     } as StoreProductWithName;
   });
 }
@@ -164,7 +172,7 @@ export async function getStoreProductsWithNames(
 /** Your stock list: id, name, unit, is_active, is_loose for main page */
 export async function getStockListFromDb(
   storeId: string
-): Promise<Array<{ id: string; name: string; unit: string; storeProductId: string; is_active: boolean; is_loose: boolean }>> {
+): Promise<{ id: string; name: string; unit: string; storeProductId: string; is_active: boolean; is_loose: boolean; image_url: string | null }[]> {
   const rows = await getStoreProductsWithNames(storeId);
   return rows.map((r) => {
     const rawName = r.name ?? (r as any).product_name;
@@ -176,6 +184,7 @@ export async function getStockListFromDb(
       unit: (r as any).unit || "",
       is_active: r.is_active !== false,
       is_loose: (r as any).is_loose === true,
+      image_url: (r as any).image_url ? String((r as any).image_url) : null,
     };
   });
 }
@@ -230,11 +239,15 @@ export async function upsertStoreProduct(
     };
     if (storeName) updatePayload.name = storeName;
     if (ownerPhone) updatePayload.phone = ownerPhone;
-    const { error: updateErr } = await supabase
+    // .select() so an RLS-filtered update (0 rows touched, no error) is
+    // reported as a failure instead of a phantom success.
+    const { data: updatedRows, error: updateErr } = await supabase
       .from("products")
       .update(updatePayload)
-      .eq("id", existing.id);
+      .eq("id", existing.id)
+      .select("id");
     if (updateErr) return { error: updateErr.message };
+    if (!updatedRows || updatedRows.length === 0) return { error: "Product update was not applied" };
     return { id: existing.id };
   }
 
@@ -416,15 +429,23 @@ export async function updateProductActiveState(
   authToken?: string | null
 ): Promise<boolean> {
   if (supabase) {
-    const { error } = await supabase
+    // .select() is what makes a silently-filtered update (RLS denies the row
+    // → 0 rows, error null) detectable. Without it this returned true, the UI
+    // showed the toggle flipped, and the next poll reverted it with no error
+    // and without ever trying the backend fallback below.
+    const { data, error } = await supabase
       .from("products")
       .update({
         is_active: isActive,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", storeProductId);
-    if (!error) return true;
-    console.warn("[updateProductActiveState] Supabase error:", error.message);
+      .eq("id", storeProductId)
+      .select("id");
+    if (!error && data && data.length > 0) return true;
+    console.warn(
+      "[updateProductActiveState] Supabase update not applied:",
+      error?.message ?? "0 rows matched"
+    );
   }
 
   if (authToken) {
@@ -563,8 +584,8 @@ export async function getMasterProductsPage({
   search?: string;
   from: number;
   pageSize?: number;
-}): Promise<{ data: any[]; hasMore: boolean }> {
-  if (!supabase) return { data: [], hasMore: false };
+}): Promise<{ data: any[]; hasMore: boolean; failed: boolean }> {
+  if (!supabase) return { data: [], hasMore: false, failed: true };
 
   let query = supabase
     .from("master_products")
@@ -581,11 +602,21 @@ export async function getMasterProductsPage({
 
   const trimmed = search?.trim() ?? "";
   if (trimmed.length > 0) {
-    query = query.or(`name.ilike.%${trimmed}%,brand.ilike.%${trimmed}%`);
+    // The .or() argument is a PostgREST filter *grammar* string, so raw user
+    // input containing `,` `(` `)` or `.` would change the query (e.g.
+    // `x,is_active.eq.false`). Strip grammar characters and LIKE wildcards
+    // before interpolating.
+    const safe = trimmed.replace(/[,().%_\\"']/g, " ").replace(/\s+/g, " ").trim();
+    if (safe.length > 0) {
+      query = query.or(`name.ilike.%${safe}%,brand.ilike.%${safe}%`);
+    }
   }
 
   const { data, error } = await query;
-  if (error || !data) return { data: [], hasMore: false };
+  // `failed` lets the Inventory screen tell "no matches" from "the request
+  // failed" — both used to come back as an identical empty page, so a
+  // network error rendered as "No products found / Try a different search".
+  if (error || !data) return { data: [], hasMore: false, failed: true };
 
   return {
     data: (data as any[]).map((mp) => ({
@@ -593,6 +624,7 @@ export async function getMasterProductsPage({
       price: mp.base_price ?? mp.discounted_price ?? 0,
     })),
     hasMore: data.length === pageSize,
+    failed: false,
   };
 }
 

@@ -1,10 +1,12 @@
 import React from "react";
-import { Text, View, TouchableOpacity, StyleSheet } from "react-native";
+import { ScrollView, StyleSheet, View } from "react-native";
 import { Stack } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { errorHandler, wrapRootComponent } from "../lib/error-handler";
 import { useReviewOutcomeGate } from "../lib/useReviewOutcomeGate";
 import ReviewOutcomeModal from "../components/ReviewOutcomeModal";
+import { ErrorState, ToastProvider } from "../components/ui";
+import { colors, layout, spacing } from "../lib/theme";
 
 // ─── Crash/error monitoring (Sentry) ──────────────────────────────────────────
 // Safe no-op when EXPO_PUBLIC_SENTRY_DSN is not configured.
@@ -28,34 +30,35 @@ class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
   BoundaryState
 > {
-  constructor(props: any) {
+  constructor(props: { children: React.ReactNode }) {
     super(props);
     this.state = { hasError: false, message: "" };
   }
 
-  static getDerivedStateFromError(error: any): BoundaryState {
-    return {
-      hasError: true,
-      message: error?.message ?? String(error) ?? "Unknown error",
-    };
+  static getDerivedStateFromError(error: unknown): BoundaryState {
+    const message = error instanceof Error ? error.message : String(error);
+    return { hasError: true, message: message || "Unknown error" };
   }
 
-  componentDidCatch(error: any, info: any) {
-    if (__DEV__) console.error("[ErrorBoundary]", error, info?.componentStack);
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    if (__DEV__) console.error("[ErrorBoundary]", error, info.componentStack);
   }
+
+  reset = () => this.setState({ hasError: false, message: "" });
 
   render() {
     if (this.state.hasError) {
       return (
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorTitle}>Something went wrong</Text>
-          <Text style={styles.errorMessage}>{this.state.message}</Text>
-          <TouchableOpacity
-            style={styles.retryButton}
-            onPress={() => this.setState({ hasError: false, message: "" })}
-          >
-            <Text style={styles.retryText}>Retry</Text>
-          </TouchableOpacity>
+        <View style={styles.errorRoot}>
+          <ScrollView contentContainerStyle={styles.errorScroll} bounces={false}>
+            <View style={styles.errorColumn}>
+              <ErrorState
+                title="Something went wrong"
+                message={this.state.message}
+                action={{ label: "Try again", onPress: this.reset }}
+              />
+            </View>
+          </ScrollView>
         </View>
       );
     }
@@ -64,38 +67,9 @@ class ErrorBoundary extends React.Component<
 }
 
 const styles = StyleSheet.create({
-  errorContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 32,
-    backgroundColor: "#fff",
-  },
-  errorTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#ef4444",
-    marginBottom: 12,
-    textAlign: "center",
-  },
-  errorMessage: {
-    fontSize: 13,
-    color: "#6b7280",
-    textAlign: "center",
-    marginBottom: 24,
-    lineHeight: 20,
-  },
-  retryButton: {
-    backgroundColor: "#16a34a",
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  retryText: {
-    color: "#fff",
-    fontSize: 15,
-    fontWeight: "600",
-  },
+  errorRoot: { flex: 1, backgroundColor: colors.background },
+  errorScroll: { flexGrow: 1, justifyContent: "center", paddingHorizontal: layout.gutter, paddingVertical: spacing.xxl },
+  errorColumn: { width: "100%", maxWidth: layout.maxFormWidth, alignSelf: "center" },
 });
 
 function RootLayout() {
@@ -108,15 +82,17 @@ function RootLayout() {
   return (
     <SafeAreaProvider>
       <ErrorBoundary>
-        <Stack
-          screenOptions={({ route }) => ({
-            headerShown: false,
-            animation: "default",
-            // Logged-in main shell: do not swipe back into landing/login
-            gestureEnabled: route.name !== "(tabs)",
-          })}
-        />
-        <ReviewOutcomeModal outcome={outcome} onDismiss={dismiss} />
+        <ToastProvider>
+          <Stack
+            screenOptions={({ route }) => ({
+              headerShown: false,
+              animation: "default",
+              // Logged-in main shell: do not swipe back into landing/login
+              gestureEnabled: route.name !== "(tabs)",
+            })}
+          />
+          <ReviewOutcomeModal outcome={outcome} onDismiss={dismiss} />
+        </ToastProvider>
       </ErrorBoundary>
     </SafeAreaProvider>
   );

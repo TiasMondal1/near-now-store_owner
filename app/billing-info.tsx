@@ -1,77 +1,102 @@
-import React, { useEffect, useRef, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Alert,
-  TextInput,
-  ActivityIndicator,
-  Image,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { Stack, router } from "expo-router";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Stack, router, type Href } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
-import * as ImagePicker from "expo-image-picker";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Ionicons } from "@expo/vector-icons";
-import { getSession } from "../session";
-import { colors, radius, spacing, shadows } from "../lib/theme";
+import { colors, spacing, typography } from "../lib/theme";
+import { useBottomPadding, useLayout } from "../lib/useLayout";
+import { goBackOr, useHardwareBackTo } from "../lib/navigation";
+import { useSelectedStore } from "../lib/useSelectedStore";
 import { config } from "../lib/config";
-import { clearStoreCache, forceFetchStores, peekStores } from "../lib/appCache";
-import { uploadOwnerImage, OWNER_IMAGE_KEY } from "../lib/storage";
-import { fetchBillingInfo, saveBillingInfo, type BillingInfo, type PickedBillingFile } from "../lib/billingInfo";
+import { forceFetchStores } from "../lib/appCache";
+import { fetchBillingInfo, saveBillingInfo, type BillingInfo } from "../lib/billingInfo";
 import VerificationNavBar from "../components/VerificationNavBar";
 import { useSmartPoll } from "../lib/useSmartPoll";
+import { OwnerAvatar } from "../components/signup/OwnerAvatar";
+import { useOwnerPhoto } from "../components/profile/useOwnerPhoto";
+import {
+  ActionSheet,
+  Button,
+  Card,
+  ErrorState,
+  InlineNotice,
+  KeyValueRow,
+  Screen,
+  Skeleton,
+  StickyFooter,
+  TextField,
+  TopBar,
+  useToast,
+} from "../components/ui";
+import {
+  IMAGE_FORMATS_HINT,
+  UploadDropzone,
+  accountNumberError,
+  hasBillingChange,
+  ifscCodeError,
+  pendingBillingChangeLines,
+  usePassbookPicker,
+  type PendingBillingChangeRequest,
+} from "../components/kyc";
 
 const API_BASE = config.API_BASE;
 
-const CHANGE_FIELD_LABELS: Record<string, string> = {
-  bank_account_number: "Bank Account Number",
-  bank_ifsc_code: "IFSC Code",
-  bank_branch_name: "Bank Branch",
-  bank_passbook_storage_path: "Passbook/Cheque Photo",
-};
-const BILLING_FIELDS = new Set(Object.keys(CHANGE_FIELD_LABELS));
-
-type PendingChangeRequest = { changes: Record<string, { old: string | null; new: string }> } | null;
+type SaveNotice = { title: string; message: string; nextStep?: boolean };
 
 export default function BillingInfoScreen() {
-  const cachedStoreId = peekStores()?.[0]?.id ?? null;
-  const [loading, setLoading] = useState(!cachedStoreId);
-  const [storeId, setStoreId] = useState<string | null>(cachedStoreId);
-  const [token, setToken] = useState<string | null>(null);
+  // The store comes from the shared hook (selected_store_id → cache → network).
+  // The form itself stays a skeleton until fetchBillingInfo has filled it (or
+  // failed), so a late applyBillingInfo can never clobber something being typed.
+  const { session, store, storeId, loading: storeLoading, retry: retryStore } = useSelectedStore();
+  const token = session?.token ?? null;
+  const isApproved = !!store?.is_approved;
+
+  // The billing fetch has settled (successfully or not) for this store.
+  const [infoSettled, setInfoSettled] = useState(false);
+  // The billing fetch has succeeded at least once — lets the useFocusEffect
+  // below self-heal a failed first fetch on the next focus.
+  const [infoFetched, setInfoFetched] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   const [ownerName, setOwnerName] = useState<string | null>(null);
-  const [ownerImageUrl, setOwnerImageUrl] = useState<string | null>(null);
-  const [uploadingOwnerImage, setUploadingOwnerImage] = useState(false);
+  // One-time KYC photo: picker → upload → PATCH, locked once set.
+  const ownerPhoto = useOwnerPhoto(session, storeId ?? undefined);
 
   const [accountNumber, setAccountNumber] = useState("");
   const [ifscCode, setIfscCode] = useState("");
   const [branchName, setBranchName] = useState("");
-  const [passbookUri, setPassbookUri] = useState<string | null>(null);
-  const [pendingPassbookFile, setPendingPassbookFile] = useState<PickedBillingFile | null>(null);
   const [saving, setSaving] = useState(false);
-  const [pendingChangeRequest, setPendingChangeRequest] = useState<PendingChangeRequest>(null);
-  // Tracks whether the billing-info fetch has ever succeeded — lets the
-  // useFocusEffect below self-heal a failed first fetch (e.g. cold-start
-  // network blip) the moment this screen regains focus, instead of leaving
-  // Bank Details stuck blank with no recovery until a full remount.
-  const infoFetchedRef = useRef(false);
+  const [pendingChangeRequest, setPendingChangeRequest] = useState<PendingBillingChangeRequest>(null);
+  const [saveNotice, setSaveNotice] = useState<SaveNotice | null>(null);
+  // Validation errors appear once a field has been touched or a submit was attempted.
+  const [touched, setTouched] = useState<{ account: boolean; ifsc: boolean }>({ account: false, ifsc: false });
 
-  const loadPendingChangeRequest = async (t: string, sId: string) => {
+  const clearSaveNotice = useCallback(() => setSaveNotice(null), []);
+  const passbook = usePassbookPicker({ onStaged: clearSaveNotice });
+
+  const accountRef = useRef<TextInput>(null);
+  const ifscRef = useRef<TextInput>(null);
+  const branchRef = useRef<TextInput>(null);
+  const scrollRef = useRef<ScrollView>(null);
+
+  const { gutter, contentWidth } = useLayout();
+  const paddingBottom = useBottomPadding();
+  const toast = useToast();
+
+  const backFallback: Href = isApproved ? "/(tabs)/home" : "/pending-verification";
+  useHardwareBackTo(backFallback);
+
+  // ── Loading ────────────────────────────────────────────────────────────────
+
+  const loadPendingChangeRequest = useCallback(async (t: string, sId: string) => {
     try {
       const res = await fetch(`${API_BASE}/store-owner/stores/${sId}/profile-change-request`, {
         headers: { Authorization: `Bearer ${t}` },
       });
       const json = await res.json().catch(() => null);
-      // profile.tsx's identity-field edits (name/address/phone) share this
-      // same request queue — only surface it here if it actually contains a
-      // billing field, otherwise this screen would show a "pending review"
-      // banner for a change it has nothing to do with.
-      const req = json?.request as PendingChangeRequest;
-      if (req && Object.keys(req.changes).some((f) => BILLING_FIELDS.has(f))) {
+      // profile.tsx's identity-field edits share this request queue — only
+      // surface it here if it actually contains a billing field.
+      const req = json?.request as PendingBillingChangeRequest;
+      if (req && hasBillingChange(req.changes)) {
         setPendingChangeRequest(req);
       } else {
         setPendingChangeRequest(null);
@@ -79,547 +104,337 @@ export default function BillingInfoScreen() {
     } catch {
       /* non-fatal — banner just doesn't show */
     }
-  };
-
-  const applyBillingInfo = (info: BillingInfo) => {
-    infoFetchedRef.current = true;
-    setOwnerName(info.ownerName);
-    setOwnerImageUrl(info.ownerImageUrl);
-    setAccountNumber(info.bankAccountNumber ?? "");
-    setIfscCode(info.bankIfscCode ?? "");
-    setBranchName(info.bankBranchName ?? "");
-    setPassbookUri(info.passbookUrl);
-  };
-
-  const loadBillingInfo = async () => {
-    const session = await getSession();
-    if (!session?.token) {
-      router.replace("/landing");
-      return;
-    }
-    setToken(session.token);
-
-    // Always hit the network for the real, current store — a stale cached
-    // entry (e.g. a wrong/blank name persisted from an earlier session)
-    // would otherwise keep pointing this screen at bad data for up to the
-    // cache's 10-minute TTL, and getBillingInfo's ownership check would
-    // silently 403 if the cached id ever belonged to a different store.
-    const [stores, selId] = await Promise.all([
-      forceFetchStores(session.token, session.user?.id),
-      AsyncStorage.getItem("selected_store_id").catch(() => null),
-    ]);
-    // Respect the store the shopkeeper actually has selected — hardcoding
-    // stores[0] pointed multi-store owners at the wrong store's bank details.
-    const store = (selId && stores.find((s) => s.id === selId)) || stores[0];
-    if (!store?.id) {
-      setLoading(false);
-      return;
-    }
-    setStoreId(store.id);
-
-    try {
-      const info = await fetchBillingInfo(session.token, store.id);
-      applyBillingInfo(info);
-    } catch {
-      /* non-fatal — screen still renders with empty state, self-heals via
-         the useFocusEffect below */
-    } finally {
-      setLoading(false);
-    }
-    void loadPendingChangeRequest(session.token, store.id);
-  };
-
-  useEffect(() => {
-    loadBillingInfo();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Self-heals a failed (or not-yet-attempted) first fetch the moment this
-  // screen regains focus — e.g. bouncing to another VerificationNavBar tab
-  // and back, mirroring the rider app's signup.tsx fix for the identical
-  // "stuck blank until I leave and come back" symptom.
-  useFocusEffect(
-    React.useCallback(() => {
-      if (!infoFetchedRef.current) {
-        void loadBillingInfo();
-      }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
+  const reconcileOwnerPhoto = ownerPhoto.reconcile;
+  const setPassbookServerUrl = passbook.setServerUrl;
+  const applyBillingInfo = useCallback(
+    (info: BillingInfo) => {
+      setInfoFetched(true);
+      setOwnerName(info.ownerName);
+      reconcileOwnerPhoto({ owner_image_url: info.ownerImageUrl });
+      setAccountNumber(info.bankAccountNumber ?? "");
+      setIfscCode(info.bankIfscCode ?? "");
+      setBranchName(info.bankBranchName ?? "");
+      setPassbookServerUrl(info.passbookUrl);
+    },
+    [reconcileOwnerPhoto, setPassbookServerUrl]
   );
 
-  // While a billing change is pending, poll for the admin's decision so the
-  // banner clears without needing to leave and re-enter this screen — mirrors
-  // profile.tsx's identical pattern for identity-field pending requests.
+  const loadBillingInfo = useCallback(
+    async (t: string, sId: string) => {
+      try {
+        const info = await fetchBillingInfo(t, sId);
+        applyBillingInfo(info);
+        setLoadError(false);
+      } catch {
+        // Surfaced as ErrorState / a retryable notice; the useFocusEffect below also self-heals.
+        setLoadError(true);
+      } finally {
+        setInfoSettled(true);
+      }
+      // Independent of the billing fetch — the pending banner (and its poll)
+      // should start even when the details themselves failed to load.
+      void loadPendingChangeRequest(t, sId);
+    },
+    [applyBillingInfo, loadPendingChangeRequest]
+  );
+
+  useEffect(() => {
+    if (!token || !storeId) return;
+    // A stale cached store row could carry an old approval flag for up to the
+    // cache TTL — refresh it from the network; the hook re-reads the cache on
+    // the next focus.
+    void forceFetchStores(token, session?.user?.id);
+    void loadBillingInfo(token, storeId);
+  }, [token, storeId, session?.user?.id, loadBillingInfo]);
+
+  // Self-heals a failed first fetch the moment this screen regains focus —
+  // e.g. bouncing to another VerificationNavBar tab and back.
+  useFocusEffect(
+    useCallback(() => {
+      if (!infoFetched && token && storeId) void loadBillingInfo(token, storeId);
+    }, [infoFetched, token, storeId, loadBillingInfo])
+  );
+
+  // While a billing change is pending, poll for the decision so the banner
+  // clears without leaving and re-entering this screen.
   useSmartPoll(
-    () => { if (token && storeId) void loadPendingChangeRequest(token, storeId); },
+    () => {
+      if (token && storeId) void loadPendingChangeRequest(token, storeId);
+    },
     { intervalMs: 20_000, enabled: !!pendingChangeRequest && !!token && !!storeId }
   );
 
-  const pickOwnerImage = async () => {
-    if (ownerImageUrl) return; // already set — read-only from here on
-    if (!storeId || !token || uploadingOwnerImage) return;
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.85,
-      });
-      if (result.canceled || !result.assets[0]) return;
-
-      const session = await getSession();
-      if (!session?.user?.id) return;
-      setUploadingOwnerImage(true);
-      try {
-        const res = await uploadOwnerImage(session.user.id, result.assets[0].uri);
-        if (!res.ok) {
-          Alert.alert("Upload failed", res.error);
-          return;
-        }
-        await fetch(`${API_BASE}/store-owner/stores/${storeId}`, {
-          method: "PATCH",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ owner_image_url: res.url }),
-        });
-        clearStoreCache();
-        // The Details screen's own avatar reads from this same AsyncStorage key
-        // (not a network fetch) — without writing it here too, a photo
-        // uploaded from Billing Info would never show up on Details.
-        await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);
-        setOwnerImageUrl(res.url);
-      } finally {
-        setUploadingOwnerImage(false);
-      }
-    } catch (err) {
-      console.warn("[billing-info] pickOwnerImage failed:", err);
-      Alert.alert("Couldn't open gallery", "Please try again.");
+  const retryLoad = () => {
+    // No store resolved: re-run the store bootstrap (the effect above loads
+    // the details once a store arrives). Otherwise just refetch.
+    if (!storeId) {
+      retryStore();
+      return;
     }
+    if (token) void loadBillingInfo(token, storeId);
   };
 
-  const pickPassbookFile = async () => {
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
-        allowsEditing: false,
-        quality: 0.9,
-      });
-      if (result.canceled || !result.assets[0]) return;
-      const asset = result.assets[0];
-      const mimeType = asset.mimeType || "image/jpeg";
-      const ext = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
-      setPendingPassbookFile({ uri: asset.uri, name: `passbook.${ext}`, type: mimeType });
-      setPassbookUri(asset.uri);
-    } catch (err) {
-      console.warn("[billing-info] pickPassbookFile failed:", err);
-      Alert.alert("Couldn't open gallery", "Please try again.");
-    }
-  };
+  // ── Validation + save ──────────────────────────────────────────────────────
+
+  const acctErr = accountNumberError(accountNumber);
+  const ifscErr = ifscCodeError(ifscCode);
+  const canSubmit = !acctErr && !ifscErr;
+  const submitHint = useMemo(() => {
+    if (canSubmit) return null;
+    if (acctErr && ifscErr) return "Enter your account number and IFSC code to submit";
+    return acctErr ? "Enter a valid account number to submit" : "Enter a valid IFSC code to submit";
+  }, [canSubmit, acctErr, ifscErr]);
 
   const handleSave = async () => {
     if (!token || !storeId) return;
-    if (accountNumber && !/^[0-9]{6,20}$/.test(accountNumber)) {
-      Alert.alert("Invalid account number", "Bank account number must be 6-20 digits.");
+    // Both bank fields are required; the regexes must pass before anything is sent.
+    if (!canSubmit) {
+      setTouched({ account: true, ifsc: true });
+      (acctErr ? accountRef : ifscRef).current?.focus();
       return;
     }
-    if (ifscCode && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCode.toUpperCase())) {
-      Alert.alert("Invalid IFSC code", "Expected format e.g. SBIN0001234.");
-      return;
-    }
+    const acct = accountNumber.trim();
+    const ifsc = ifscCode.trim().toUpperCase();
     setSaving(true);
+    setSaveNotice(null);
     try {
       const res = await saveBillingInfo(token, storeId, {
-        bankAccountNumber: accountNumber,
-        bankIfscCode: ifscCode.toUpperCase(),
-        bankBranchName: branchName,
-        file: pendingPassbookFile ?? undefined,
+        bankAccountNumber: acct,
+        bankIfscCode: ifsc,
+        bankBranchName: branchName.trim(),
+        file: passbook.pendingFile ?? undefined,
       });
       if (!res.ok) {
-        Alert.alert("Error", res.error);
+        toast.show({ message: res.error, tone: "error" });
         return;
       }
-      setPendingPassbookFile(null);
+      passbook.clearPending();
+      setIfscCode(ifsc);
       if (res.cancelled) {
-        Alert.alert("Request withdrawn", "Your pending billing change has been withdrawn since it matched your current details.");
+        setSaveNotice({
+          title: "Request withdrawn",
+          message: "Your pending billing change has been withdrawn since it matched your current details.",
+        });
+        toast.show({ message: "Request withdrawn", tone: "success" });
       } else {
-        Alert.alert("Submitted for review", "Your billing info change has been sent to the admin team for review before it takes effect.");
+        setSaveNotice({
+          title: "Submitted for review",
+          message: "Your billing details have been sent to our team for review. They take effect once approved.",
+          nextStep: !isApproved,
+        });
+        toast.show({ message: "Submitted for review", tone: "success" });
       }
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
       void loadPendingChangeRequest(token, storeId);
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <Stack.Screen options={{ animation: "fade" }} />
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.primary} />
-        </View>
-      </SafeAreaView>
-    );
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  // router.canGoBack can throw before the root navigator is ready.
+  let canGoBack = false;
+  try {
+    canGoBack = router.canGoBack();
+  } catch {
+    canGoBack = false;
   }
+  const showBack = isApproved || canGoBack;
+
+  const pendingLines = pendingBillingChangeLines(pendingChangeRequest);
+  const ownerPhotoLocked = !!ownerPhoto.uri && !ownerPhoto.uploading;
+
+  // First bootstrap (store → billing details) has settled.
+  const ready = !storeLoading && (storeId ? infoSettled : true);
+  // Nothing usable to show: the store never resolved, or the details never loaded.
+  const showErrorState = ready && (!storeId || (loadError && !infoFetched));
+  const showForm = ready && !showErrorState;
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <Screen keyboardAvoiding>
       <Stack.Screen options={{ animation: "fade" }} />
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <View>
-          <VerificationNavBar active="billing" />
+      <TopBar title="Billing details" onBack={showBack ? () => goBackOr(backFallback) : undefined} />
+      {!storeLoading && !isApproved ? <VerificationNavBar active="billing" /> : null}
 
-          <View style={styles.infoBanner}>
-            <View style={styles.infoIconWrap}>
-              <Ionicons name="card" size={18} color={colors.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.infoTitle}>Billing info</Text>
-              <Text style={styles.infoText}>Bank details used to pay out your store&apos;s earnings.</Text>
-            </View>
-          </View>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.flex}
+        contentContainerStyle={[styles.scroll, { paddingHorizontal: gutter, paddingBottom }]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={[styles.column, { width: contentWidth }]}>
+          {!ready ? (
+            <>
+              <Skeleton.Card lines={2} />
+              <Skeleton.Card lines={5} />
+            </>
+          ) : null}
 
-          {pendingChangeRequest && (
-            <View style={styles.pendingBanner}>
-              <Ionicons name="time-outline" size={18} color={colors.warning} />
-              <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                <Text style={styles.pendingBannerTitle}>Changes pending admin review</Text>
-                {Object.entries(pendingChangeRequest.changes)
-                  .filter(([field]) => BILLING_FIELDS.has(field))
-                  .map(([field, diff]) => (
-                    <Text key={field} style={styles.pendingBannerLine}>
-                      {CHANGE_FIELD_LABELS[field] || field}: {field === "bank_passbook_storage_path" ? "New photo uploaded" : diff.new}
+          {showErrorState ? (
+            <ErrorState
+              icon="cloud-offline-outline"
+              title="Couldn't load your billing details"
+              message="Check your connection and try again."
+              action={{ onPress: retryLoad }}
+            />
+          ) : null}
+
+          {showForm ? (
+            <>
+              {loadError ? (
+                <InlineNotice
+                  tone="warning"
+                  title="Couldn't refresh"
+                  message="Showing saved data"
+                  action={{ label: "Retry", onPress: retryLoad }}
+                />
+              ) : null}
+
+              {saveNotice ? (
+                <InlineNotice
+                  tone="success"
+                  title={saveNotice.title}
+                  message={saveNotice.message}
+                  action={
+                    saveNotice.nextStep ? { label: "View status", onPress: () => router.replace("/pending-verification") } : undefined
+                  }
+                  onDismiss={() => setSaveNotice(null)}
+                />
+              ) : null}
+
+              {pendingLines.length > 0 ? (
+                <InlineNotice tone="warning" icon="time-outline" title="Changes pending review" lines={pendingLines} />
+              ) : null}
+
+              <Text style={styles.intro}>Bank details used to pay out your store&apos;s earnings.</Text>
+
+              <Card title="Store owner">
+                <View style={styles.ownerRow}>
+                  <OwnerAvatar
+                    uri={ownerPhoto.uri}
+                    uploading={ownerPhoto.uploading}
+                    locked={ownerPhotoLocked}
+                    onPress={() => void ownerPhoto.pick()}
+                    accessibilityLabel={ownerPhotoLocked ? "Owner photo, saved" : "Add owner photo"}
+                  />
+                  <View style={styles.flex}>
+                    <KeyValueRow label="Store owner name" value={ownerName || "—"} />
+                    <Text style={styles.caption}>
+                      {ownerPhotoLocked ? "Your photo is saved and can't be changed." : "Add your photo. It can't be changed later."}
                     </Text>
-                  ))}
-              </View>
-            </View>
-          )}
-
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionIconWrap}>
-                <Ionicons name="person-outline" size={16} color={colors.primary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.sectionTitle}>Store Owner</Text>
-              </View>
-            </View>
-            <View style={styles.sectionBody}>
-              <View style={styles.avatarRow}>
-                <TouchableOpacity
-                  style={styles.avatarTouch}
-                  onPress={pickOwnerImage}
-                  disabled={uploadingOwnerImage || !!ownerImageUrl}
-                  activeOpacity={ownerImageUrl ? 1 : 0.8}
-                >
-                  {uploadingOwnerImage ? (
-                    <View style={styles.avatar}>
-                      <ActivityIndicator color={colors.primary} />
-                    </View>
-                  ) : ownerImageUrl ? (
-                    <Image source={{ uri: ownerImageUrl }} style={styles.avatar} />
-                  ) : (
-                    <View style={styles.avatar}>
-                      <Ionicons name="person" size={30} color={colors.primary} />
-                    </View>
-                  )}
-                  {!ownerImageUrl && (
-                    <View style={styles.camBadge}>
-                      <Ionicons name="camera" size={12} color="#fff" />
-                    </View>
-                  )}
-                  {!!ownerImageUrl && (
-                    <View style={styles.lockBadge}>
-                      <Ionicons name="lock-closed" size={11} color="#fff" />
-                    </View>
-                  )}
-                </TouchableOpacity>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.fieldLabel}>Store owner name</Text>
-                  <View style={styles.readonlyBox}>
-                    <Text style={styles.readonlyText}>{ownerName || "—"}</Text>
                   </View>
-                  <Text style={styles.formatHintText}>
-                    {ownerImageUrl
-                      ? "Photo already on file — locked."
-                      : "Tap the circle to add your photo (one-time, becomes read-only after)."}
-                  </Text>
                 </View>
-              </View>
-            </View>
-          </View>
+              </Card>
 
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionIconWrap}>
-                <Ionicons name="business-outline" size={16} color={colors.primary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.sectionTitle}>Bank Details</Text>
-                <Text style={styles.sectionSubtitle}>Used to pay out your earnings</Text>
-              </View>
-            </View>
-            <View style={styles.sectionBody}>
-              <Text style={styles.fieldLabel}>Bank Account Number</Text>
-              <TextInput
-                style={styles.fieldInput}
-                value={accountNumber}
-                onChangeText={setAccountNumber}
-                placeholder="e.g. 123456789012"
-                placeholderTextColor={colors.textTertiary}
-                keyboardType="number-pad"
-              />
-
-              <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>IFSC Code</Text>
-              <TextInput
-                style={styles.fieldInput}
-                value={ifscCode}
-                onChangeText={setIfscCode}
-                placeholder="e.g. SBIN0001234"
-                placeholderTextColor={colors.textTertiary}
-                autoCapitalize="characters"
-              />
-
-              <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>Branch Name</Text>
-              <TextInput
-                style={styles.fieldInput}
-                value={branchName}
-                onChangeText={setBranchName}
-                placeholder="e.g. MG Road Branch"
-                placeholderTextColor={colors.textTertiary}
-              />
-
-              <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>Passbook / Cheque Photo</Text>
-              <TouchableOpacity
-                style={[styles.uploadArea, passbookUri && styles.uploadAreaFilled]}
-                activeOpacity={0.8}
-                onPress={pickPassbookFile}
-              >
-                {passbookUri ? (
-                  <>
-                    <Image source={{ uri: passbookUri }} style={styles.preview} resizeMode="cover" />
-                    <View style={styles.reuploadOverlay}>
-                      <Ionicons name="camera" size={22} color="#fff" />
-                      <Text style={styles.reuploadText}>Change</Text>
-                    </View>
-                  </>
-                ) : (
-                  <>
-                    <View style={styles.uploadIcon}>
-                      <Ionicons name="cloud-upload-outline" size={26} color={colors.primary} />
-                    </View>
-                    <Text style={styles.uploadLabel}>Upload Passbook / Cheque Photo</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <TouchableOpacity
-            style={[styles.saveBtn, saving && { opacity: 0.55 }]}
-            onPress={handleSave}
-            disabled={saving}
-            activeOpacity={0.85}
-          >
-            {saving ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <>
-                <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                <Text style={styles.saveBtnText}>Save Billing Info</Text>
-              </>
-            )}
-          </TouchableOpacity>
+              <Card title="Bank account">
+                <View style={styles.fields}>
+                  <TextField
+                    ref={accountRef}
+                    label="Bank account number"
+                    value={accountNumber}
+                    onChangeText={(t) => {
+                      // Strip whitespace on input (pasted values often carry it) —
+                      // no maxLength, so a padded paste isn't truncated before the strip.
+                      setAccountNumber(t.replace(/\s+/g, ""));
+                      setSaveNotice(null);
+                    }}
+                    onBlur={() => setTouched((p) => ({ ...p, account: true }))}
+                    error={touched.account ? acctErr : undefined}
+                    helper="6-20 digits"
+                    placeholder="e.g. 123456789012"
+                    keyboardType="number-pad"
+                    returnKeyType="next"
+                    onSubmitEditing={() => ifscRef.current?.focus()}
+                    blurOnSubmit={false}
+                    accessibilityLabel="Bank account number"
+                  />
+                  <TextField
+                    ref={ifscRef}
+                    label="IFSC code"
+                    value={ifscCode}
+                    onChangeText={(t) => {
+                      setIfscCode(t.replace(/\s+/g, "").toUpperCase());
+                      setSaveNotice(null);
+                    }}
+                    onBlur={() => setTouched((p) => ({ ...p, ifsc: true }))}
+                    error={touched.ifsc ? ifscErr : undefined}
+                    helper="11 characters, e.g. SBIN0001234"
+                    placeholder="e.g. SBIN0001234"
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    returnKeyType="next"
+                    onSubmitEditing={() => branchRef.current?.focus()}
+                    blurOnSubmit={false}
+                    accessibilityLabel="IFSC code"
+                  />
+                  <TextField
+                    ref={branchRef}
+                    label="Branch name"
+                    value={branchName}
+                    onChangeText={(t) => {
+                      setBranchName(t);
+                      setSaveNotice(null);
+                    }}
+                    placeholder="e.g. MG Road Branch"
+                    returnKeyType="done"
+                    accessibilityLabel="Branch name"
+                  />
+                  <View style={styles.passbook}>
+                    <Text style={styles.fieldLabel}>Passbook / cheque photo</Text>
+                    <UploadDropzone
+                      label="Passbook / cheque photo"
+                      state={passbook.state}
+                      previewUri={passbook.previewUri}
+                      staged={!!passbook.pendingFile}
+                      hint={IMAGE_FORMATS_HINT}
+                      onPress={passbook.openSheet}
+                      disabled={saving}
+                    />
+                  </View>
+                </View>
+              </Card>
+            </>
+          ) : null}
         </View>
       </ScrollView>
-    </SafeAreaView>
+
+      {showForm ? (
+        <StickyFooter>
+          {submitHint ? (
+            <Text style={styles.footerHint} accessibilityLiveRegion="polite">
+              {submitHint}
+            </Text>
+          ) : null}
+          <Button
+            label="Submit for review"
+            size="lg"
+            fullWidth
+            loading={saving}
+            disabled={saving || !canSubmit || !token || !storeId}
+            haptic="success"
+            onPress={() => void handleSave()}
+          />
+        </StickyFooter>
+      ) : null}
+
+      <ActionSheet visible={passbook.sheetOpen} onClose={passbook.closeSheet} title="Passbook / cheque photo" options={passbook.options} />
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
-  centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  scroll: { padding: spacing.lg, paddingBottom: 60 },
-
-  infoBanner: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: spacing.md,
-    backgroundColor: colors.primary + "08",
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.primary + "20",
-    padding: spacing.lg,
-    marginBottom: spacing.lg,
-  },
-  infoIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: radius.sm,
-    backgroundColor: colors.primary + "12",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  infoTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: "700", marginBottom: 2 },
-  infoText: { color: colors.textSecondary, fontSize: 13, lineHeight: 18 },
-
-  pendingBanner: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    backgroundColor: colors.warning + "18",
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.warning + "40",
-    marginBottom: spacing.lg,
-    padding: spacing.md,
-  },
-  pendingBannerTitle: { fontWeight: "700", fontSize: 13, color: colors.textPrimary, marginBottom: 2 },
-  pendingBannerLine: { fontSize: 12, color: colors.textSecondary },
-
-  sectionCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    overflow: "hidden",
-    ...shadows.sm,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-    backgroundColor: colors.surfaceVariant,
-  },
-  sectionIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: radius.sm,
-    backgroundColor: colors.primary + "0C",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sectionTitle: { color: colors.textPrimary, fontSize: 14, fontWeight: "700" },
-  sectionSubtitle: { color: colors.textTertiary, fontSize: 11, marginTop: 1 },
-  sectionBody: { padding: spacing.lg },
-
-  avatarRow: { flexDirection: "row", alignItems: "center", gap: spacing.lg },
-  avatarTouch: { position: "relative" },
-  avatar: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: colors.primaryBg,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 3,
-    borderColor: colors.surface,
-    overflow: "hidden",
-  },
-  camBadge: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: colors.surface,
-  },
-  lockBadge: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: colors.textTertiary,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: colors.surface,
-  },
-
-  fieldLabel: {
-    color: colors.textTertiary,
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
-    marginBottom: 5,
-  },
-  fieldInput: {
-    backgroundColor: colors.surfaceVariant,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: "500",
-    borderWidth: 1.5,
-    borderColor: colors.primary + "30",
-  },
-  readonlyBox: {
-    borderRadius: radius.md,
-    backgroundColor: colors.surfaceVariant,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    justifyContent: "center",
-  },
-  readonlyText: { fontSize: 14, color: colors.textPrimary, fontWeight: "600" },
-  formatHintText: { color: colors.textTertiary, fontSize: 11, fontWeight: "500", marginTop: 6 },
-
-  uploadArea: {
-    marginTop: spacing.xs,
-    borderWidth: 2,
-    borderStyle: "dashed",
-    borderColor: colors.primary + "35",
-    borderRadius: radius.lg,
-    height: 130,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.primary + "04",
-    gap: spacing.xs,
-    overflow: "hidden",
-  },
-  uploadAreaFilled: { borderStyle: "solid", borderColor: colors.primary + "60" },
-  uploadIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.primary + "0C",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 2,
-  },
-  uploadLabel: { color: colors.primary, fontSize: 14, fontWeight: "700", textAlign: "center", paddingHorizontal: spacing.md },
-  preview: { ...StyleSheet.absoluteFillObject },
-  reuploadOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(15,23,42,0.4)",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4,
-  },
-  reuploadText: { color: "#fff", fontSize: 12, fontWeight: "700" },
-
-  saveBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-    backgroundColor: colors.primary,
-    borderRadius: radius.lg,
-    paddingVertical: 16,
-    marginTop: spacing.sm,
-    ...shadows.md,
-  },
-  saveBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  flex: { flex: 1 },
+  scroll: { paddingTop: spacing.lg, alignItems: "center" },
+  column: { gap: spacing.xl },
+  ownerRow: { flexDirection: "row", alignItems: "center", gap: spacing.lg },
+  intro: { ...typography.body, color: colors.textSecondary },
+  caption: { ...typography.caption, color: colors.textMuted },
+  fields: { gap: spacing.lg },
+  passbook: { gap: spacing.sm },
+  fieldLabel: { ...typography.label, color: colors.textSecondary },
+  footerHint: { ...typography.caption, color: colors.textMuted, textAlign: "center" },
 });

@@ -74,14 +74,14 @@ export type OrderForStore = {
   created_at: string;
   /** Exact time the customer placed the order (from customer_orders). Prefer over created_at for display. */
   placed_at?: string;
-  order_items: Array<{
+  order_items: {
     id: string;
     product_name: string;
     quantity: number;
     unit: string;
     image_url?: string;
     price?: number;
-  }>;
+  }[];
   /** Store id from store_orders (linked table). */
   store_id?: string;
   /** Customer order id from customer_orders (linked table). */
@@ -266,6 +266,9 @@ async function getOrdersFromDbViaRpc(
     total_amount: Number(row.total_amount ?? 0),
     created_at: row.created_at || row.placed_at || new Date().toISOString(),
     placed_at: row.placed_at || row.created_at || undefined,
+    // Payouts bucket by delivery time; pass it through when the RPC exposes it.
+    delivered_at: row.delivered_at || undefined,
+    cancelled_at: row.cancelled_at || undefined,
     subtotal_amount: row.subtotal_amount != null ? Number(row.subtotal_amount) : undefined,
     delivery_fee: row.delivery_fee != null ? Number(row.delivery_fee) : undefined,
     order_items: Array.isArray(row.order_items) ? row.order_items.map((it: any) => ({
@@ -327,7 +330,7 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<{ orders: Orde
     return { orders: [], failed: true };
   }
 
-  let storeOrders = (storeOrdersData ?? []) as StoreOrderRow[];
+  const storeOrders = (storeOrdersData ?? []) as StoreOrderRow[];
 
   // Fallback: if no store_orders for this store_id, try other ways to get orders
   if (storeOrders.length === 0) {
@@ -336,34 +339,13 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<{ orders: Orde
       return linked;
     }
     if (linked.failed) return linked;
-    // Fallback 2: store_id format/case mismatch — fetch recent rows and match in JS.
-    // Scoped to last 90 days and capped at 100 rows to limit payload.
-    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-    const { data: allRows, error: allErr } = await supabase
-      .from("store_orders")
-      .select("id, store_id, customer_order_id, status, subtotal_amount, delivery_fee, created_at, delivered_at, cancelled_at")
-      .gte("created_at", ninetyDaysAgo)
-      .order("created_at", { ascending: false })
-      .limit(100);
-    if (allErr) {
-      console.warn("[orders-db] 90-day fallback error:", allErr.message);
-      return { orders: [], failed: true };
-    }
-    if (Array.isArray(allRows) && allRows.length > 0) {
-      const storeIdStr = String(storeId).toLowerCase().trim();
-      const matched = (allRows as StoreOrderRow[]).filter(
-        (so) => so.store_id && (String(so.store_id).toLowerCase().trim() === storeIdStr || so.store_id === storeId)
-      );
-      if (matched.length > 0) {
-        storeOrders = matched;
-        // continue below to fetch customer_orders and items
-      } else {
-        if (__DEV__) console.warn("[orders-db] store_orders exist but none for store_id=" + storeId);
-        return { orders: [], failed: false };
-      }
-    } else {
-      return { orders: [], failed: false };
-    }
+    // There used to be a third fallback here that read the last 90 days of
+    // store_orders with NO store_id filter and matched the id in JS. That
+    // query only ever returns rows if the database lets this client read
+    // other stores' orders — i.e. it either leaks every store's recent
+    // orders to any shopkeeper, or (with correct RLS) is dead code. Removed;
+    // store_id is a uuid so a "format mismatch" is not a real case.
+    return { orders: [], failed: false };
   }
 
   const customerOrderIds = [...new Set(storeOrders.map((so) => so.customer_order_id).filter(Boolean))];
@@ -419,6 +401,9 @@ async function getOrdersFromDbViaTables(storeId: string): Promise<{ orders: Orde
       total_amount: storeTotal > 0 ? storeTotal : Number(co?.total_amount ?? 0),
       created_at: so.created_at || co?.placed_at || new Date().toISOString(),
       placed_at: co?.placed_at || so.created_at || undefined,
+      // store_orders.delivered_at is stamped per store; customer_orders'
+      // stamp is the whole-order fallback.
+      delivered_at: so.delivered_at || co?.delivered_at || undefined,
       order_items,
       store_id: so.store_id,
       customer_order_id: so.customer_order_id ?? undefined,
@@ -468,15 +453,28 @@ export async function getPlacedAtMap(storeOrderIds: string[]): Promise<Record<st
   return result;
 }
 
-/** Fetch a single store_order with items (for order details modal). */
-export async function getOrderByIdFromDb(orderId: string): Promise<OrderForStore | null> {
+/**
+ * Fetch a single store_order with items (for order details modal / invoice).
+ *
+ * `ownStoreIds` — when provided, the row must belong to one of these stores
+ * or null is returned. The invoice screen takes the order id straight from a
+ * route param (deep link / push payload), so without this check it would
+ * render whatever order the id points at, relying purely on server-side RLS
+ * that this repo cannot see.
+ */
+export async function getOrderByIdFromDb(
+  orderId: string,
+  ownStoreIds?: readonly string[]
+): Promise<OrderForStore | null> {
   if (!supabase || !orderId) return null;
+  if (ownStoreIds && ownStoreIds.length === 0) return null;
 
-  const { data: storeOrderData, error: soError } = await supabase
+  let soQuery = supabase
     .from("store_orders")
     .select("id, store_id, customer_order_id, status, subtotal_amount, delivery_fee, created_at, delivered_at, cancelled_at")
-    .eq("id", orderId)
-    .maybeSingle();
+    .eq("id", orderId);
+  if (ownStoreIds) soQuery = soQuery.in("store_id", [...ownStoreIds]);
+  const { data: storeOrderData, error: soError } = await soQuery.maybeSingle();
 
   if (soError || !storeOrderData) {
     if (soError) console.warn("[orders-db] getOrderByIdFromDb error:", soError.message);
@@ -484,6 +482,8 @@ export async function getOrderByIdFromDb(orderId: string): Promise<OrderForStore
   }
 
   const so = storeOrderData as StoreOrderRow;
+  // Belt-and-braces: the .in() filter above should already guarantee this.
+  if (ownStoreIds && !ownStoreIds.includes(String(so.store_id))) return null;
 
   let co: CustomerOrderRow | null = null;
   if (so.customer_order_id) {

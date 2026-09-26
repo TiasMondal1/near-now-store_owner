@@ -38,6 +38,33 @@ type UploadResult =
   | { ok: true; url: string }
   | { ok: false; error: string };
 
+/** Hard cap on a single photo upload — matches the document-upload limit. */
+export const MAX_IMAGE_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+const IMAGE_EXT_TO_MIME: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
+};
+
+/**
+ * Derive a safe file extension + MIME type from a picker URI.
+ * `uri.split('.').pop()` on its own returned the *entire URI* for
+ * extension-less `content://`/ImagePicker temp paths (producing garbage
+ * object keys), and everything was labelled image/jpeg regardless of type.
+ */
+function imageExtAndMime(localUri: string): { ext: string; mime: string } {
+  const withoutQuery = localUri.split(/[?#]/)[0];
+  const lastSegment = withoutQuery.split('/').pop() ?? '';
+  const dot = lastSegment.lastIndexOf('.');
+  const rawExt = dot >= 0 ? lastSegment.slice(dot + 1).toLowerCase() : '';
+  const ext = IMAGE_EXT_TO_MIME[rawExt] ? rawExt : 'jpg';
+  return { ext, mime: IMAGE_EXT_TO_MIME[ext] };
+}
+
 /**
  * Upload an image file from a local URI to a Supabase Storage bucket.
  * Returns the public URL on success.
@@ -54,6 +81,13 @@ async function uploadImage(
     // React Native: fetch the local file and convert to ArrayBuffer
     const response = await fetch(localUri);
     const arrayBuffer = await response.arrayBuffer();
+
+    if (arrayBuffer.byteLength === 0) {
+      return { ok: false, error: 'Selected image is empty or could not be read' };
+    }
+    if (arrayBuffer.byteLength > MAX_IMAGE_UPLOAD_BYTES) {
+      return { ok: false, error: 'Image is too large. Please choose a photo under 5 MB.' };
+    }
 
     const { error } = await supabase.storage
       .from(bucket)
@@ -82,18 +116,26 @@ export async function uploadStoreImage(
   storeId: string,
   localUri: string
 ): Promise<UploadResult> {
-  const ext = localUri.split('.').pop()?.toLowerCase() ?? 'jpg';
+  const { ext, mime } = imageExtAndMime(localUri);
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const path = `${storeId}/${unique}.${ext}`;
-  return uploadImage('store-images', path, localUri);
+  return uploadImage('store-images', path, localUri, mime);
 }
 
-/** Upload the store owner's profile photo. */
+/**
+ * Upload the store owner's profile photo.
+ *
+ * NOTE: the bucket's anon write policy plus `upsert: true` on a predictable
+ * `<ownerId>/avatar.*` path means anyone holding the (public) anon key can
+ * overwrite any owner's photo. That can only be closed server-side — by
+ * scoping the storage policy to the `x-shopkeeper-token` header the same
+ * way the table RLS does — and is tracked as a backend follow-up.
+ */
 export async function uploadOwnerImage(
   ownerId: string,
   localUri: string
 ): Promise<UploadResult> {
-  const ext = localUri.split('.').pop()?.toLowerCase() ?? 'jpg';
+  const { ext, mime } = imageExtAndMime(localUri);
   const path = `${ownerId}/avatar.${ext}`;
-  return uploadImage('store-owner-images', path, localUri);
+  return uploadImage('store-owner-images', path, localUri, mime);
 }

@@ -1,66 +1,56 @@
-import React, { useEffect } from "react";
-import { View, Text, StyleSheet } from "react-native";
+import React, { useCallback, useEffect, useRef } from "react";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { colors, spacing } from "../lib/theme";
+import { EmptyState, Screen, TopBar } from "../components/ui";
+import { colors, layout, spacing, typography } from "../lib/theme";
+import { useBottomPadding, useLayout } from "../lib/useLayout";
 
 const DELAY_MS = 2500;
 
+/** Confirms registration and moves on to pending verification (auto-advances after 2.5s). */
 export default function RegistrationSuccessScreen() {
   const router = useRouter();
+  const { gutter, contentWidth } = useLayout();
+  const paddingBottom = useBottomPadding();
+  const navigated = useRef(false);
+
+  const goNext = useCallback(() => {
+    if (navigated.current) return;
+    navigated.current = true;
+    router.replace("/pending-verification");
+  }, [router]);
 
   useEffect(() => {
-    const t = setTimeout(() => {
-      router.replace("/pending-verification");
-    }, DELAY_MS);
+    const t = setTimeout(goNext, DELAY_MS);
     return () => clearTimeout(t);
-  }, []);
+  }, [goNext]);
+
+  const columnWidth = Math.min(contentWidth, layout.maxFormWidth);
 
   return (
-    <View style={styles.container}>
-      <View style={styles.card}>
-        <Text style={styles.emoji}>✓</Text>
-        <Text style={styles.title}>Thanks for registering with Near & Now</Text>
-        <Text style={styles.sub}>
-          Upload your shop documents next. Your store will go live after admin verification.
-        </Text>
-      </View>
-    </View>
+    <Screen>
+      {/* No onBack: the flow must not return to the submitted form. */}
+      <TopBar overline="Step 3 of 3" title="Registration complete" />
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingHorizontal: gutter, paddingBottom }]}
+        bounces={false}
+      >
+        <View style={[styles.column, { width: columnWidth }]}>
+          <EmptyState
+            icon="checkmark-outline"
+            title="Thanks for registering with Near & Now"
+            message="Next, upload your shop documents and add your bank details. Your store goes live once we've verified them."
+            action={{ label: "View verification steps", onPress: goNext }}
+          />
+          <Text style={styles.caption}>Taking you to the next step automatically.</Text>
+        </View>
+      </ScrollView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: spacing.xl,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: spacing.xxl,
-    alignItems: "center",
-    maxWidth: 320,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  emoji: {
-    fontSize: 48,
-    marginBottom: spacing.lg,
-    color: colors.primary,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: colors.textPrimary,
-    textAlign: "center",
-    lineHeight: 28,
-  },
-  sub: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginTop: spacing.md,
-    textAlign: "center",
-  },
+  scroll: { flexGrow: 1, justifyContent: "center", paddingTop: spacing.lg },
+  column: { alignSelf: "center", gap: spacing.sm },
+  caption: { ...typography.caption, color: colors.textMuted, textAlign: "center" },
 });

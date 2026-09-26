@@ -1,315 +1,226 @@
 /**
- * Settings screen
+ * Settings — the account hub: profile card, notifications, store links,
+ * support, about, and logout.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Easing,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, { useCallback, useEffect, useState } from 'react';
+import { BackHandler, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing, shadows } from '../lib/theme';
-import { getSession, clearSession } from '../session';
+import { useFocusEffect } from '@react-navigation/native';
+import Constants from 'expo-constants';
+import { spacing } from '../lib/theme';
+import { useLayout, useBottomPadding } from '../lib/useLayout';
+import { clearSession } from '../session';
 import { notificationService } from '../lib/notifications';
-import { CachedStore, fetchStoresCached, peekStores } from '../lib/appCache';
+import { useSelectedStore } from '../lib/useSelectedStore';
+import { peekNotifications } from '../lib/notificationsCache';
 import NotificationSettings from '../components/NotificationSettings';
 import { useRequireStoreApproval } from '../lib/useRequireStoreApproval';
+import {
+  Badge,
+  Button,
+  Card,
+  ConfirmSheet,
+  InlineNotice,
+  KeyValueRow,
+  ListRow,
+  Screen,
+  Section,
+  Skeleton,
+  TopBar,
+} from '../components/ui';
+import { InitialAvatar } from '../components/profile';
 
-type SettingItem = {
-  key: string;
-  icon: React.ComponentProps<typeof Ionicons>['name'];
-  iconBg: string;
-  iconColor: string;
-  title: string;
-  desc: string;
-  onPress: () => void;
-};
+const APP_VERSION: string = Constants.expoConfig?.version ?? '1.0.0';
 
 export default function SettingsScreen() {
   useRequireStoreApproval();
-  const [loading, setLoading] = useState(true);
-  const [store, setStore] = useState<CachedStore | null>(peekStores()?.[0] ?? null);
-  const [session, setSession] = useState<any>(null);
+  const { gutter, contentWidth } = useLayout();
+  const paddingBottom = useBottomPadding();
+  // Session (name/phone) and the selected store (the "Store ID" row) come
+  // from the shared resolution hook; the hook redirects to /landing itself
+  // when there is no session.
+  const { session, store, loading, retry } = useSelectedStore();
+  // No store resolved once the bootstrap settled — shown as a warning notice
+  // above the hub with Retry; the rest of the screen still renders.
+  const loadError = !loading && !store;
   const [showNotifications, setShowNotifications] = useState(false);
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(14)).current;
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
+  // Unread count from the inbox cache warmed at splash / by Home's badge poll —
+  // a cheap synchronous read, shown on the Inbox row when available.
+  const readUnreadCount = () => (peekNotifications() ?? []).filter((n) => !n.is_read).length;
+  const [unreadCount, setUnreadCount] = useState(readUnreadCount);
+  // Re-read on every focus so marking the inbox read and coming back here
+  // (Settings stays mounted underneath) clears the badge.
+  useFocusEffect(useCallback(() => { setUnreadCount(readUnreadCount()); }, []));
 
-  useEffect(() => { loadData(); }, []);
-
+  // The preferences panel is an overlay, not a route — make the Android back
+  // button close it instead of popping the whole Settings screen.
   useEffect(() => {
-    if (!loading) {
-      Animated.parallel([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
-        Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
-      ]).start();
-    }
-  }, [loading]);
+    if (Platform.OS !== 'android' || !showNotifications) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setShowNotifications(false);
+      return true;
+    });
+    return () => sub.remove();
+  }, [showNotifications]);
 
-  const loadData = async () => {
-    try {
-      const s: any = await getSession();
-      if (!s?.token) { router.replace('/landing'); return; }
-      setSession(s);
-      // Session is all this screen needs to render (name/phone come from it,
-      // and the store is only used for the "Store ID" info row) — render
-      // immediately instead of blocking on a store fetch, then backfill the
-      // store in the background via the shared cache used by the other tabs
-      // (was previously a redundant uncached fetch on every visit here).
-      setLoading(false);
-
-      // Match the selected store, not just the first one — a shopkeeper
-      // managing multiple stores could otherwise see a different store's ID
-      // here than the one they're actually operating on everywhere else in
-      // the app (home/stock/orders/payments all resolve `selected_store_id`
-      // the same way). Found 2026-09-01 during a cross-app audit.
-      const selId = await AsyncStorage.getItem('selected_store_id');
-      const cached = peekStores();
-      if (cached?.length) setStore((selId && cached.find((c) => c.id === selId)) || cached[0]);
-      const fresh = await fetchStoresCached(s.token, s.user?.id);
-      if (fresh?.length) setStore((selId && fresh.find((f) => f.id === selId)) || fresh[0]);
-    } catch (error) {
-      console.error('Failed to load settings:', error);
-      Alert.alert('Error', 'Failed to load settings');
-      setLoading(false);
-    }
-  };
-
-  const handleLogout = () => {
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Logout', style: 'destructive', onPress: async () => { await notificationService.unregister(); await clearSession(); router.replace('/landing'); } },
-    ]);
-  };
-
-  if (loading) {
-    return (
-      <SafeAreaView style={st.safe}>
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator color={colors.primary} size="large" />
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const performLogout = useCallback(async () => {
+    await notificationService.unregister();
+    await clearSession();
+    router.replace('/landing');
+  }, []);
 
   const ownerName = session?.user?.name || 'Shopkeeper';
   const ownerPhone = session?.user?.phone || '';
-  const prefItems: SettingItem[] = [
-    { key: 'notif-inbox', icon: 'notifications-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Notifications', desc: 'View order alerts and updates', onPress: () => router.push('/notification-inbox') },
-    { key: 'notif', icon: 'options-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Notification Preferences', desc: 'Manage alerts and sounds', onPress: () => setShowNotifications(true) },
-  ];
-
-  const storeItems: SettingItem[] = [
-    { key: 'submissions', icon: 'cube-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'My Submissions', desc: 'Track custom product review status', onPress: () => router.push('/product-submissions') },
-    { key: 'billing', icon: 'card-outline', iconBg: colors.background, iconColor: colors.textSecondary, title: 'Billing Details', desc: 'Update bank account and IFSC', onPress: () => router.push('/billing-info') },
-  ];
 
   return (
-    <SafeAreaView style={st.safe}>
-      <ScrollView contentContainerStyle={st.scroll} showsVerticalScrollIndicator={false}>
-        <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
+    <Screen>
+      <TopBar title="Settings" backHref="/(tabs)/home" />
 
-          {/* Header */}
-          <View style={st.header}>
-            <TouchableOpacity onPress={() => router.back()} style={st.backBtn}>
-              <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
-            </TouchableOpacity>
-            <Text style={st.headerTitle}>Settings</Text>
-            <View style={{ width: 40 }} />
-          </View>
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingHorizontal: gutter, paddingBottom }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={[styles.column, { width: contentWidth }]}>
+          {loading ? (
+            <>
+              <Card padded={false}><Skeleton.ListRow count={1} /></Card>
+              <Card padded={false}><Skeleton.ListRow count={2} /></Card>
+              <Card padded={false}><Skeleton.ListRow count={3} /></Card>
+            </>
+          ) : (
+            <>
+              {loadError ? (
+                <InlineNotice
+                  tone="warning"
+                  title="Couldn't load store details"
+                  message="Check your connection and try again."
+                  action={{ label: 'Retry', onPress: retry }}
+                />
+              ) : null}
 
-          {/* Profile card */}
-          <TouchableOpacity style={st.profileCard} onPress={() => router.push('/profile')} activeOpacity={0.7}>
-            <View style={st.profileAvatar}>
-              <Text style={st.profileAvatarText}>{ownerName.charAt(0).toUpperCase()}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={st.profileName}>{ownerName}</Text>
-              {ownerPhone ? <Text style={st.profilePhone}>{ownerPhone}</Text> : null}
-              <Text style={st.profileLink}>View profile</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
-          </TouchableOpacity>
+              {/* Profile card */}
+              <Card padded={false}>
+                <ListRow
+                  leading={<InitialAvatar name={ownerName} />}
+                  title={ownerName}
+                  description={ownerPhone || 'View profile'}
+                  chevron
+                  onPress={() => router.push('/profile')}
+                  accessibilityLabel={`${ownerName}${ownerPhone ? `, ${ownerPhone}` : ''}`}
+                  accessibilityHint="Opens your profile"
+                />
+              </Card>
 
-          {/* Preferences section */}
-          <Text style={st.sectionLabel}>Preferences</Text>
-          <View style={st.cardGroup}>
-            {prefItems.map((item, idx) => (
-              <React.Fragment key={item.key}>
-                <TouchableOpacity style={st.row} onPress={item.onPress} activeOpacity={0.6}>
-                  <View style={[st.rowIcon, { backgroundColor: item.iconBg }]}>
-                    <Ionicons name={item.icon} size={20} color={item.iconColor} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={st.rowTitle}>{item.title}</Text>
-                    <Text style={st.rowDesc}>{item.desc}</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-                </TouchableOpacity>
-                {idx < prefItems.length - 1 && <View style={st.rowDivider} />}
-              </React.Fragment>
-            ))}
-          </View>
+              <Section title="Notifications">
+                <Card padded={false}>
+                  <ListRow
+                    icon="notifications-outline"
+                    iconTile
+                    title="Inbox"
+                    description="Order alerts and updates"
+                    trailing={unreadCount > 0 ? <Badge label={`${unreadCount} new`} tone="error" /> : undefined}
+                    chevron
+                    showSeparator
+                    onPress={() => router.push('/notification-inbox')}
+                    accessibilityLabel={unreadCount > 0 ? `Inbox, ${unreadCount} new` : 'Inbox'}
+                  />
+                  <ListRow
+                    icon="options-outline"
+                    iconTile
+                    title="Preferences"
+                    description="Choose which order alerts you receive"
+                    chevron
+                    onPress={() => setShowNotifications(true)}
+                  />
+                </Card>
+              </Section>
 
-          {/* Store section */}
-          <Text style={st.sectionLabel}>Store</Text>
-          <View style={st.cardGroup}>
-            {storeItems.map((item, idx) => (
-              <React.Fragment key={item.key}>
-                <TouchableOpacity style={st.row} onPress={item.onPress} activeOpacity={0.6}>
-                  <View style={[st.rowIcon, { backgroundColor: item.iconBg }]}>
-                    <Ionicons name={item.icon} size={20} color={item.iconColor} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={st.rowTitle}>{item.title}</Text>
-                    <Text style={st.rowDesc}>{item.desc}</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-                </TouchableOpacity>
-                {idx < storeItems.length - 1 && <View style={st.rowDivider} />}
-              </React.Fragment>
-            ))}
-          </View>
+              <Section title="Store">
+                <Card padded={false}>
+                  <ListRow
+                    icon="cube-outline"
+                    iconTile
+                    title="My submissions"
+                    description="Track custom product review status"
+                    chevron
+                    showSeparator
+                    onPress={() => router.push('/product-submissions')}
+                  />
+                  <ListRow
+                    icon="card-outline"
+                    iconTile
+                    title="Billing details"
+                    description="Update bank account and IFSC"
+                    chevron
+                    showSeparator
+                    onPress={() => router.push('/billing-info')}
+                  />
+                  <ListRow
+                    icon="shield-checkmark-outline"
+                    iconTile
+                    title="Verification documents"
+                    description="Aadhaar, PAN, licences and store photos"
+                    chevron
+                    onPress={() => router.push('/upload-documents')}
+                  />
+                </Card>
+              </Section>
 
-          {/* About section */}
-          <Text style={st.sectionLabel}>About</Text>
-          <View style={st.cardGroup}>
-            <View style={st.infoRow}>
-              <Text style={st.infoLabel}>App Version</Text>
-              <View style={st.infoBadge}><Text style={st.infoBadgeText}>1.0.0</Text></View>
-            </View>
-            <View style={st.rowDivider} />
-            <View style={st.infoRow}>
-              <Text style={st.infoLabel}>Store ID</Text>
-              <Text style={st.infoValue} numberOfLines={1}>{store?.id ? store.id.slice(0, 12) + '...' : 'N/A'}</Text>
-            </View>
-          </View>
+              <Section title="Support">
+                <Card padded={false}>
+                  <ListRow
+                    icon="help-circle-outline"
+                    iconTile
+                    title="Help & support"
+                    description="FAQs, contact us, report issues"
+                    chevron
+                    onPress={() => router.push('/help')}
+                  />
+                </Card>
+              </Section>
 
-          {/* Help & Support */}
-          <Text style={st.sectionLabel}>Support</Text>
-          <View style={st.cardGroup}>
-            <TouchableOpacity style={st.row} onPress={() => router.push('/help')} activeOpacity={0.6}>
-              <View style={[st.rowIcon, { backgroundColor: colors.background }]}>
-                <Ionicons name="help-circle-outline" size={20} color={colors.textSecondary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={st.rowTitle}>Help & Support</Text>
-                <Text style={st.rowDesc}>FAQs, contact us, report issues</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-            </TouchableOpacity>
-          </View>
+              <Section title="About">
+                <Card>
+                  <KeyValueRow label="Store ID" value={store?.id ?? 'Unavailable'} showSeparator />
+                  <KeyValueRow label="Version" value={APP_VERSION} />
+                </Card>
+              </Section>
 
-          {/* Logout */}
-          <TouchableOpacity style={st.logoutBtn} onPress={handleLogout} activeOpacity={0.7}>
-            <Ionicons name="log-out-outline" size={18} color={colors.error} />
-            <Text style={st.logoutText}>Log out</Text>
-          </TouchableOpacity>
-
-          <Text style={st.footer}>Near & Now · Store Owner v1.0</Text>
-
-        </Animated.View>
+              <Button
+                label="Log out"
+                variant="destructive"
+                fullWidth
+                leftIcon="log-out-outline"
+                onPress={() => setConfirmingLogout(true)}
+              />
+            </>
+          )}
+        </View>
       </ScrollView>
 
-      {showNotifications && (
-        <View style={st.notifOverlay}>
+      {showNotifications ? (
+        <View style={StyleSheet.absoluteFill}>
           <NotificationSettings onClose={() => setShowNotifications(false)} />
         </View>
-      )}
-    </SafeAreaView>
+      ) : null}
+
+      <ConfirmSheet
+        visible={confirmingLogout}
+        onClose={() => setConfirmingLogout(false)}
+        destructive
+        icon="log-out-outline"
+        title="Log out?"
+        message="You'll need to verify your phone again to sign back in."
+        confirmLabel="Log out"
+        onConfirm={performLogout}
+      />
+    </Screen>
   );
 }
 
-const st = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
-  scroll: { padding: spacing.lg, paddingBottom: 60 },
-
-  // Header
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.xl },
-  backBtn: { width: 40, height: 40, borderRadius: radius.md, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 20, fontWeight: '700', color: colors.textPrimary },
-
-  // Profile card
-  profileCard: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    backgroundColor: colors.surface, borderRadius: radius.lg,
-    padding: spacing.lg, marginBottom: spacing.xl,
-    borderWidth: 1, borderColor: colors.border,
-    ...shadows.sm,
-  },
-  profileAvatar: {
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: colors.primaryBg,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1.5, borderColor: colors.primary + '20',
-  },
-  profileAvatarText: { fontSize: 20, fontWeight: '700', color: colors.primary },
-  profileName: { fontSize: 16, fontWeight: '600', color: colors.textPrimary },
-  profilePhone: { fontSize: 13, color: colors.textTertiary, marginTop: 1 },
-  profileLink: { fontSize: 12, color: colors.primary, fontWeight: '600', marginTop: 3 },
-
-  // Section label
-  sectionLabel: { fontSize: 13, fontWeight: '600', color: colors.textTertiary, marginBottom: spacing.sm, marginLeft: spacing.xs },
-
-  // Card group — multiple rows inside one card
-  cardGroup: {
-    backgroundColor: colors.surface, borderRadius: radius.lg,
-    borderWidth: 1, borderColor: colors.border,
-    marginBottom: spacing.xl, overflow: 'hidden',
-    ...shadows.sm,
-  },
-
-  // Row inside card group
-  row: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    paddingVertical: spacing.md, paddingHorizontal: spacing.lg,
-  },
-  rowIcon: {
-    width: 40, height: 40, borderRadius: radius.sm,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  rowTitle: { fontSize: 15, fontWeight: '600', color: colors.textPrimary },
-  rowDesc: { fontSize: 12, color: colors.textTertiary, marginTop: 1 },
-  rowDivider: { height: 1, backgroundColor: colors.borderLight, marginLeft: 40 + spacing.lg + spacing.md },
-
-  // Info rows
-  infoRow: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: spacing.md, paddingHorizontal: spacing.lg,
-  },
-  infoLabel: { fontSize: 14, color: colors.textSecondary },
-  infoValue: { fontSize: 13, color: colors.textTertiary, fontWeight: '500', maxWidth: 160 },
-  infoBadge: {
-    backgroundColor: colors.primaryBg, borderRadius: radius.xs,
-    paddingHorizontal: spacing.sm, paddingVertical: 2,
-  },
-  infoBadgeText: { fontSize: 12, fontWeight: '600', color: colors.primary },
-
-  // Logout
-  logoutBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: spacing.sm, paddingVertical: 14,
-    borderRadius: radius.md, borderWidth: 1,
-    borderColor: colors.error + '25', backgroundColor: colors.error + '06',
-    marginBottom: spacing.lg,
-  },
-  logoutText: { fontSize: 15, fontWeight: '600', color: colors.error },
-
-  // Footer
-  footer: { fontSize: 12, color: colors.textTertiary, textAlign: 'center', marginBottom: spacing.lg },
-
-  // Notification overlay
-  notifOverlay: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: colors.background,
-  },
+const styles = StyleSheet.create({
+  scroll: { paddingTop: spacing.lg, alignItems: 'center' },
+  column: { gap: spacing.xl },
 });

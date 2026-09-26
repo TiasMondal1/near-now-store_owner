@@ -1,46 +1,67 @@
-import React, { useState } from "react";
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
-  ActivityIndicator,
-  Alert,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import React, { useCallback, useRef, useState } from "react";
+import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { Button, Screen, TextField, TopBar, triggerHaptic } from "../components/ui";
+import { useHardwareBackTo } from "../lib/navigation";
 import { apiUrl } from "../lib/apiUrl";
 import { config } from "../lib/config";
-import { colors, radius, spacing } from "../lib/theme";
+import { colors, layout, spacing, typography } from "../lib/theme";
+import { useBottomPadding, useLayout } from "../lib/useLayout";
 
 const API_BASE = config.API_BASE;
+const PHONE_LENGTH = 10;
+const REQUEST_TIMEOUT_MS = 20000;
 
+const NETWORK_ERROR = "Couldn't reach the server. Check your connection and try again.";
+const TIMEOUT_ERROR = "The server took too long to respond. Try again.";
+const GENERIC_ERROR = "Something went wrong. Try again.";
+
+/**
+ * Phone-number entry; requests an OTP for a 10-digit Indian mobile.
+ * Landing passes `mode: "register"` when the owner tapped "Register your
+ * store"; that only shapes the copy and step numbering — the server decides
+ * whether the number logs in or starts a new registration.
+ */
 export default function StoreOwnerPhoneScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ mode?: string }>();
+  const isRegister = params.mode === "register";
+  const { gutter, contentWidth } = useLayout();
+  const paddingBottom = useBottomPadding();
+  // Reached via router.replace from landing (no stack history) — hardware
+  // back should return to landing rather than exit the app.
+  useHardwareBackTo("/landing");
+
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const inputRef = useRef<TextInput>(null);
 
-  const onlyDigits = (value: string) => value.replace(/[^0-9]/g, "");
-
-  const handleChange = (value: string) => {
-    const digits = onlyDigits(value).slice(0, 10);
+  const handleChange = useCallback((value: string) => {
+    const digits = value.replace(/[^0-9]/g, "").slice(0, PHONE_LENGTH);
     setPhone(digits);
-  };
+    setError(undefined);
+  }, []);
 
-  const isValid = phone.length === 10;
+  const isValid = phone.length === PHONE_LENGTH;
 
-  const handleContinueWithOtp = async () => {
+  const fail = useCallback((message: string) => {
+    setError(message);
+    setLoading(false);
+    void triggerHaptic("error");
+    inputRef.current?.focus();
+  }, []);
+
+  const handleContinueWithOtp = useCallback(async () => {
     if (!isValid || loading) return;
     const fullPhone = `+91${phone}`;
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
       setLoading(true);
+      setError(undefined);
       const url = apiUrl(API_BASE, "/auth/send-otp");
       const res = await fetch(url, {
         method: "POST",
@@ -59,13 +80,8 @@ export default function StoreOwnerPhoneScreen() {
       }
 
       if (!res.ok || !json?.success) {
-        Alert.alert(
-          "Could not send OTP",
-          json?.error ||
-            json?.message ||
-            `Server error ${res.status}. Please try again.`
-        );
-        setLoading(false);
+        if (__DEV__) console.warn("[App] send-otp failed", res.status, raw?.slice(0, 200));
+        fail(json?.error || json?.message || GENERIC_ERROR);
         return;
       }
     } catch (e: any) {
@@ -73,24 +89,11 @@ export default function StoreOwnerPhoneScreen() {
       const msg = e?.message || String(e);
       const isAbort = e?.name === "AbortError" || msg.includes("aborted");
       if (isAbort) {
-        Alert.alert(
-          "Server is starting up",
-          "The server took too long to respond — it may have been sleeping.\n\nPlease wait 10 seconds and try again."
-        );
+        fail(TIMEOUT_ERROR);
       } else {
-        const isNetwork =
-          msg.includes("Network") ||
-          msg.includes("fetch") ||
-          msg.includes("connect") ||
-          msg.includes("timeout");
-        Alert.alert(
-          "Cannot reach server",
-          isNetwork
-            ? `Could not connect to the server. Please check your internet connection and try again.\n\nDetails: ${msg.slice(0, 100)}`
-            : `Something went wrong. Please try again.\n\nDetails: ${msg.slice(0, 100)}`
-        );
+        if (__DEV__) console.warn("[App] send-otp request failed:", msg);
+        fail(NETWORK_ERROR);
       }
-      setLoading(false);
       return;
     }
 
@@ -100,195 +103,88 @@ export default function StoreOwnerPhoneScreen() {
         params: {
           phone: fullPhone,
           sessionId: "twilio",
-          exists: "false",
           role: "shopkeeper",
+          ...(isRegister ? { mode: "register" } : {}),
         },
       });
-    } catch (e) {
-      Alert.alert("Error", "Navigation error. Check route path/params.");
+    } catch {
+      fail(GENERIC_ERROR);
     } finally {
       setLoading(false);
     }
-  };
+  }, [fail, isRegister, isValid, loading, phone, router]);
+
+  const columnWidth = Math.min(contentWidth, layout.maxFormWidth);
+  const remaining = PHONE_LENGTH - phone.length;
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
+    <Screen keyboardAvoiding>
+      <TopBar overline={isRegister ? "Step 1 of 3" : undefined} title="Your phone number" onBack={() => router.replace("/landing")} />
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingHorizontal: gutter, paddingBottom }]}
+        keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.container}>
-          <TouchableOpacity
-            onPress={() => router.replace("/landing")}
-            style={styles.backButton}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.backButtonText}>← Back</Text>
-          </TouchableOpacity>
-          <View style={styles.topSection}>
-            <Text style={styles.appTag}>Near&Now · Shopkeeper</Text>
-            <Text style={styles.title}>Let&apos;s get your store in</Text>
-            <Text style={styles.subtitle}>
-              Login with your phone number to manage orders, inventory and availability.
-            </Text>
-          </View>
+        <View style={[styles.column, { width: columnWidth }]}>
+          <Text style={styles.intro}>
+            {isRegister
+              ? "Enter your mobile number and we'll text you a one-time code. You'll set up your store right after verification."
+              : "Log in with the mobile number linked to your store. We'll text you a one-time code."}
+          </Text>
 
-          <View style={styles.inputBlock}>
-            <Text style={styles.label}>Phone number</Text>
-            <View style={styles.phoneRow}>
-              <View style={styles.countryCodeContainer}>
-                <Text style={styles.countryCodeText}>+91</Text>
-              </View>
-              <TextInput
-                style={styles.phoneInput}
-                value={phone}
-                onChangeText={handleChange}
-                placeholder="XXXXXXXXXX"
-                placeholderTextColor={colors.textTertiary}
-                keyboardType="number-pad"
-                maxLength={10}
-              />
-            </View>
-            <Text style={styles.helperText}>
-              We&apos;ll send an OTP to verify that you own this number.
-            </Text>
-          </View>
+          <TextField
+            ref={inputRef}
+            label="Phone number"
+            prefix="+91"
+            value={phone}
+            onChangeText={handleChange}
+            placeholder="10-digit mobile number"
+            keyboardType="phone-pad"
+            inputMode="numeric"
+            maxLength={PHONE_LENGTH}
+            autoFocus
+            // No OS phone autofill: it offers the full "+91 …" number, which the
+            // fixed +91 prefix plus maxLength 10 would mangle into a wrong number.
+            autoComplete="off"
+            textContentType="none"
+            returnKeyType="done"
+            onSubmitEditing={handleContinueWithOtp}
+            accessibilityLabel="Phone number"
+            error={error}
+          />
 
-          <View style={styles.bottomSection}>
-            <TouchableOpacity
-              activeOpacity={isValid && !loading ? 0.85 : 1}
+          <View style={styles.actions}>
+            <Button
+              label="Continue"
+              size="lg"
+              fullWidth
               onPress={handleContinueWithOtp}
-              disabled={!isValid || loading}
-              style={[styles.primaryButton, (!isValid || loading) && styles.buttonDisabled]}
-            >
-              {loading ? (
-                <ActivityIndicator color={colors.surface} />
-              ) : (
-                <Text style={styles.primaryButtonText}>Continue with OTP</Text>
-              )}
-            </TouchableOpacity>
-
-            <Text style={styles.termsText}>
-              By continuing as a shopkeeper, you agree to manage live inventory and orders responsibly.
-            </Text>
+              disabled={!isValid}
+              loading={loading}
+              accessibilityHint={isValid ? undefined : `Enter ${remaining} more digit${remaining === 1 ? "" : "s"} to continue`}
+            />
+            {!isValid ? (
+              <Text style={styles.hint}>
+                {phone.length === 0
+                  ? "Enter your 10-digit mobile number to continue."
+                  : `${remaining} more digit${remaining === 1 ? "" : "s"} to go.`}
+              </Text>
+            ) : null}
           </View>
+
+          <Text style={styles.terms}>
+            By continuing as a shopkeeper, you agree to manage live inventory and orders responsibly.
+          </Text>
         </View>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+      </ScrollView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  flex: {
-    flex: 1,
-  },
-  container: {
-    flex: 1,
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.xl,
-    justifyContent: "space-between",
-  },
-  backButton: {
-    alignSelf: "flex-start",
-    paddingVertical: spacing.sm,
-    paddingRight: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  backButtonText: {
-    fontSize: 15,
-    color: colors.primary,
-    fontWeight: "600",
-  },
-  topSection: {
-    gap: spacing.sm,
-  },
-  appTag: {
-    fontSize: 11,
-    color: colors.textTertiary,
-    textTransform: "uppercase",
-    letterSpacing: 1.4,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: colors.textPrimary,
-    letterSpacing: 0.5,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginTop: spacing.xs,
-  },
-  inputBlock: {
-    marginTop: spacing.lg,
-  },
-  label: {
-    fontSize: 13,
-    color: colors.textSecondary,
-    marginBottom: spacing.sm,
-  },
-  phoneRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  countryCodeContainer: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.sm,
-    backgroundColor: colors.surfaceVariant,
-    marginRight: spacing.sm,
-  },
-  countryCodeText: {
-    color: colors.textPrimary,
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  phoneInput: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    fontSize: 16,
-    color: colors.textPrimary,
-  },
-  helperText: {
-    marginTop: spacing.sm,
-    fontSize: 12,
-    color: colors.textTertiary,
-  },
-  bottomSection: {
-    gap: spacing.md,
-  },
-  primaryButton: {
-    borderRadius: radius.md,
-    paddingVertical: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.primary,
-  },
-  primaryButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: colors.surface,
-  },
-  buttonDisabled: {
-    backgroundColor: colors.primaryDark,
-    opacity: 0.7,
-  },
-  termsText: {
-    fontSize: 11,
-    color: colors.textTertiary,
-    textAlign: "center",
-    lineHeight: 16,
-  },
+  scroll: { flexGrow: 1, paddingTop: spacing.lg },
+  column: { alignSelf: "center", gap: spacing.xl },
+  intro: { ...typography.body, color: colors.textSecondary },
+  actions: { gap: spacing.sm },
+  hint: { ...typography.caption, color: colors.textMuted, textAlign: "center" },
+  terms: { ...typography.caption, color: colors.textMuted, textAlign: "center" },
 });

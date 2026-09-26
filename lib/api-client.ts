@@ -5,7 +5,7 @@
 import { router } from 'expo-router';
 import { config } from './config';
 import { errorHandler, ErrorSeverity } from './error-handler';
-import { clearSession } from '../session';
+import { clearSession, peekSessionToken } from '../session';
 
 interface RequestConfig {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -60,17 +60,21 @@ class ApiClient {
       headers = {},
       body,
       timeout = this.defaultTimeout,
-      retries = this.defaultRetries,
+      // Only GET is safe to replay blindly. A POST/PUT/PATCH/DELETE that timed
+      // out may already have been applied server-side (support message
+      // stored, order accepted…), so retrying it duplicates the action.
+      // Callers that know a mutation is idempotent can still opt in by
+      // passing `retries` explicitly.
+      retries = method === 'GET' ? this.defaultRetries : 0,
     } = config;
 
     const url = this.buildUrl(endpoint);
     let lastError: any;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeout);
-
         const response = await fetch(url, {
           method,
           headers: {
@@ -80,8 +84,6 @@ class ApiClient {
           body: body ? JSON.stringify(body) : undefined,
           signal: controller.signal,
         });
-
-        clearTimeout(timeoutId);
 
         const text = await response.text();
         let data: any;
@@ -100,9 +102,16 @@ class ApiClient {
           // send the shopkeeper back to the same screen a missing token
           // already redirects to on cold start (see home.tsx's bootstrap
           // effect), instead of leaving them stuck.
-          await clearSession();
-          errorHandler.handleAuthError({ status: 401, endpoint, statusText: response.statusText });
-          router.replace('/landing');
+          //
+          // Only do this when the token that was *rejected* is the token that
+          // is *currently* active. A poll that started under account A and
+          // resolves after the user logged out and signed in as B carries A's
+          // stale token; its 401 must not wipe B's brand-new session.
+          if (this.isCurrentSessionToken(headers)) {
+            await clearSession();
+            errorHandler.handleAuthError({ status: 401, endpoint, statusText: response.statusText });
+            router.replace('/landing');
+          }
         }
 
         if (!response.ok) {
@@ -129,6 +138,10 @@ class ApiClient {
         if (attempt < retries) {
           await this.delay(Math.pow(2, attempt) * 1000);
         }
+      } finally {
+        // Previously only cleared on the success path, so every failed
+        // attempt leaked a live 30s timer holding the controller.
+        clearTimeout(timeoutId);
       }
     }
 
@@ -205,12 +218,29 @@ class ApiClient {
    * Get error message from error object
    */
   private getErrorMessage(error: any): string {
+    // AbortError always carries a message ("Aborted"), so this check has to
+    // come before the generic message fallback or it is unreachable.
+    if (error?.name === 'AbortError') return 'Request timeout';
     if (error?.data?.error) return error.data.error;
     if (error?.data?.message) return error.data.message;
     if (error?.message) return error.message;
     if (error?.statusText) return error.statusText;
-    if (error?.name === 'AbortError') return 'Request timeout';
     return 'An unexpected error occurred';
+  }
+
+  /**
+   * True when the request's bearer token is the one for the currently active
+   * session (or when the request carried no bearer token at all, in which
+   * case we keep the previous unconditional behaviour).
+   */
+  private isCurrentSessionToken(headers: Record<string, string>): boolean {
+    const authHeader = Object.entries(headers).find(([k]) => k.toLowerCase() === 'authorization')?.[1];
+    if (!authHeader) return true;
+    const sent = authHeader.replace(/^Bearer\s+/i, '').trim();
+    const current = peekSessionToken();
+    // No active session → nothing to protect; a stale 401 can't do harm.
+    if (!current) return true;
+    return sent === current;
   }
 
   /**

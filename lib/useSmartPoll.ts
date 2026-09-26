@@ -51,6 +51,12 @@ export function useSmartPoll(
     function start() {
       clear();
       if (!enabledRef.current) return;
+      // Re-sync from the source of truth. The ref is only kept current while
+      // our AppState listener is attached, and that listener is removed
+      // whenever `enabled` is false — so background → disable → foreground →
+      // enable left the ref stuck at "background" and polling permanently
+      // off until the next background/foreground cycle.
+      appStateRef.current = AppState.currentState;
       if (appStateRef.current !== "active") return;
 
       intervalRef.current = setInterval(() => {

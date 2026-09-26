@@ -35,11 +35,56 @@ const googleServicesFilePath =
   process.env.GOOGLE_SERVICES_JSON || path.join(__dirname, "google-services.json");
 const hasGoogleServicesFile = fs.existsSync(googleServicesFilePath);
 
+/**
+ * Fail-fast for production builds.
+ *
+ * Every one of these degrades *silently* when missing: an empty Supabase
+ * URL/key makes the client null (no orders, no uploads, no realtime), a
+ * missing google-services.json ships a build with zero push tokens (the
+ * exact regression fixed in d380604), and no Sentry DSN means none of that
+ * is ever reported. A production build must refuse to start rather than
+ * succeed and ship broken. Preview/development builds only warn.
+ */
+function assertProductionEnv(environment, supabaseUrl, supabaseAnonKey, sentryDsn) {
+  const isProd =
+    environment === "production" || process.env.EAS_BUILD_PROFILE === "production";
+  // Only hard-fail on the EAS build machine (EAS_BUILD=true), where the
+  // project's EAS environment variables and file secrets are injected.
+  // `eas build` also evaluates this config on the developer's laptop before
+  // uploading, where those values legitimately don't exist — throwing there
+  // blocked every production build from a machine without a local .env.
+  const onBuilder = process.env.EAS_BUILD === "true" || process.env.CI === "true";
+  const missing = [];
+  if (!supabaseUrl) missing.push("EXPO_PUBLIC_SUPABASE_URL");
+  if (!supabaseAnonKey) missing.push("EXPO_PUBLIC_SUPABASE_ANON_KEY");
+  if (!hasGoogleServicesFile) missing.push("GOOGLE_SERVICES_JSON (google-services.json file)");
+  if (missing.length > 0) {
+    const msg = `[app.config] Missing required build config: ${missing.join(", ")}`;
+    if (isProd && onBuilder) throw new Error(`${msg}. Refusing to build a production app without them.`);
+    console.warn(
+      `${msg} — ${isProd ? "expected locally; the EAS builder will enforce this" : "OK for a dev/preview build, NOT for production"}.`
+    );
+  }
+  if (isProd && onBuilder && !sentryDsn) {
+    console.warn("[app.config] EXPO_PUBLIC_SENTRY_DSN is empty — production build will have no crash reporting.");
+  }
+}
+
 module.exports = () => {
   const googleMapsApiKey =
     process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ||
     process.env.VITE_GOOGLE_MAPS_API_KEY ||
     "";
+  const supabaseUrl =
+    process.env.EXPO_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+  const supabaseAnonKey =
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+  const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN || "";
+  const environment =
+    process.env.EXPO_PUBLIC_ENV ||
+    (process.env.NODE_ENV === "production" ? "production" : "development");
+
+  assertProductionEnv(environment, supabaseUrl, supabaseAnonKey, sentryDsn);
 
   return {
     name: "Near & Now Shopkeeper",
@@ -58,7 +103,13 @@ module.exports = () => {
     ios: {
       supportsTablet: true,
       bundleIdentifier: "com.nearandnow.shopkeeper",
-      buildNumber: "1",
+      infoPlist: {
+        // The app only uses standard HTTPS — no custom encryption — so it is
+        // exempt from US export compliance. Declaring it here means each
+        // TestFlight build no longer needs a manual answer in App Store
+        // Connect before testers can install it.
+        ITSAppUsesNonExemptEncryption: false,
+      },
       // Native Google Maps SDK (tiles) — required for MapView on iOS release builds
       config: {
         googleMapsApiKey,
@@ -92,15 +143,25 @@ module.exports = () => {
     },
     owner: "near-and-now-organization",
     scheme: "nearandnow-shopkeeper",
-    updates: {
-      url: "https://u.expo.dev/f0f709ec-f013-416a-b543-729b80cbd4b0",
-    },
-    runtimeVersion: "1.0.0",
+    // NOTE: over-the-air updates are intentionally NOT configured. The
+    // previous `updates.url` / `runtimeVersion` fields were inert because
+    // `expo-updates` is not installed, which made it look like `eas update`
+    // could deliver hotfixes when it could not. To enable OTA later: install
+    // expo-updates, add `updates.url` + a `runtimeVersion` policy here, and
+    // re-add `channel` to the eas.json build profiles.
     plugins: [
       "expo-router",
       "expo-font",
       "expo-secure-store",
       "@sentry/react-native",
+      [
+        "expo-location",
+        {
+          locationWhenInUsePermission:
+            "Allow $(PRODUCT_NAME) to use your location to place your shop on the map during signup.",
+          isAndroidBackgroundLocationEnabled: false,
+        },
+      ],
       [
         "expo-image-picker",
         {
@@ -111,7 +172,10 @@ module.exports = () => {
       [
         "expo-notifications",
         {
-          icon: "./near_now_shopkeeper_foreground.png",
+          // Android draws the small notification icon from the alpha channel
+          // only, so this must be a white-on-transparent glyph — generated
+          // from the launcher foreground by scripts/generate-notification-icon.js.
+          icon: "./assets/notification-icon.png",
           color: "#000000",
           defaultChannel: "orders_v2",
           sounds: ["./assets/sounds/order_chime.wav"],
@@ -125,19 +189,11 @@ module.exports = () => {
       apiBaseUrl:
         process.env.EXPO_PUBLIC_API_BASE_URL ||
         "https://near-and-now-backend.vercel.app",
-      supabaseUrl:
-        process.env.EXPO_PUBLIC_SUPABASE_URL ||
-        process.env.VITE_SUPABASE_URL ||
-        "",
-      supabaseAnonKey:
-        process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
-        process.env.VITE_SUPABASE_ANON_KEY ||
-        "",
+      supabaseUrl,
+      supabaseAnonKey,
       googleMapsApiKey,
-      sentryDsn: process.env.EXPO_PUBLIC_SENTRY_DSN || "",
-      environment:
-        process.env.EXPO_PUBLIC_ENV ||
-        (process.env.NODE_ENV === "production" ? "production" : "development"),
+      sentryDsn,
+      environment,
       eas: {
         projectId: "f0f709ec-f013-416a-b543-729b80cbd4b0",
       },

@@ -1,11 +1,16 @@
 import React, { useEffect } from "react";
-import { BackHandler, Platform, View, ActivityIndicator } from "react-native";
+import { BackHandler, Platform, View, ActivityIndicator, StyleSheet } from "react-native";
 import { Tabs, useSegments, useRouter, usePathname } from "expo-router";
+import { useIsFocused } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
-import { colors } from "../../lib/theme";
+import { colors, iconSize, layout, spacing } from "../../lib/theme";
+import { setToastBottomOffset } from "../../components/ui";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { IncomingOrdersProvider, useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
 import { useStoreApprovalGate } from "../../lib/useStoreApprovalGate";
+
+// Pre-redesign Orders badge colour.
+const ORDERS_BADGE_ORANGE = "#FF9800";
 
 function TabsNavigator() {
   const insets = useSafeAreaInsets();
@@ -14,6 +19,17 @@ function TabsNavigator() {
   const pathname = usePathname();
   const { incomingCount } = useIncomingOrdersCount();
   const { checking } = useStoreApprovalGate("require-approved");
+  // Whether the (tabs) route is the top of the root Stack. A pushed stack
+  // screen keeps the tabs mounted underneath, so this — not mount state —
+  // decides whether toasts should clear the tab bar.
+  const tabsFocused = useIsFocused();
+  const tabBarHeight = layout.tabBarHeight + insets.bottom;
+
+  useEffect(() => {
+    if (!tabsFocused || checking) return;
+    setToastBottomOffset(tabBarHeight);
+    return () => setToastBottomOffset(0);
+  }, [tabsFocused, checking, tabBarHeight]);
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -29,11 +45,12 @@ function TabsNavigator() {
       return true;
     });
     return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segments, pathname]);
 
   if (checking) {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background }}>
+      <View style={styles.gate}>
         <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
@@ -45,18 +62,19 @@ function TabsNavigator() {
         headerShown: false,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textTertiary,
+        // Pre-redesign look: no top border, flat.
         tabBarStyle: {
           backgroundColor: colors.surface,
           borderTopWidth: 0,
           elevation: 0,
-          height: 60 + insets.bottom,
-          paddingBottom: insets.bottom > 0 ? insets.bottom : 8,
-          paddingTop: 8,
+          height: tabBarHeight,
+          paddingBottom: insets.bottom > 0 ? insets.bottom : spacing.sm,
+          paddingTop: spacing.sm,
         },
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: "600",
-          marginBottom: Platform.OS === "ios" ? 0 : 4,
+          marginBottom: Platform.OS === "ios" ? 0 : spacing.xs,
         },
       }}
     >
@@ -65,7 +83,7 @@ function TabsNavigator() {
         options={{
           title: "Home",
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "home" : "home-outline"} size={22} color={color} />
+            <Ionicons name={focused ? "home" : "home-outline"} size={iconSize.lg} color={color} />
           ),
         }}
       />
@@ -74,9 +92,9 @@ function TabsNavigator() {
         options={{
           title: "Orders",
           tabBarBadge: incomingCount > 0 ? incomingCount : undefined,
-          tabBarBadgeStyle: { backgroundColor: "#FF9800", fontSize: 10, fontWeight: "700", minWidth: 18, height: 18 },
+          tabBarBadgeStyle: { backgroundColor: ORDERS_BADGE_ORANGE, color: colors.onPrimary, fontSize: 10, fontWeight: "700", minWidth: 18, height: 18 },
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "receipt" : "receipt-outline"} size={22} color={color} />
+            <Ionicons name={focused ? "receipt" : "receipt-outline"} size={iconSize.lg} color={color} />
           ),
         }}
       />
@@ -85,7 +103,7 @@ function TabsNavigator() {
         options={{
           title: "Payouts",
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "wallet" : "wallet-outline"} size={22} color={color} />
+            <Ionicons name={focused ? "wallet" : "wallet-outline"} size={iconSize.lg} color={color} />
           ),
         }}
       />
@@ -94,7 +112,7 @@ function TabsNavigator() {
         options={{
           title: "Inventory",
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "cube" : "cube-outline"} size={22} color={color} />
+            <Ionicons name={focused ? "cube" : "cube-outline"} size={iconSize.lg} color={color} />
           ),
         }}
       />
@@ -109,3 +127,7 @@ export default function TabsLayout() {
     </IncomingOrdersProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  gate: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background },
+});

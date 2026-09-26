@@ -58,3 +58,6 @@ android/.kotlin/
 
 # Firebase Android app config — contains project identifiers, not committed
 google-services.json
+
+# Play Console service-account key used by `eas submit` — never commit
+google-service-account.json

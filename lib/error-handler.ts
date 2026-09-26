@@ -3,7 +3,6 @@
  * Integrates with error monitoring services (Sentry, etc.)
  */
 
-import { Alert } from 'react-native';
 import { config } from './config';
 
 // Sentry is loaded lazily/defensively so the app still runs if the native
@@ -14,6 +13,8 @@ let Sentry: SentryModule | null = null;
 function loadSentry(): SentryModule | null {
   if (Sentry) return Sentry;
   try {
+    // Optional dep: resolved at runtime so builds without Sentry still work.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     Sentry = require('@sentry/react-native') as SentryModule;
   } catch {
     Sentry = null;
@@ -196,41 +197,6 @@ class ErrorHandler {
       context: { ...context, url: error.config?.url },
       originalError: error,
     });
-  }
-
-  /**
-   * Show user-friendly error alert
-   */
-  showErrorAlert(error: AppError, onDismiss?: () => void): void {
-    Alert.alert(
-      'Error',
-      error.message,
-      [
-        {
-          text: 'OK',
-          onPress: onDismiss,
-        },
-      ],
-      { cancelable: false }
-    );
-  }
-
-  /**
-   * Handle network errors
-   */
-  handleNetworkError(error: any): void {
-    this.logError({
-      message: 'Network connection failed',
-      code: 'NETWORK_ERROR',
-      severity: ErrorSeverity.MEDIUM,
-      originalError: error,
-    });
-
-    Alert.alert(
-      'Connection Error',
-      'Unable to connect to the server. Please check your internet connection and try again.',
-      [{ text: 'OK' }]
-    );
   }
 
   /**
