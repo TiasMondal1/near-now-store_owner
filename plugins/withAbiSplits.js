@@ -55,6 +55,12 @@ const VERSION_CODE_BLOCK = `
     }`;
 
 const SIGNING_MARKER = "NEARNOW_RELEASE_STORE_FILE";
+// Distinct from SIGNING_MARKER on purpose: SIGNING_MARKER's text also appears
+// inside RESOLVE_STORE_HELPER's own System.getenv()/findProperty() calls, so
+// using it to guard step 3 below was always false after step 0 ran — meaning
+// the release signingConfig block was never actually inserted, on any run.
+// This marker appears nowhere else in the file, so it can't collide.
+const RELEASE_SIGNINGCONFIG_MARKER = "NEARNOW_RELEASE_SIGNINGCONFIG_V1";
 const RESOLVE_STORE_HELPER = `
     def resolveNearNowReleaseStoreFile = {
         def nnKsProps = new Properties()
@@ -69,6 +75,7 @@ const RESOLVE_STORE_HELPER = `
         return nnStoreFile.exists() ? nnStoreFile : null
     }`;
 const RELEASE_SIGNING_CONFIG = `
+        // ${RELEASE_SIGNINGCONFIG_MARKER}
         // ${SIGNING_MARKER}: real release keystore. Credentials come from
         // android/keystore.properties (preferred) or NEARNOW_RELEASE_* Gradle
         // props / env vars; otherwise the release build falls back to the debug
@@ -191,7 +198,7 @@ function patchAppBuildGradle(contents) {
   }
 
   // 3. Release signing config — insert just inside the signingConfigs { } block.
-  if (!contents.includes(SIGNING_MARKER)) {
+  if (!contents.includes(RELEASE_SIGNINGCONFIG_MARKER)) {
     const at = indexAfterOpeningBrace(contents, "signingConfigs {");
     if (at !== -1) {
       contents = contents.slice(0, at) + "\n" + RELEASE_SIGNING_CONFIG + contents.slice(at);
