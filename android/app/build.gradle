@@ -84,10 +84,15 @@ def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 apply from: new File(["node", "--print", "require('path').dirname(require.resolve('@sentry/react-native/package.json'))"].execute().text.trim(), "sentry.gradle")
 
 android {
+    // Load keystore.properties once here so both resolveNearNowReleaseStoreFile()
+    // and signingConfigs.release below can read storeFile/storePassword/keyAlias/
+    // keyPassword from the same source, instead of the storeFile-only resolution
+    // this used to do (which left signingConfigs.release undefined).
+    def nnKsProps = new Properties()
+    def nnKsFile = rootProject.file('keystore.properties')
+    if (nnKsFile.exists()) { nnKsFile.withInputStream { nnKsProps.load(it) } }
+
     def resolveNearNowReleaseStoreFile = {
-        def nnKsProps = new Properties()
-        def nnKsFile = rootProject.file('keystore.properties')
-        if (nnKsFile.exists()) { nnKsFile.withInputStream { nnKsProps.load(it) } }
         def nnStoreFilePath = nnKsProps.getProperty('storeFile') ?: System.getenv('NEARNOW_RELEASE_STORE_FILE') ?: findProperty('NEARNOW_RELEASE_STORE_FILE')
         if (nnStoreFilePath == null || nnStoreFilePath.toString().isEmpty()) return null
         def nnStoreFile = file(nnStoreFilePath)
@@ -117,6 +122,15 @@ android {
             storePassword 'android'
             keyAlias 'androiddebugkey'
             keyPassword 'android'
+        }
+        release {
+            def nnReleaseStoreFile = resolveNearNowReleaseStoreFile()
+            if (nnReleaseStoreFile != null) {
+                storeFile nnReleaseStoreFile
+                storePassword nnKsProps.getProperty('storePassword')
+                keyAlias nnKsProps.getProperty('keyAlias')
+                keyPassword nnKsProps.getProperty('keyPassword')
+            }
         }
     }
     buildTypes {
