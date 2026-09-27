@@ -129,7 +129,7 @@ module.exports = () => {
       // wiring the customer/rider apps already use — guarded so a checkout
       // without the file (or a prebuild-preflight quirk) doesn't fail outright.
       ...(hasGoogleServicesFile ? { googleServicesFile: googleServicesFilePath } : {}),
-      versionCode: 17,
+      versionCode: 24,
       jsEngine: "hermes",
       // Native Maps SDK meta-data — required for MapView tiles on Android
       config: {
