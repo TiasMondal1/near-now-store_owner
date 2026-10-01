@@ -12,6 +12,8 @@ import type { Allocation } from "./types";
 
 export type ActiveOrderCardProps = {
   alloc: Allocation;
+  /** Shown on the card for multi-store owners; null/undefined hides it. */
+  storeName?: string | null;
 };
 
 /**
@@ -21,7 +23,7 @@ export type ActiveOrderCardProps = {
  * receiver band, bullet item rows and a time · date footer with the
  * item-count pill.
  */
-export const ActiveOrderCard = React.memo(function ActiveOrderCard({ alloc }: ActiveOrderCardProps) {
+export const ActiveOrderCard = React.memo(function ActiveOrderCard({ alloc, storeName }: ActiveOrderCardProps) {
   const total = alloc.items.length;
   const when = formatTimeDate(alloc.placed_at);
   const receiverLines = [alloc.receiver_phone, alloc.receiver_address].filter(
@@ -34,6 +36,7 @@ export const ActiveOrderCard = React.memo(function ActiveOrderCard({ alloc }: Ac
       <View style={styles.content}>
         <OrderCardHeader
           orderCode={alloc.order_code}
+          storeName={storeName}
           emphasis="md"
           meta={alloc.customer_distance ? `${alloc.customer_distance} away` : null}
           badge={<StatusPill label="Active" color={colors.success} dot />}

@@ -17,6 +17,8 @@ export type IncomingOrderCardProps = {
   storeActive: boolean;
   onAccept: (allocId: string, itemIds: string[]) => void;
   onReject: (allocId: string, orderCode: string) => void;
+  /** Shown on the card for multi-store owners; null/undefined hides it. */
+  storeName?: string | null;
 };
 
 /**
@@ -36,6 +38,7 @@ export const IncomingOrderCard = React.memo(function IncomingOrderCard({
   storeActive,
   onAccept,
   onReject,
+  storeName,
 }: IncomingOrderCardProps) {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set(alloc.items.map((i) => i.id)));
 
@@ -55,7 +58,9 @@ export const IncomingOrderCard = React.memo(function IncomingOrderCard({
   const when = formatTimeDate(alloc.placed_at);
 
   const disabledReason = !storeActive
-    ? "Go online to accept this order."
+    ? storeName
+      ? `Put ${storeName} online to accept this order.`
+      : "Go online to accept this order."
     : checked === 0
       ? "Include at least one item to accept."
       : null;
@@ -64,6 +69,7 @@ export const IncomingOrderCard = React.memo(function IncomingOrderCard({
     <View style={styles.card}>
       <OrderCardHeader
         orderCode={alloc.order_code}
+        storeName={storeName}
         emphasis="lg"
         meta={alloc.customer_distance ? `${alloc.customer_distance} away` : null}
         badge={<StatusPill label="NEW" color={ORANGE} dot accessibilityLabel="New order" />}

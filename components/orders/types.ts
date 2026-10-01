@@ -10,6 +10,9 @@ export type AllocationItem = {
 export type Allocation = {
   allocation_id: string;
   order_id: string;
+  /** The store this allocation is for (an owner may have several). */
+  store_id?: string;
+  store_name?: string | null;
   order_code: string;
   alloc_status: "pending_acceptance" | "accepted";
   pickup_code: string | null;

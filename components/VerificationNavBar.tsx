@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import { SegmentedControl, type SegmentItem } from "./ui";
 import { colors, spacing } from "../lib/theme";
 import { useLayout } from "../lib/useLayout";
+import { StoreSwitcher } from "./StoreSwitcher";
 
 type TabKey = "details" | "status" | "documents" | "billing";
 type TabRoute = "/store-owner-signup" | "/pending-verification" | "/upload-documents" | "/billing-info";
@@ -48,6 +49,9 @@ export default function VerificationNavBar({ active, style }: VerificationNavBar
 
   return (
     <View style={[styles.bar, { paddingHorizontal: gutter }]}>
+      {/* Multi-store owners only (renders nothing for a single store): the
+          way back to an approved store while setting up a new one. */}
+      <StoreSwitcher variant="bar" />
       <SegmentedControl<TabKey>
         items={ITEMS}
         value={active}

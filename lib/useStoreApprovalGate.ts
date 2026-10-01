@@ -4,6 +4,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { getSession } from "../session";
 import { isStoreApproved, refreshStoreApproval, type ApprovalStore } from "./storeApproval";
 import { peekStores } from "./appCache";
+import { peekSelectedStoreId, pickSelectedStore, subscribeSelectedStore } from "./selectedStore";
 import { sameData } from "./persistCache";
 import { supabase } from "./supabase";
 import { useSmartPoll } from "./useSmartPoll";
@@ -30,7 +31,7 @@ export function useStoreApprovalGate(mode: GateMode) {
   // spinner while evaluate() refreshes it in the background. Most valuable
   // now that the verification nav bar makes bouncing between
   // Details/Status/Documents common.
-  const cachedStore = peekStores()?.[0] ?? null;
+  const cachedStore = pickSelectedStore(peekStores(), peekSelectedStoreId());
   const [checking, setChecking] = useState(!cachedStore);
   const [store, setStore] = useState<ApprovalStore | null>(cachedStore);
   const [approved, setApproved] = useState(isStoreApproved(cachedStore));
@@ -125,6 +126,12 @@ export function useStoreApprovalGate(mode: GateMode) {
       void evaluate();
     }, [evaluate])
   );
+
+  // Store switch: re-check the newly selected store right away (forced past
+  // the shared 15 s reuse window), so switching to a pending store sends the
+  // owner to its verification screens, and switching back to an approved one
+  // lets them in. (Multi-store ownership, 2026-10-02.)
+  useEffect(() => subscribeSelectedStore(() => { void evaluate(true); }), [evaluate]);
 
   // Periodic re-check so an admin action (approve/revoke) taken while the
   // shopkeeper is sitting still on a tab screen — not navigating, not

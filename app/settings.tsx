@@ -163,7 +163,19 @@ export default function SettingsScreen() {
                     title="Verification documents"
                     description="Aadhaar, PAN, licences and store photos"
                     chevron
+                    showSeparator
                     onPress={() => router.push('/upload-documents')}
+                  />
+                  {/* Multi-store ownership (2026-10-02). Switching between
+                      stores is the store name at the top of Home. */}
+                  <ListRow
+                    icon="add-circle-outline"
+                    iconTile
+                    title="Add another store"
+                    description="Run more than one shop from this account"
+                    chevron
+                    onPress={() => router.push('/add-store')}
+                    testID="settings-add-store"
                   />
                 </Card>
               </Section>

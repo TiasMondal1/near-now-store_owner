@@ -122,6 +122,19 @@ export function useOrdersFeed(isFocused: boolean, selected: SelectedStoreInput):
   // Seed the Previous list from the persisted cache the moment the store id
   // resolves — switching to that tab used to show "No previous orders" (an
   // empty state presented as truth) until the first network fetch landed.
+  // Store switch (multi-store owners): drop the previous store's history so it
+  // isn't shown under the new store while the new store's list loads — the
+  // cache seed below only fills an empty list.
+  const prevStoreIdRef = useRef(storeId);
+  useEffect(() => {
+    if (prevStoreIdRef.current && storeId && prevStoreIdRef.current !== storeId) {
+      setAllOrders([]);
+      setPrevLoaded(false);
+      setPrevLoading(true);
+    }
+    prevStoreIdRef.current = storeId;
+  }, [storeId]);
+
   useEffect(() => {
     if (!storeId) return;
     let cancelled = false;

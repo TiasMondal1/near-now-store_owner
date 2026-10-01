@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Animated, Easing, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { router } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, radius, shadows, spacing } from "../../lib/theme";
 import { useBottomPadding, useLayout } from "../../lib/useLayout";
@@ -25,10 +24,8 @@ import { productsCacheKey, type StockProduct } from "../../lib/useStoreStock";
 import { lastNotificationsReadMutationTs, peekNotifications, persistNotifications } from "../../lib/notificationsCache";
 import { TodayCard, useTodayStats } from "../../components/home/TodayCard";
 import { HomeCard, HomePrimaryButton } from "../../components/home/HomeCard";
+import { StoreSwitcher } from "../../components/StoreSwitcher";
 
-// Same key lib/useSelectedStore reads. Home only persists the default pick
-// when nothing is stored yet (see the effect below).
-const SELECTED_STORE_KEY = "selected_store_id";
 /** How long the "approved" notice stays up. */
 const APPROVED_BANNER_MS = 4_700;
 type StoreRow = CachedStore;
@@ -153,16 +150,8 @@ export default function HomeTab() {
     };
   }, [storeLoading, session?.token, session?.user?.id, commitStores]);
 
-  // Persist the default pick when nothing is stored yet, so Settings / Payouts
-  // (which resolve through the same key) agree with Home for multi-store
-  // owners. Belongs in lib/useSelectedStore after pickStore; kept here until
-  // that file's owner folds it in.
-  useEffect(() => {
-    if (!storeId) return;
-    AsyncStorage.getItem(SELECTED_STORE_KEY)
-      .then((id) => (id ? undefined : AsyncStorage.setItem(SELECTED_STORE_KEY, storeId)))
-      .catch(() => {});
-  }, [storeId]);
+  // (The "remember the default store" step that used to live here is now in
+  // lib/useSelectedStore, next to the selection rule it belongs with.)
 
   // Approved banner: show for APPROVED_BANNER_MS, then auto-dismiss.
   const showApprovedBanner = useCallback(() => {
@@ -476,7 +465,6 @@ export default function HomeTab() {
 
   const ownerName = session?.user?.name || "Shopkeeper";
   const firstName = ownerName.split(" ")[0];
-  const storeName = selectedStore?.name || "My Store";
   const approved = selectedStore ? isStoreApproved(selectedStore) : false;
   const tileWidth = (contentWidth - TILE_GAP) / 2;
 
@@ -497,9 +485,8 @@ export default function HomeTab() {
                 <Text style={styles.greeting} numberOfLines={1}>
                   Hello, {firstName}
                 </Text>
-                <Text style={styles.storeName} numberOfLines={1} ellipsizeMode="tail">
-                  {storeName}
-                </Text>
+                {/* Tappable: switch between stores, or add one. */}
+                <StoreSwitcher variant="header" />
               </View>
               <View style={styles.headerActions}>
                 <TouchableOpacity
@@ -696,7 +683,6 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.xl },
   headerText: { flex: 1, marginRight: spacing.sm },
   greeting: { fontSize: 14, color: colors.textSecondary },
-  storeName: { fontSize: 22, fontWeight: "700", color: colors.textPrimary, marginTop: 2 },
   headerActions: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   circleBtn: {
     width: 44,

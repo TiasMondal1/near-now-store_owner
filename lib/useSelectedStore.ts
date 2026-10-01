@@ -17,11 +17,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getSession, type UserSession } from "../session";
 import { fetchStoresCached, peekStores, peekStoresAny, type CachedStore } from "./appCache";
-
-const SELECTED_STORE_KEY = "selected_store_id";
+import {
+  loadSelectedStoreId,
+  peekSelectedStoreId,
+  pickSelectedStore,
+  rememberDefaultStoreId,
+  subscribeSelectedStore,
+} from "./selectedStore";
 
 export type UseSelectedStoreResult = {
   session: UserSession | null;
@@ -34,10 +38,10 @@ export type UseSelectedStoreResult = {
   retry: () => void;
 };
 
-function pickStore(stores: readonly CachedStore[] | null, selectedId: string | null): CachedStore | null {
-  if (!stores || stores.length === 0) return null;
-  return (selectedId && stores.find((s) => s.id === selectedId)) || stores[0] || null;
-}
+// Selection rule lives in lib/selectedStore.ts (remembered → first approved →
+// first) so this hook, the approval gate and app-start routing always agree.
+const pickStore = (stores: readonly CachedStore[] | null, selectedId: string | null) =>
+  pickSelectedStore(stores, selectedId);
 
 export function useSelectedStore(): UseSelectedStoreResult {
   const [session, setSession] = useState<UserSession | null>(null);
@@ -59,7 +63,7 @@ export function useSelectedStore(): UseSelectedStoreResult {
         setSession(s);
 
         // Use cached stores first — avoids a network call on tab switch.
-        const selId = await AsyncStorage.getItem(SELECTED_STORE_KEY);
+        const selId = await loadSelectedStoreId();
         if (cancelled) return;
         const cached = peekStores();
         if (cached && cached.length > 0) {
@@ -92,7 +96,7 @@ export function useSelectedStore(): UseSelectedStoreResult {
         return;
       }
       let cancelled = false;
-      AsyncStorage.getItem(SELECTED_STORE_KEY)
+      loadSelectedStoreId()
         .then((selId) => {
           if (cancelled) return;
           const next = pickStore(peekStores() ?? peekStoresAny(), selId);
@@ -104,6 +108,25 @@ export function useSelectedStore(): UseSelectedStoreResult {
       };
     }, [])
   );
+
+  // Store switch (StoreSwitcher, add-store): every mounted screen re-picks
+  // immediately from the store cache, so the whole app moves to the new store
+  // together instead of each screen catching up on its next focus.
+  useEffect(
+    () =>
+      subscribeSelectedStore((selId) => {
+        const next = pickStore(peekStores() ?? peekStoresAny(), selId);
+        setStore((prev) => (prev?.id === next?.id && prev?.is_active === next?.is_active && prev?.name === next?.name ? prev : next));
+      }),
+    []
+  );
+
+  // Remember the default pick once one is made, so every screen (and the next
+  // app start) agrees on it. Moved here from home.tsx, which used to do this
+  // on its own.
+  useEffect(() => {
+    if (store?.id && peekSelectedStoreId() !== store.id) void rememberDefaultStoreId(store.id);
+  }, [store?.id]);
 
   const retry = useCallback(() => setRetryTick((t) => t + 1), []);
 

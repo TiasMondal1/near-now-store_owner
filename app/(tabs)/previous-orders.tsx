@@ -16,6 +16,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { colors, layout, motion, radius, spacing } from "../../lib/theme";
 import { useBottomPadding, useLayout } from "../../lib/useLayout";
 import { useSelectedStore } from "../../lib/useSelectedStore";
+import { peekStoresAny, type CachedStore } from "../../lib/appCache";
 import { isDelivered } from "../../lib/order-utils";
 import { apiClient } from "../../lib/api-client";
 import { useRequireStoreApproval } from "../../lib/useRequireStoreApproval";
@@ -42,6 +43,9 @@ import {
   type Allocation,
 } from "../../components/orders";
 import { useOrdersFeed } from "../../components/orders/useOrdersFeed";
+
+/** Stable empty list, so memoised callbacks don't change every render. */
+const NO_STORES: CachedStore[] = [];
 
 type OrdersTabKey = "incoming" | "active" | "previous";
 
@@ -261,6 +265,35 @@ export default function OrdersTab() {
 
   const activeAllocations = useMemo(() => allocations.filter((a) => a.alloc_status === "accepted"), [allocations]);
 
+  // Multi-store owners (2026-10-02): incoming/active orders cover every store
+  // (GET /shopkeeper/orders), so each card shows its store's name and uses its
+  // *own* store's online state for Accept — the selected store's state was
+  // wrong for orders belonging to another store. The selected store's live
+  // is_active (re-read on focus) wins over the cached list for that store.
+  const ownerStores = peekStoresAny() ?? NO_STORES;
+  const multiStore = ownerStores.length > 1;
+  const storeFor = useCallback(
+    (id?: string) => (id && id === selected.store?.id ? selected.store : ownerStores.find((st) => st.id === id)) ?? null,
+    [selected.store, ownerStores]
+  );
+  const allocStoreActive = useCallback(
+    (a: Allocation) => (a.store_id ? storeFor(a.store_id)?.is_active !== false : storeActive),
+    [storeFor, storeActive]
+  );
+  const allocStoreName = useCallback(
+    (a: Allocation) => (multiStore ? a.store_name ?? storeFor(a.store_id)?.name ?? null : null),
+    [multiStore, storeFor]
+  );
+  // Which stores with incoming orders are offline (multi-store banner).
+  const offlineIncomingStoreNames = useMemo(() => {
+    if (!multiStore) return [];
+    const names = new Set<string>();
+    for (const a of incomingAllocations) {
+      if (!allocStoreActive(a)) names.add(allocStoreName(a) ?? "A store");
+    }
+    return [...names];
+  }, [multiStore, incomingAllocations, allocStoreActive, allocStoreName]);
+
   const previousOrders = useMemo(
     () =>
       allOrders.filter((o: any) => {
@@ -404,12 +437,20 @@ export default function OrdersTab() {
         </View>
       </Animated.View>
 
-      {tab === "incoming" && !storeActive ? (
+      {tab === "incoming" && (multiStore ? offlineIncomingStoreNames.length > 0 : !storeActive) ? (
         <View style={[styles.notice, gutterStyle]}>
           <InlineNotice
             tone="warning"
-            title="Your store is offline"
-            message="Incoming orders can't be accepted until you go online."
+            title={
+              multiStore
+                ? `${offlineIncomingStoreNames.join(", ")} ${offlineIncomingStoreNames.length > 1 ? "are" : "is"} offline`
+                : "Your store is offline"
+            }
+            message={
+              multiStore
+                ? "Orders for an offline store can't be accepted until it goes online."
+                : "Incoming orders can't be accepted until you go online."
+            }
             action={{ label: "Open store status", onPress: openStoreStatus }}
           />
         </View>
@@ -481,22 +522,23 @@ export default function OrdersTab() {
         <IncomingOrderCard
           alloc={a}
           accepting={respondingId === a.allocation_id}
-          storeActive={storeActive}
+          storeActive={allocStoreActive(a)}
+          storeName={allocStoreName(a)}
           onAccept={acceptAllocation}
           onReject={rejectAllocation}
         />
       </View>
     ),
-    [gutterStyle, respondingId, storeActive, acceptAllocation, rejectAllocation]
+    [gutterStyle, respondingId, allocStoreActive, allocStoreName, acceptAllocation, rejectAllocation]
   );
 
   const renderActive = useCallback(
     ({ item: a }: { item: Allocation }) => (
       <View style={gutterStyle}>
-        <ActiveOrderCard alloc={a} />
+        <ActiveOrderCard alloc={a} storeName={allocStoreName(a)} />
       </View>
     ),
-    [gutterStyle]
+    [gutterStyle, allocStoreName]
   );
 
   const renderPreviousHeader = useCallback(
