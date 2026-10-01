@@ -108,11 +108,23 @@ export function useStoreImages({ storeId, max, onStaged, onReloadError }: UseSto
         toast.show({ message: "Your session has expired. Please sign in again.", tone: "error" });
         return false;
       }
-      for (const uri of pending) {
+      // Work off a local copy and trim it (mirrored into state) as each photo's
+      // own upload+register succeeds, rather than only clearing `pending` on full
+      // success. Previously a failure partway through (e.g. photo 2 of 3 timing
+      // out) left every originally-staged photo — including ones already
+      // uploaded and registered — marked "pending" with no reload, so retrying
+      // re-uploaded and re-registered them, creating duplicate gallery entries.
+      // Found 2026-10-01 (bug_fixes doc, finding S1).
+      let remaining = [...pending];
+      let anySucceeded = false;
+      let ok = true;
+      while (remaining.length > 0) {
+        const uri = remaining[0];
         const res = await uploadStoreImage(storeId, uri);
         if (!res.ok) {
           toast.show({ message: res.error, tone: "error" });
-          return false;
+          ok = false;
+          break;
         }
         const addRes = await fetch(`${API_BASE}/store-owner/stores/${storeId}/images`, {
           method: "POST",
@@ -122,12 +134,17 @@ export function useStoreImages({ storeId, max, onStaged, onReloadError }: UseSto
         const addJson = await addRes.json().catch(() => null);
         if (!addRes.ok || !addJson?.success) {
           toast.show({ message: addJson?.error || "Photo uploaded but couldn't be added to your gallery.", tone: "error" });
-          return false;
+          ok = false;
+          break;
         }
+        remaining = remaining.slice(1);
+        anySucceeded = true;
       }
-      setPending([]);
-      await reload(storeId);
-      return true;
+      setPending(remaining);
+      if (anySucceeded) {
+        await reload(storeId);
+      }
+      return ok;
     } finally {
       setUploading(false);
     }
