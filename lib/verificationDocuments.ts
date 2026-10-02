@@ -1,4 +1,5 @@
 import { config } from "./config";
+import { GSTIN_EXAMPLE, isValidGstin } from "./gstin";
 
 export const ALL_DOC_KEYS = [
   "aadhaar_front", "aadhaar_back",
@@ -60,8 +61,8 @@ export const DOC_NUMBER_FORMATS: Partial<Record<RequiredDocKey, { description: s
   aadhaar_front: { description: "12 digits", example: "234567890123" },
   pan_front: { description: "5 letters + 4 digits + 1 letter (10 characters)", example: "ABCDE1234F" },
   gst: {
-    description: '15 characters: 2-digit state code + 10-character PAN + 1 digit (entity number) + "Z" + 1 checksum character',
-    example: "22AAAAA0000A1Z5",
+    description: '15 characters: 2-digit state code + 10-character PAN + 1 digit (entity number) + "Z" + 1 check character that must match the rest (catches typos)',
+    example: GSTIN_EXAMPLE,
   },
   fssai: { description: "14 digits", example: "12345678901234" },
 };
@@ -84,6 +85,10 @@ export const DOC_NUMBER_LENGTHS: Partial<Record<RequiredDocKey, number>> = {
 export function validateDocNumber(docType: RequiredDocKey, number: string): boolean {
   const pattern = DOC_NUMBER_PATTERNS[docType];
   if (!pattern) return true; // trade — no fixed format to check
+  // GST: the shape alone let mistyped GSTINs through — 3 of 5 admin-approved
+  // GST numbers on file failed the check character (2026-10-02). The 15th
+  // character is a checksum over the first 14 (gstin.ts).
+  if (docType === "gst") return pattern.test(number) && isValidGstin(number);
   return pattern.test(number);
 }
 
