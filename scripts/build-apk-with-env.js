@@ -4,10 +4,16 @@
  * Run from project root:
  *   node scripts/build-apk-with-env.js        → APK (assembleRelease)
  *   node scripts/build-apk-with-env.js aab    → AAB (bundleRelease, Play Store)
+ *   … --env=preview                          → tester release (developer tools on)
+ *
+ * Every release is a production build unless --env=preview is passed,
+ * whatever EXPO_PUBLIC_ENV the local .env holds. The android/ project is not
+ * committed: it is generated here by `expo prebuild` before Gradle runs.
  */
 const path = require("path");
 const fs = require("fs");
 const { spawnSync } = require("child_process");
+const { resolveReleaseEnvironment, positionalArgs: releasePositionalArgs } = require("./release-env");
 
 const rootDir = path.resolve(__dirname, "..");
 const envPath = path.join(rootDir, ".env");
@@ -56,6 +62,21 @@ if (fs.existsSync(envPath)) {
 } else {
   console.warn("No .env file found. Create .env and set EXPO_PUBLIC_API_BASE_URL to your API URL, then run again.");
 }
+
+// A release is production unless --env=preview: the .env value is for
+// `expo start`, and "development" in a release shipped the developer tools.
+let releaseEnv;
+try {
+  releaseEnv = resolveReleaseEnvironment(process.argv.slice(2));
+} catch (e) {
+  console.error(`\nERROR: ${e.message}\n`);
+  process.exit(1);
+}
+if (process.env.EXPO_PUBLIC_ENV && process.env.EXPO_PUBLIC_ENV !== releaseEnv) {
+  console.log(`EXPO_PUBLIC_ENV: .env says "${process.env.EXPO_PUBLIC_ENV}"; this release uses "${releaseEnv}".`);
+}
+process.env.EXPO_PUBLIC_ENV = releaseEnv;
+console.log(`Build environment: ${releaseEnv}${releaseEnv === "preview" ? " (developer tools included)" : ""}`);
 
 process.env.NODE_ENV = process.env.NODE_ENV || "production";
 
@@ -166,6 +187,24 @@ const resolveAndroidSdkDir = () => {
   return "";
 };
 
+// The android/ project is generated, not committed (2026-10-05). Regenerate
+// it from app.config.js and its config plugins (lock-screen alerts, ABI
+// splits + release signing, Firebase, …) so every release carries the
+// current native setup — a committed copy had silently gone stale. No
+// --clean: files kept inside android/ (keystore.properties, a release
+// keystore, local.properties) survive.
+console.log("Generating the native android/ project (expo prebuild)…");
+const prebuild = spawnSync("npx", ["expo", "prebuild", "--platform", "android", "--no-install"], {
+  cwd: rootDir,
+  env: { ...process.env, CI: "1" },
+  stdio: "inherit",
+  shell: isWin,
+});
+if (prebuild.error || prebuild.status !== 0) {
+  console.error("\nERROR: expo prebuild failed, so the release was not built.\n");
+  process.exit(prebuild.status || 1);
+}
+
 const sdkDir = resolveAndroidSdkDir();
 if (sdkDir) {
   const escapedSdkDir = sdkDir.replace(/\\/g, "\\\\");
@@ -218,7 +257,7 @@ bundleDirs.forEach((dir) => {
 });
 
 const argv = process.argv.slice(2);
-const positionalArgs = argv.filter((a) => !a.startsWith("-"));
+const positionalArgs = releasePositionalArgs(argv);
 
 const target = (positionalArgs[0] || "apk").toLowerCase();
 const isAab = target === "aab";

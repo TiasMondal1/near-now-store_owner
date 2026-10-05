@@ -1,7 +1,7 @@
 /**
- * Developer tools — TEMPORARY testing aids, compiled out of production
- * builds (`DEV_TOOLS_AVAILABLE` is false there, so every entry point that
- * reads it renders nothing).
+ * Developer tools — TEMPORARY testing aids, present only in dev-client and
+ * EAS preview builds (`DEV_TOOLS_AVAILABLE` is false in every other release
+ * build, so every entry point that reads it renders nothing).
  *
  *  - Saved demo session: reuse one real OTP login for up to 30 days instead
  *    of paying Twilio for an OTP on every re-login. The token is the same
@@ -12,8 +12,8 @@
  *    the backend — Accept/Reject on them are handled locally.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { DEV_TOOLS_AVAILABLE } from "./devToolsFlag";
 import * as SecureStore from "expo-secure-store";
-import config from "./config";
 import { peekStoresAny } from "./appCache";
 import { notificationService } from "./notifications";
 import { DEMO_ALLOCATION_PREFIX, emitDemoOrder } from "./demoOrderEvents";
@@ -21,8 +21,12 @@ import { LOCK_SCREEN_ALERTS_AVAILABLE, cancelLockScreenAlerts, showLockScreenOrd
 import type { UserSession } from "../session";
 import type { Allocation } from "../components/orders/types";
 
-/** False in production builds: dev tools are unreachable there. */
-export const DEV_TOOLS_AVAILABLE: boolean = config.ENVIRONMENT !== "production";
+/**
+ * Dev-client and EAS "preview" builds only (lib/devToolsFlag). It used to be
+ * "not production", which a release built from a local .env saying
+ * "development" passed — shipping these tools to real shopkeepers.
+ */
+export { DEV_TOOLS_AVAILABLE };
 
 /** Delay between tapping "Simulate" and the fake order arriving. */
 export const DEMO_ORDER_DELAY_MS = 10_000;

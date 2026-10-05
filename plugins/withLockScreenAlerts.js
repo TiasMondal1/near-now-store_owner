@@ -8,8 +8,14 @@
  *    apps also need the user to allow it once in settings; the app prompts
  *    for that (lib/lockScreenAlert.ts maybeRequestFullScreenPermission).
  *  • VIBRATE / WAKE_LOCK — ring pattern and waking the screen.
- *  • MainActivity showWhenLocked + turnScreenOn — so the activity the
- *    full-screen intent launches is actually visible over the keyguard.
+ *
+ * Deliberately NOT done: MainActivity showWhenLocked / turnScreenOn. Those
+ * are static attributes, so they put the WHOLE app over the lock screen —
+ * anyone holding a locked phone with the app open could use it without
+ * unlocking (found in the 2026-10-05 review). Over the lock screen only the
+ * ringing notification shows, with its Accept / Reject buttons; opening the
+ * app from it asks for the unlock first. Any copy of those attributes left
+ * by an earlier prebuild is removed below.
  */
 const { withAndroidManifest, AndroidConfig } = require("@expo/config-plugins");
 
@@ -33,41 +39,46 @@ const PERMISSIONS = [
 
 const NOTIFEE_SERVICE = "app.notifee.core.ForegroundService";
 
+/** Apply the changes above to a parsed AndroidManifest (exported for tests). */
+function applyLockScreenAlertManifest(manifest) {
+  manifest.manifest["uses-permission"] = manifest.manifest["uses-permission"] || [];
+  for (const name of PERMISSIONS) {
+    const present = manifest.manifest["uses-permission"].some((p) => p.$?.["android:name"] === name);
+    if (!present) manifest.manifest["uses-permission"].push({ $: { "android:name": name } });
+  }
+
+  const mainActivity = AndroidConfig.Manifest.getMainActivityOrThrow(manifest);
+  delete mainActivity.$["android:showWhenLocked"];
+  delete mainActivity.$["android:turnScreenOn"];
+
+  // Declare Notifee's foreground service with the specialUse type (required
+  // on Android 14+) and the subtype property Play asks for.
+  const app = AndroidConfig.Manifest.getMainApplicationOrThrow(manifest);
+  app.service = app.service || [];
+  let svc = app.service.find((s) => s.$?.["android:name"] === NOTIFEE_SERVICE);
+  if (!svc) {
+    svc = { $: { "android:name": NOTIFEE_SERVICE } };
+    app.service.push(svc);
+  }
+  svc.$["android:foregroundServiceType"] = "specialUse";
+  svc.$["android:exported"] = "false";
+  svc.property = svc.property || [];
+  if (!svc.property.some((p) => p.$?.["android:name"] === "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE")) {
+    svc.property.push({
+      $: { "android:name": "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE", "android:value": "listening_for_incoming_store_orders" },
+    });
+  }
+  // tools:node="merge" so our attributes merge into Notifee's own declaration.
+  manifest.manifest.$["xmlns:tools"] = manifest.manifest.$["xmlns:tools"] || "http://schemas.android.com/tools";
+  svc.$["tools:node"] = "merge";
+
+  return manifest;
+}
+
 module.exports = function withLockScreenAlerts(config) {
   return withAndroidManifest(config, (mod) => {
-    const manifest = mod.modResults;
-
-    manifest.manifest["uses-permission"] = manifest.manifest["uses-permission"] || [];
-    for (const name of PERMISSIONS) {
-      const present = manifest.manifest["uses-permission"].some((p) => p.$?.["android:name"] === name);
-      if (!present) manifest.manifest["uses-permission"].push({ $: { "android:name": name } });
-    }
-
-    const mainActivity = AndroidConfig.Manifest.getMainActivityOrThrow(manifest);
-    mainActivity.$["android:showWhenLocked"] = "true";
-    mainActivity.$["android:turnScreenOn"] = "true";
-
-    // Declare Notifee's foreground service with the specialUse type (required
-    // on Android 14+) and the subtype property Play asks for.
-    const app = AndroidConfig.Manifest.getMainApplicationOrThrow(manifest);
-    app.service = app.service || [];
-    let svc = app.service.find((s) => s.$?.["android:name"] === NOTIFEE_SERVICE);
-    if (!svc) {
-      svc = { $: { "android:name": NOTIFEE_SERVICE } };
-      app.service.push(svc);
-    }
-    svc.$["android:foregroundServiceType"] = "specialUse";
-    svc.$["android:exported"] = "false";
-    svc.property = svc.property || [];
-    if (!svc.property.some((p) => p.$?.["android:name"] === "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE")) {
-      svc.property.push({
-        $: { "android:name": "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE", "android:value": "listening_for_incoming_store_orders" },
-      });
-    }
-    // tools:node="merge" so our attributes merge into Notifee's own declaration.
-    manifest.manifest.$["xmlns:tools"] = manifest.manifest.$["xmlns:tools"] || "http://schemas.android.com/tools";
-    svc.$["tools:node"] = "merge";
-
+    mod.modResults = applyLockScreenAlertManifest(mod.modResults);
     return mod;
   });
 };
+module.exports.applyLockScreenAlertManifest = applyLockScreenAlertManifest;

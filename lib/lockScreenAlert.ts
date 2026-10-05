@@ -8,13 +8,16 @@
  * posts a Notifee notification with:
  *   • fullScreenAction — takes over the lock screen / wakes the screen
  *   • loopSound on a dedicated channel with the order chime
- *   • Accept / Reject action buttons that open the app
+ *   • Accept / Reject action buttons that open the app — only when the alert
+ *     knows its order (`data.allocation_id`, set when the app itself raises
+ *     the alert). A push carries no order id, so its alert has no buttons:
+ *     a tap opens the app and the popup shows the order to answer.
  *
- * The push payload carries no order data, so the buttons cannot answer the
- * order from the notification itself. Instead the tapped action is parked
- * here (`takePendingLockScreenAction`) and the popup host applies it to the
- * matching order the moment it loads. Demo orders (Developer tools) do
- * carry their data, so the same path works fully offline for them.
+ * The tapped action is parked here (`takePendingLockScreenAction`) and the
+ * popup host applies it to that exact order once it has loaded
+ * (lib/orderAlertRules resolveLockScreenTap) — never to another order.
+ * Demo orders (Developer tools) carry their data, so the same path works
+ * offline for them; outside dev / preview builds a demo payload is ignored.
  *
  * Everything degrades to a no-op when Notifee's native module is missing
  * (Expo Go, web, an older dev client) — the standard heads-up notification
@@ -23,6 +26,8 @@
 import { Platform } from "react-native";
 import { emitOrdersChanged } from "./orderEvents";
 import { emitDemoOrder } from "./demoOrderEvents";
+import { DEV_TOOLS_AVAILABLE } from "./devToolsFlag";
+import { lockScreenAlertHasOrderActions, type LockScreenTap } from "./orderAlertRules";
 
 type Notifee = typeof import("@notifee/react-native");
 type NotifeeModule = Notifee["default"];
@@ -125,10 +130,15 @@ export async function showLockScreenOrderAlert(payload: LockScreenAlertPayload):
         showTimestamp: true,
         fullScreenAction: { id: "default", launchActivity: "default" },
         pressAction: { id: "default", launchActivity: "default" },
-        actions: [
-          { title: "✓ Accept", pressAction: { id: "accept", launchActivity: "default" } },
-          { title: "✕ Reject", pressAction: { id: "reject", launchActivity: "default" } },
-        ],
+        // Without an order id there is nothing a button could safely answer.
+        ...(lockScreenAlertHasOrderActions(payload.data)
+          ? {
+              actions: [
+                { title: "✓ Accept", pressAction: { id: "accept", launchActivity: "default" } },
+                { title: "✕ Reject", pressAction: { id: "reject", launchActivity: "default" } },
+              ],
+            }
+          : {}),
       },
     };
     if (payload.at && payload.at > Date.now() + 1000) {
@@ -168,15 +178,16 @@ export async function cancelLockScreenAlerts(): Promise<void> {
 
 // ─── Tapped action → applied by the popup once the order is on screen ───────
 
-let pending: { action: LockScreenAction; at: number; allocationId: string | null } | null = null;
+let pending: LockScreenTap | null = null;
 const PENDING_TTL_MS = 90_000;
 
-export function takePendingLockScreenAction(): { action: LockScreenAction; allocationId: string | null } | null {
+/** The last tapped action, with the time it was tapped (the host expires it). */
+export function takePendingLockScreenAction(): LockScreenTap | null {
   if (!pending) return null;
   const p = pending;
   pending = null;
   if (Date.now() - p.at > PENDING_TTL_MS) return null;
-  return { action: p.action, allocationId: p.allocationId };
+  return p;
 }
 
 const pendingListeners = new Set<() => void>();
@@ -203,7 +214,7 @@ export function handleLockScreenEvent(type: number, detail: { notification?: { d
   const allocationId = typeof data.allocation_id === "string" ? data.allocation_id : null;
   pending = { action, at: Date.now(), allocationId };
 
-  if (typeof data.demo === "string") {
+  if (typeof data.demo === "string" && DEV_TOOLS_AVAILABLE) {
     try {
       const alloc = JSON.parse(data.demo);
       pending.allocationId = alloc?.allocation_id ?? null;
