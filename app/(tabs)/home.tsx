@@ -14,7 +14,6 @@ import { forceFetchStores, peekStores, patchStoreActive, type CachedStore } from
 import { useSelectedStore } from "../../lib/useSelectedStore";
 import { isStoreApproved, refreshStoreApproval } from "../../lib/storeApproval";
 import { notificationService } from "../../lib/notifications";
-import { onOrdersChanged } from "../../lib/orderEvents";
 import { shouldAutoOpenAlertSetup, useAlertSetup } from "../../lib/alertSetup";
 import { startOrderListener, stopOrderListener } from "../../lib/orderListenerService";
 import { useSmartPoll } from "../../lib/useSmartPoll";
@@ -61,7 +60,7 @@ export default function HomeTab() {
   const isFocused = useIsFocused();
   const { gutter, contentWidth } = useLayout();
   const paddingBottom = useBottomPadding();
-  const { incomingCount } = useIncomingOrdersCount();
+  const { incomingCount, acceptedCountByStore, refreshIncoming } = useIncomingOrdersCount();
   const toast = useToast();
 
   // 450ms fade + slide entrance for the whole dashboard (pre-redesign look).
@@ -117,7 +116,9 @@ export default function HomeTab() {
   // handed-off allocations, matching previous-orders.tsx's own activeAllocations
   // filter (alloc_status === "accepted"); pending_acceptance ones are "incoming",
   // surfaced separately, not counted as already-active here.
-  const [activeOrderCount, setActiveOrderCount] = useState(0);
+  // Active (accepted) orders for this store, from IncomingOrdersProvider's
+  // GET /shopkeeper/orders?active=true poll — see refreshActiveOrderCount.
+  const activeOrderCount = selectedStore?.id ? acceptedCountByStore[selectedStore.id] ?? 0 : 0;
 
   // One-time per mount, once a session is known.
   useEffect(() => {
@@ -226,43 +227,22 @@ export default function HomeTab() {
     enabled: !!(session?.token && selectedStore?.id) && isFocused,
   });
 
-  // The mount effect and useFocusEffect below both fire when deps resolve, so
-  // without this the same request went out 2-3 times back to back.
-  const lastCountFetchRef = useRef(0);
-  const fetchActiveOrderCount = useCallback(async () => {
-    if (!session?.token || !selectedStore?.id) return;
-    lastCountFetchRef.current = Date.now();
-    try {
-      const res = await apiClient.get<{ orders?: { store_id?: string; alloc_status?: string }[] }>(
-        "/shopkeeper/orders?active=true",
-        { Authorization: `Bearer ${session.token}` }
-      );
-      if (!res.success) return;
-      const orders: { store_id?: string; alloc_status?: string }[] = res.data?.orders ?? [];
-      const count = orders.filter((o) => o.store_id === selectedStore.id && o.alloc_status === "accepted").length;
-      setActiveOrderCount(count);
-    } catch {
-      // Non-fatal — dashboard stays on its last known count rather than flashing 0.
-    }
-  }, [session?.token, selectedStore?.id]);
-
-  useEffect(() => {
-    fetchActiveOrderCount();
-  }, [fetchActiveOrderCount]);
-  // Push / realtime nudge — refresh the dashboard count immediately.
-  useEffect(() => onOrdersChanged(fetchActiveOrderCount), [fetchActiveOrderCount]);
-
-  useSmartPoll(fetchActiveOrderCount, {
-    intervalMs: 15_000,
-    slowIntervalMs: 30_000,
-    enabled: !!(session?.token && selectedStore?.id) && isFocused,
-  });
+  // The active-order count is computed by IncomingOrdersProvider from the
+  // GET /shopkeeper/orders?active=true it already polls every 15 s (and on
+  // every push / realtime nudge). Home used to send that identical request on
+  // its own 15 s timer, on mount and on focus. A focus still refreshes it at
+  // once; the 3 s guard keeps mount + focus from doubling up. (2026-10-06)
+  const lastCountRefreshRef = useRef(0);
+  const refreshActiveOrderCount = useCallback(async () => {
+    lastCountRefreshRef.current = Date.now();
+    await refreshIncoming();
+  }, [refreshIncoming]);
 
   useFocusEffect(
     React.useCallback(() => {
-      if (Date.now() - lastCountFetchRef.current < 3_000) return;
-      fetchActiveOrderCount();
-    }, [fetchActiveOrderCount])
+      if (Date.now() - lastCountRefreshRef.current < 3_000) return;
+      void refreshActiveOrderCount();
+    }, [refreshActiveOrderCount])
   );
 
   // Today stat card (delivered · order value -> Payouts); see components/home/TodayCard.
@@ -404,14 +384,14 @@ export default function HomeTab() {
           if (fresh.length > 0) commitStores(fresh, startedAt);
         }),
         stockRef.current?.refresh(true).catch(() => {}),
-        fetchActiveOrderCount(),
+        refreshActiveOrderCount(),
         fetchTodayStats(true),
       ]);
       readStockCounts();
     } finally {
       setRefreshing(false);
     }
-  }, [session?.token, session?.user?.id, commitStores, fetchActiveOrderCount, fetchTodayStats, readStockCounts]);
+  }, [session?.token, session?.user?.id, commitStores, refreshActiveOrderCount, fetchTodayStats, readStockCounts]);
 
   const toggleOnline = (value: boolean) => {
     if (!session || !selectedStore) return;

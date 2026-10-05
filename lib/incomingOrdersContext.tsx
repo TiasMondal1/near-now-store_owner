@@ -21,6 +21,12 @@ type IncomingOrdersValue = {
    */
   pendingAllocations: Allocation[];
   session: UserSession | null;
+  /**
+   * Accepted (in-progress) allocations per store id, from the same poll —
+   * Home's "active orders" count reads this instead of sending the identical
+   * GET /shopkeeper/orders?active=true request itself.
+   */
+  acceptedCountByStore: Readonly<Record<string, number>>;
   /** Force an immediate refetch of the pending list. */
   refreshIncoming: () => Promise<void>;
 };
@@ -35,8 +41,25 @@ const IncomingOrdersContext = createContext<IncomingOrdersValue>({
   setIncomingCount: () => {},
   pendingAllocations: [],
   session: null,
+  acceptedCountByStore: {},
   refreshIncoming: async () => {},
 });
+
+/** Accepted allocations per store id — Home's former count, for every store at once. */
+export function countAcceptedByStore(orders: readonly { store_id?: string | null; alloc_status?: string }[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const o of orders) {
+    if (o.alloc_status !== 'accepted' || !o.store_id) continue;
+    counts[o.store_id] = (counts[o.store_id] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function sameCounts(a: Readonly<Record<string, number>>, b: Readonly<Record<string, number>>): boolean {
+  const ak = Object.keys(a);
+  if (ak.length !== Object.keys(b).length) return false;
+  return ak.every((k) => a[k] === b[k]);
+}
 
 export function IncomingOrdersProvider({ children }: { children: React.ReactNode }) {
   const [incomingCount, setIncomingCount] = useState(0);
@@ -51,6 +74,7 @@ export function IncomingOrdersProvider({ children }: { children: React.ReactNode
   // mounted.
   const [session, setSession] = useState<UserSession | null>(null);
   const [pendingAllocations, setPendingAllocations] = useState<Allocation[]>([]);
+  const [acceptedCountByStore, setAcceptedCountByStore] = useState<Readonly<Record<string, number>>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -86,6 +110,8 @@ export function IncomingOrdersProvider({ children }: { children: React.ReactNode
       // Identity-stable: this runs every 15s and the popup host keys effects
       // off this array — an identical-but-new array would churn them.
       setPendingAllocations((prev) => (samePending(prev, pending) ? prev : pending));
+      const accepted = countAcceptedByStore(orders);
+      setAcceptedCountByStore((prev) => (sameCounts(prev, accepted) ? prev : accepted));
     } catch {
       // Non-fatal — badge stays on its last known count.
     }
@@ -159,8 +185,8 @@ export function IncomingOrdersProvider({ children }: { children: React.ReactNode
   // layout to re-render just because this object literal has a new
   // reference.
   const value = useMemo<IncomingOrdersValue>(
-    () => ({ incomingCount, setIncomingCount, pendingAllocations, session, refreshIncoming: pollIncomingCount }),
-    [incomingCount, pendingAllocations, session, pollIncomingCount]
+    () => ({ incomingCount, setIncomingCount, pendingAllocations, session, acceptedCountByStore, refreshIncoming: pollIncomingCount }),
+    [incomingCount, pendingAllocations, session, acceptedCountByStore, pollIncomingCount]
   );
 
   return (
