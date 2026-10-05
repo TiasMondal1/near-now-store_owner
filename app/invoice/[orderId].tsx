@@ -27,7 +27,8 @@ import { InvoiceItemsCard } from "../../components/payouts/InvoiceItemsCard";
 import { buildInvoiceHtml, computePayout, toLineItems } from "../../components/payouts/invoiceHtml";
 
 const API_BASE = config.API_BASE;
-const BRAND_LOGO = require("../../near_now_shopkeeper.png");
+// 384 px copy of the 1024 px icon art; shown at 40 dp here. (2026-10-06)
+const BRAND_LOGO = require("../../assets/brand/near_now_shopkeeper_384.png");
 
 export default function InvoiceScreen() {
   const { orderId, source } = useLocalSearchParams<{ orderId?: string; source?: string }>();

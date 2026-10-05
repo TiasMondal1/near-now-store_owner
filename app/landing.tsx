@@ -9,7 +9,8 @@ import { resolveAuthenticatedRoute } from "../lib/storeApproval";
 import { colors, layout, radius, spacing, typography } from "../lib/theme";
 import { useBottomPadding, useLayout } from "../lib/useLayout";
 
-const BRAND_LOGO = require("../near_now_shopkeeper.png");
+// 384 px copy of the 1024 px icon art; shown at 48 dp here. (2026-10-06)
+const BRAND_LOGO = require("../assets/brand/near_now_shopkeeper_384.png");
 const BRAND_TILE = 72;
 const BRAND_LOGO_SIZE = 48;
 
