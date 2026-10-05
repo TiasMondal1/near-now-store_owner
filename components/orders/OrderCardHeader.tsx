@@ -14,19 +14,29 @@ export type OrderCardHeaderProps = {
   metaIcon?: IoniconName;
   /** Trailing node — a status / attention pill. */
   badge?: React.ReactNode;
+  /** Multi-store owners: which store the order is for (omitted for one store). */
+  storeName?: string | null;
 };
 
 /**
  * Card header from the pre-redesign Orders tab: order code + meta on the
  * left, pill on the right, padded `spacing.md` all round.
  */
-export function OrderCardHeader({ orderCode, emphasis = "md", meta, metaIcon = "location-outline", badge }: OrderCardHeaderProps) {
+export function OrderCardHeader({ orderCode, emphasis = "md", meta, metaIcon = "location-outline", badge, storeName }: OrderCardHeaderProps) {
   return (
     <View style={styles.row}>
       <View style={styles.left}>
         <Text style={[styles.code, emphasis === "lg" ? styles.codeLg : styles.codeMd]} numberOfLines={1}>
           #{orderCode}
         </Text>
+        {storeName ? (
+          <View style={styles.metaRow} accessibilityLabel={`For ${storeName}`}>
+            <Ionicons name="storefront-outline" size={11} color={colors.primary} />
+            <Text style={styles.store} numberOfLines={1}>
+              {storeName}
+            </Text>
+          </View>
+        ) : null}
         {meta ? (
           <View style={styles.metaRow}>
             <Ionicons name={metaIcon} size={11} color={colors.textTertiary} />
@@ -55,6 +65,7 @@ const styles = StyleSheet.create({
   codeMd: { fontSize: 16, fontWeight: "700" },
   metaRow: { flexDirection: "row", alignItems: "center", gap: 3 },
   meta: { color: colors.textTertiary, fontSize: 12, fontWeight: "500", flexShrink: 1 },
+  store: { color: colors.primary, fontSize: 12, fontWeight: "600", flexShrink: 1 },
   badge: { flexShrink: 0 },
 });
 

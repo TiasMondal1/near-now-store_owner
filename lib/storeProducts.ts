@@ -5,6 +5,7 @@
 
 import { supabase } from "./supabase";
 import { config } from "./config";
+import { loadSelectedStoreId } from "./selectedStore";
 
 export type StoreProductRow = {
   id: string;
@@ -388,13 +389,16 @@ export async function addCustomMasterProduct(
   };
 
   try {
+    // Multi-store owners: file the product under the store they're working in.
+    // The backend checks it's one of their approved stores; omitted → default.
+    const storeId = await loadSelectedStoreId();
     const res = await fetch(`${config.API_BASE}/shopkeeper/product-submissions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(submissionPayload),
+      body: JSON.stringify(storeId ? { ...submissionPayload, store_id: storeId } : submissionPayload),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data?.success) {

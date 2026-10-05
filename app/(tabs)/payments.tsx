@@ -144,7 +144,13 @@ export default function PaymentsTab() {
   // minute on focus (a real pull-to-refresh or the initial mount always goes
   // through). Found 2026-09-01 during a cross-app audit.
   const lastLoadedAtRef = useRef(0);
-  const loadInFlightRef = useRef(false);
+  // Keyed by store (multi-store switching, 2026-10-02): a plain boolean let
+  // store A's in-flight load swallow store B's load entirely after a switch,
+  // and A's late response then painted A's payouts under B.
+  const loadInFlightRef = useRef<string | null>(null);
+  const currentStoreIdRef = useRef(storeId);
+  currentStoreIdRef.current = storeId;
+  const isCurrentStore = (id: string) => currentStoreIdRef.current === id;
   const FOCUS_REFETCH_THROTTLE_MS = 60_000;
 
   const load = useCallback(async (showLoader = false) => {
@@ -154,14 +160,15 @@ export default function PaymentsTab() {
     // Mount effect + the initial focus callback both fire before the first
     // load finishes — without this, the full-history fetch went out twice
     // concurrently on every visit to the tab.
-    if (loadInFlightRef.current) return;
-    loadInFlightRef.current = true;
+    if (loadInFlightRef.current === storeId) return;
+    loadInFlightRef.current = storeId;
     if (showLoader) setLoading(true);
     try {
       // Stale-while-revalidate: paint last-known rows immediately instead of
       // blocking the whole tab behind a skeleton for the full-history fetch.
       if (showLoader) {
         const cachedRows = await hydrateCache<PayoutRowData[]>(payoutsCacheKey(storeId));
+        if (!isCurrentStore(storeId)) return;
         if (cachedRows?.length) {
           setPayouts((prev) => (prev.length > 0 ? prev : cachedRows));
           setLoading(false);
@@ -169,6 +176,7 @@ export default function PaymentsTab() {
       }
 
       const orders = await getOrdersFromDb(storeId);
+      if (!isCurrentStore(storeId)) return; // switched stores meanwhile — drop it
       setPayoutsError(false);
       const delivered = orders.filter((o) => isDelivered(o.status));
 
@@ -204,6 +212,7 @@ export default function PaymentsTab() {
       );
       lastLoadedAtRef.current = Date.now();
     } catch (e) {
+      if (!isCurrentStore(storeId)) return;
       // OrdersFetchFailedError is the query/RLS/network failure from
       // orders-db. Any other throw (storage, unexpected) is still a failed
       // load: surface it too rather than painting an empty "no orders" view
@@ -213,11 +222,25 @@ export default function PaymentsTab() {
         console.warn("[payouts] load failed:", e);
       }
     } finally {
-      loadInFlightRef.current = false;
-      setLoading(false);
-      setRefreshing(false);
+      if (loadInFlightRef.current === storeId) loadInFlightRef.current = null;
+      if (isCurrentStore(storeId)) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [storeId, session?.token]);
+
+  // Store switch: clear the previous store's rows so this store's cache seed
+  // (which only fills an empty list) and fresh load show the right store.
+  const prevStoreIdRef = useRef(storeId);
+  useEffect(() => {
+    if (prevStoreIdRef.current && storeId && prevStoreIdRef.current !== storeId) {
+      setPayouts([]);
+      setPayoutsError(false);
+      lastLoadedAtRef.current = 0;
+    }
+    prevStoreIdRef.current = storeId;
+  }, [storeId]);
 
   // `load` changes identity when the store resolves, so this fires once the
   // id is known; the focus effect below is still throttled via lastLoadedAtRef.

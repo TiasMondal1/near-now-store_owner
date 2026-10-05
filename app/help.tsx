@@ -4,6 +4,7 @@ import { colors, spacing, typography } from '../lib/theme';
 import { useLayout, useBottomPadding } from '../lib/useLayout';
 import { apiClient } from '../lib/api-client';
 import { getSession } from '../session';
+import { loadSelectedStoreId } from '../lib/selectedStore';
 import {
   Button,
   Card,
@@ -112,7 +113,9 @@ export default function HelpScreen() {
         setSendError('Your session has expired. Please log in again.');
         return;
       }
-      const res = await apiClient.post('/store-owner/support-messages', { message: message.trim() }, {
+      // File it under the store the owner is working in (multi-store owners).
+      const storeId = await loadSelectedStoreId();
+      const res = await apiClient.post('/store-owner/support-messages', { message: message.trim(), ...(storeId ? { store_id: storeId } : {}) }, {
         Authorization: `Bearer ${session.token}`,
       });
       if (!res.success) throw new Error(res.error || 'Failed to send message');

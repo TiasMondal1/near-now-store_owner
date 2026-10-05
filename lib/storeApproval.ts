@@ -1,5 +1,6 @@
 import { fetchStoresCached, forceFetchStores, peekStores, peekStoresAny, persistStores, storeCacheGeneration, type CachedStore } from "./appCache";
 import { apiClient } from "./api-client";
+import { loadSelectedStoreId, pickSelectedStore } from "./selectedStore";
 
 export type ApprovalStore = CachedStore & {
   is_approved?: boolean;
@@ -10,7 +11,14 @@ export function isStoreApproved(store: ApprovalStore | null | undefined): boolea
   return store?.is_approved === true;
 }
 
-export async function getPrimaryStore(
+/**
+ * The store the owner is working in (lib/selectedStore.ts's rule). Was
+ * `stores[0]`: for a multi-store owner the approval gate then checked a
+ * different store from the one on screen — locking them out because some
+ * other store was pending, or letting them keep working in a store an admin
+ * had suspended. (Audit #7, fixed 2026-10-02.)
+ */
+export async function getSelectedStore(
   token: string,
   userId?: string
 ): Promise<ApprovalStore | null> {
@@ -18,14 +26,14 @@ export async function getPrimaryStore(
   const stores: ApprovalStore[] = cached?.length
     ? cached
     : await fetchStoresCached(token, userId);
-  return stores[0] ?? null;
+  return pickSelectedStore(stores, await loadSelectedStoreId());
 }
 
 export async function checkStoreApproval(
   token: string,
   userId?: string
 ): Promise<{ approved: boolean; store: ApprovalStore | null }> {
-  const store = await getPrimaryStore(token, userId);
+  const store = await getSelectedStore(token, userId);
   return { approved: isStoreApproved(store), store };
 }
 
@@ -42,7 +50,7 @@ export async function resolveAuthenticatedRoute(
   // short of another cold start. Unapproved-or-unknown waits for the real
   // answer below (checkStoreApproval refetches when the cache isn't fresh).
   const known = peekStoresAny();
-  if (known?.length && isStoreApproved(known[0])) {
+  if (known?.length && isStoreApproved(pickSelectedStore(known, await loadSelectedStoreId()))) {
     forceFetchStores(token, userId).catch(() => {});
     return "/(tabs)/home";
   }
@@ -68,7 +76,9 @@ const REFRESH_REUSE_MS = 15_000;
 type RefreshResult = { approved: boolean; store: ApprovalStore | null };
 
 let _refreshInflight: Promise<RefreshResult> | null = null;
-let _lastRefresh: { result: RefreshResult; ts: number } | null = null;
+// `selectedId` is part of the memo: after a store switch, a result computed for
+// the previously selected store must not be reused for the new one.
+let _lastRefresh: { result: RefreshResult; ts: number; selectedId: string | null } | null = null;
 
 /**
  * Drop the memoized refresh result and stop sharing any in-flight request.
@@ -87,7 +97,13 @@ export async function refreshStoreApproval(
   userId?: string,
   opts?: { force?: boolean }
 ): Promise<RefreshResult> {
-  if (!opts?.force && _lastRefresh && Date.now() - _lastRefresh.ts < REFRESH_REUSE_MS) {
+  const currentSelectedId = await loadSelectedStoreId();
+  if (
+    !opts?.force &&
+    _lastRefresh &&
+    _lastRefresh.selectedId === currentSelectedId &&
+    Date.now() - _lastRefresh.ts < REFRESH_REUSE_MS
+  ) {
     return _lastRefresh.result;
   }
   if (_refreshInflight) return _refreshInflight;
@@ -107,12 +123,13 @@ export async function refreshStoreApproval(
       });
       if (!res.success) throw new Error(res.error || "Failed to refresh store status");
       const stores: ApprovalStore[] = res.data?.stores ?? [];
+      const selectedId = await loadSelectedStoreId();
       if (storeCacheGeneration() !== generationAtStart) {
         const local = peekStoresAny();
-        const store = (local?.[0] ?? stores[0] ?? null) as ApprovalStore | null;
+        const store = (pickSelectedStore(local, selectedId) ?? pickSelectedStore(stores, selectedId)) as ApprovalStore | null;
         return { approved: isStoreApproved(store), store };
       }
-      const store = stores[0] ?? null;
+      const store = pickSelectedStore(stores, selectedId);
       // This bypasses the shared store cache (appCache.ts) to force a genuinely
       // fresh read — but without writing the result back, the cache stays stale
       // for up to its 10-minute TTL. The very next screen (e.g. the tabs layout,
@@ -126,7 +143,7 @@ export async function refreshStoreApproval(
       // persistStores must not have its clear undone by re-memoizing the
       // logged-out account's result here.
       if (storeCacheGeneration() === generationAtStart) {
-        _lastRefresh = { result, ts: Date.now() };
+        _lastRefresh = { result, ts: Date.now(), selectedId };
       }
       return result;
     } finally {

@@ -4,6 +4,7 @@ import { clearStoreCache } from "./lib/appCache";
 import { clearNotificationsCache } from "./lib/notificationsCache";
 import { clearAllCaches } from "./lib/persistCache";
 import { clearStoreApprovalCache } from "./lib/storeApproval";
+import { clearSelectedStore } from "./lib/selectedStore";
 import { OWNER_IMAGE_KEY } from "./lib/storage";
 import { setShopkeeperAuthToken } from "./lib/supabase";
 
@@ -148,6 +149,9 @@ export async function clearSession() {
   // The approval-refresh memo (lib/storeApproval.ts) would otherwise serve the
   // previous account's store/approval to the next account for up to 15s.
   clearStoreApprovalCache();
+  // The selected store belongs to this account — logging out used to leave it
+  // behind for whoever logged in next on the device.
+  clearSelectedStore();
   await Promise.all([
     SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {}),
     // Products/orders/payouts stale-while-revalidate caches (lib/persistCache)

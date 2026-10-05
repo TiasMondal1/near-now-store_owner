@@ -2,7 +2,7 @@
 
 # dependencies
 node_modules/
-
+credentials/
 # Expo
 .expo/
 dist/

@@ -24,6 +24,8 @@ export type CachedStore = {
   is_active: boolean;
   is_approved?: boolean;
   owner_image_url?: string | null;
+  /** Set once the store's documents are submitted for review (multi-store switcher status). */
+  verification_submitted_at?: string | null;
 };
 
 let _mem: { stores: CachedStore[]; ts: number } | null = null;
@@ -94,6 +96,24 @@ export function patchStoreActive(storeId: string, isActive: boolean): void {
     stores: _mem.stores.map((s) =>
       s.id === storeId ? { ...s, is_active: isActive } : s
     ),
+  };
+  AsyncStorage.setItem(STORE_CACHE_KEY, JSON.stringify(_mem)).catch(() => {});
+}
+
+/**
+ * Add a just-created store to the cache (memory + disk) and invalidate any
+ * in-flight fetch that started before it existed. add-store needs this: a
+ * forceFetchStores() call can join a request issued *before* the POST, whose
+ * response lacks the new store — selecting it would then silently fall back
+ * to another store and open the wrong store's verification screens.
+ */
+export function addStoreToCache(store: CachedStore): void {
+  _generation++;
+  _inflight = null;
+  const existing = _mem?.stores ?? [];
+  _mem = {
+    ts: Date.now(),
+    stores: existing.some((s) => s.id === store.id) ? existing : [...existing, store],
   };
   AsyncStorage.setItem(STORE_CACHE_KEY, JSON.stringify(_mem)).catch(() => {});
 }

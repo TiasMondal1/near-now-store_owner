@@ -20,6 +20,7 @@ import { config } from "../../lib/config";
 import { peekStores, persistStores, storeCacheGeneration, type CachedStore } from "../../lib/appCache";
 import { OWNER_IMAGE_KEY } from "../../lib/storage";
 import { fetchVerificationDocuments, type VerificationDocument } from "../../lib/verificationDocuments";
+import { loadSelectedStoreId, peekSelectedStoreId, pickSelectedStore, subscribeSelectedStore } from "../../lib/selectedStore";
 
 const API_BASE = config.API_BASE;
 
@@ -47,7 +48,8 @@ export type ExistingStoreController = {
 };
 
 export function useExistingStore({ phone, onOwnerImage }: UseExistingStoreOptions): ExistingStoreController {
-  const cachedStore = !phone ? (peekStores()?.[0] ?? null) : null;
+  // The selected store (multi-store owners), not just the first one.
+  const cachedStore = !phone ? pickSelectedStore(peekStores(), peekSelectedStoreId()) : null;
   const [viewOnly, setViewOnly] = useState(!phone);
   const [loadingExisting, setLoadingExisting] = useState(false);
   const [existingStore, setExistingStore] = useState<CachedStore | null>(cachedStore);
@@ -82,22 +84,23 @@ export function useExistingStore({ phone, onOwnerImage }: UseExistingStoreOption
       });
       const json = await res.json().catch(() => null);
       const stores: CachedStore[] = json?.stores ?? [];
-      if (stores[0]) {
+      const selected = pickSelectedStore(stores, await loadSelectedStoreId());
+      if (selected) {
         storeFetchedRef.current = true;
-        setExistingStore(stores[0]);
+        setExistingStore(selected);
         if (storeCacheGeneration() === generationAtStart) await persistStores(stores);
         // The server's owner_image_url is authoritative over the AsyncStorage
         // placeholder read at mount (which, on a shared device, can be a
         // previous shopkeeper's photo left over from before logout).
-        if (stores[0].owner_image_url) {
-          onOwnerImageRef.current(stores[0].owner_image_url);
-          AsyncStorage.setItem(OWNER_IMAGE_KEY, stores[0].owner_image_url).catch(() => {});
+        if (selected.owner_image_url) {
+          onOwnerImageRef.current(selected.owner_image_url);
+          AsyncStorage.setItem(OWNER_IMAGE_KEY, selected.owner_image_url).catch(() => {});
         } else {
           onOwnerImageRef.current(null);
           AsyncStorage.removeItem(OWNER_IMAGE_KEY).catch(() => {});
         }
         try {
-          const docs = await fetchVerificationDocuments(session.token, stores[0].id);
+          const docs = await fetchVerificationDocuments(session.token, selected.id);
           setRejectedDocs(docs.filter((d) => d.status === "rejected"));
         } catch {
           /* non-fatal — the notice just doesn't show */
@@ -169,6 +172,19 @@ export function useExistingStore({ phone, onOwnerImage }: UseExistingStoreOption
     const session = await getSession();
     if (session?.token) await loadStore(session);
   };
+
+  // Store switch while this screen is open (the switcher in the verification
+  // nav bar): reload for the newly selected store.
+  useEffect(
+    () =>
+      subscribeSelectedStore(() => {
+        if (!viewOnly) return;
+        setRejectedDocs([]);
+        void retryLoadStore();
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [viewOnly]
+  );
 
   return {
     viewOnly,
