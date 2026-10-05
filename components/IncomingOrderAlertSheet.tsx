@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Animated,
   Easing,
+  type LayoutChangeEvent,
   Modal,
   Pressable,
   ScrollView,
@@ -104,7 +105,13 @@ export function IncomingOrderAlertSheet({
   }, [busy, rejectArmed, onReject]);
 
   // Countdown bar: full → empty across RING_MAX_MS from ringStartedAt.
+  // Runs on the native driver: a full-width bar slides left inside the
+  // clipped, rounded track, so it looks exactly like the old shrinking width
+  // without a JS-thread frame and a layout pass every frame for up to 45 s.
+  // (2026-10-06)
   const progress = useRef(new Animated.Value(1)).current;
+  const [trackWidth, setTrackWidth] = useState(0);
+  const onTrackLayout = useCallback((e: LayoutChangeEvent) => setTrackWidth(e.nativeEvent.layout.width), []);
   useEffect(() => {
     progress.stopAnimation();
     if (!ringing || !ringStartedAt) {
@@ -117,7 +124,7 @@ export function IncomingOrderAlertSheet({
       toValue: 0,
       duration: remaining,
       easing: Easing.linear,
-      useNativeDriver: false,
+      useNativeDriver: true,
     });
     anim.start();
     return () => anim.stop();
@@ -160,7 +167,7 @@ export function IncomingOrderAlertSheet({
     when,
   ].filter(Boolean) as string[];
 
-  const barWidth = progress.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] });
+  const barShift = progress.interpolate({ inputRange: [0, 1], outputRange: [-trackWidth, 0] });
 
   return (
     <Modal
@@ -203,8 +210,18 @@ export function IncomingOrderAlertSheet({
           </View>
 
           {/* Countdown */}
-          <View style={styles.barTrack} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-            <Animated.View style={[styles.barFill, { width: barWidth }]} />
+          <View
+            testID="ring-countdown-track"
+            style={styles.barTrack}
+            onLayout={onTrackLayout}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            {/* Hidden until the track is measured, so it never flashes full. */}
+            <Animated.View
+              testID="ring-countdown-fill"
+              style={[styles.barFill, { opacity: trackWidth > 0 ? 1 : 0, transform: [{ translateX: barShift }] }]}
+            />
           </View>
           <Text style={styles.barLabel}>
             {ringing ? "Respond quickly — the customer is waiting" : "Still waiting for your response"}
@@ -349,7 +366,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     marginTop: spacing.lg,
   },
-  barFill: { height: "100%", backgroundColor: ON_ACCENT, borderRadius: 3 },
+  barFill: { width: "100%", height: "100%", backgroundColor: ON_ACCENT, borderRadius: 3 },
   barLabel: { ...typography.caption, color: ON_ACCENT, opacity: 0.92, marginTop: spacing.xs },
 
   body: { flex: 1 },
