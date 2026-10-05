@@ -168,7 +168,11 @@ export function useOrdersFeed(isFocused: boolean, selected: SelectedStoreInput):
     const requestStartedAt = Date.now();
     lastActiveFetchRef.current = requestStartedAt;
     try {
-      const response = await apiClient.get("/shopkeeper/orders", {
+      // ?active=true: the server returns only pending_acceptance + accepted —
+      // exactly the rows kept below. Without it every 10 s poll downloaded
+      // the whole last week (picked up, rejected, cancelled too) and threw
+      // most of it away. Same row shape either way. (2026-10-06)
+      const response = await apiClient.get("/shopkeeper/orders?active=true", {
         Authorization: `Bearer ${session.token}`,
       });
       if (!response.success) {

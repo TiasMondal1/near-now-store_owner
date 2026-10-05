@@ -1,0 +1,60 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Orders tab active queue ends up with the same active orders as before 1`] = `
+"[
+ {
+  "allocation_id": "a1",
+  "order_id": "o-a1",
+  "order_code": "NN-a1",
+  "alloc_status": "pending_acceptance",
+  "pickup_code": null,
+  "store_id": "s1",
+  "placed_at": "2026-10-01T10:00:00Z",
+  "items": [
+   {
+    "id": "a1-i",
+    "product_name": "Milk",
+    "quantity": 1,
+    "unit": "pcs",
+    "price": 30
+   }
+  ]
+ },
+ {
+  "allocation_id": "a2",
+  "order_id": "o-a2",
+  "order_code": "NN-a2",
+  "alloc_status": "accepted",
+  "pickup_code": "P2",
+  "store_id": "s1",
+  "placed_at": "2026-10-02T10:00:00Z",
+  "items": [
+   {
+    "id": "a2-i",
+    "product_name": "Milk",
+    "quantity": 2,
+    "unit": "pcs",
+    "price": 30
+   }
+  ]
+ },
+ {
+  "allocation_id": "a6",
+  "order_id": "o-a6",
+  "order_code": "NN-a6",
+  "alloc_status": "accepted",
+  "pickup_code": "P6",
+  "store_id": "s1",
+  "placed_at": "2026-10-06T10:00:00Z",
+  "items": [
+   {
+    "id": "a6-i",
+    "product_name": "Milk",
+    "quantity": 6,
+    "unit": "pcs",
+    "price": 30
+   }
+  ]
+ }
+]"
+`;
