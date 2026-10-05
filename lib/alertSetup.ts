@@ -11,6 +11,11 @@
  *                    the shopkeeper confirms it once by hand.
  *   exactAlarm     — "Alarms & reminders" (SCHEDULE_EXACT_ALARM, Android
  *                    14+ denies by default); checked live via Notifee.
+ *                    Listed only in builds with developer tools: only the
+ *                    simulated demo order schedules an exact alarm. Real
+ *                    order alerts never do, so asking every shopkeeper for it
+ *                    left a "needs setup" warning most could not clear
+ *                    (fixed 2026-10-06).
  *   battery        — app exempt from battery optimisation; checked live via
  *                    Notifee; the direct "Allow app to run in background?"
  *                    dialog is opened with REQUEST_IGNORE_BATTERY_OPTIMIZATIONS.
@@ -25,6 +30,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import { useFocusEffect } from "@react-navigation/native";
 import { notificationService } from "./notifications";
+import { DEV_TOOLS_AVAILABLE } from "./devToolsFlag";
 
 type Notifee = typeof import("@notifee/react-native");
 let notifeeMod: Notifee | null = null;
@@ -126,21 +132,23 @@ export async function checkRequirements(): Promise<Requirement[]> {
     });
   }
 
-  let alarmOk = true;
-  try {
-    const s = await notifeeMod.default.getNotificationSettings();
-    alarmOk = s.android?.alarm === notifeeMod.AndroidNotificationSetting.ENABLED;
-  } catch {
-    alarmOk = true;
+  if (DEV_TOOLS_AVAILABLE) {
+    let alarmOk = true;
+    try {
+      const s = await notifeeMod.default.getNotificationSettings();
+      alarmOk = s.android?.alarm === notifeeMod.AndroidNotificationSetting.ENABLED;
+    } catch {
+      alarmOk = true;
+    }
+    out.push({
+      key: "exactAlarm",
+      title: "Alarms & reminders",
+      description: "Developer tools only: lets the simulated order fire at the exact second.",
+      actionLabel: "Open setting",
+      state: alarmOk ? "ok" : "missing",
+      detectable: true,
+    });
   }
-  out.push({
-    key: "exactAlarm",
-    title: "Alarms & reminders",
-    description: "Lets alerts fire at the exact second even when the phone is idle.",
-    actionLabel: "Open setting",
-    state: alarmOk ? "ok" : "missing",
-    detectable: true,
-  });
 
   let batteryOk = true;
   try {

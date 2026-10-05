@@ -243,7 +243,7 @@ of push delivery. Stops when the store goes offline or on logout.
 ### Order alert setup (`lib/alertSetup.ts`, `app/alert-setup.tsx`)
 
 Checklist of the Android settings alerts depend on — notifications,
-full-screen lock-screen alerts (Android 14+), Alarms & reminders, battery
+full-screen lock-screen alerts (Android 14+), battery
 unrestricted, OEM autostart — with live status where the OS exposes it and a
 deep link to the exact system page for each. Home shows a warning card until
 everything passes; the screen auto-opens once per install after login.
