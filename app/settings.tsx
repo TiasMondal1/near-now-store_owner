@@ -3,8 +3,8 @@
  * support, about, and logout.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
-import { BackHandler, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { BackHandler, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import Constants from 'expo-constants';
@@ -30,6 +30,7 @@ import {
   TopBar,
 } from '../components/ui';
 import { InitialAvatar } from '../components/profile';
+import { DEV_TOOLS_AVAILABLE, isDevToolsEnabled, onDevToolsEnabledChange, setDevToolsEnabled } from '../lib/devTools';
 
 const APP_VERSION: string = Constants.expoConfig?.version ?? '1.0.0';
 
@@ -46,6 +47,23 @@ export default function SettingsScreen() {
   const loadError = !loading && !store;
   const [showNotifications, setShowNotifications] = useState(false);
   const [confirmingLogout, setConfirmingLogout] = useState(false);
+  // TEMPORARY developer tools (lib/devTools). Never true in production builds.
+  const [devTools, setDevTools] = useState(false);
+  const versionTaps = useRef(0);
+  useEffect(() => {
+    if (!DEV_TOOLS_AVAILABLE) return;
+    void isDevToolsEnabled().then(setDevTools);
+    return onDevToolsEnabledChange(setDevTools);
+  }, []);
+  // Hidden tools come back with 7 taps on the Version row (dev/preview only).
+  const onVersionTap = useCallback(() => {
+    if (!DEV_TOOLS_AVAILABLE || devTools) return;
+    versionTaps.current += 1;
+    if (versionTaps.current >= 7) {
+      versionTaps.current = 0;
+      void setDevToolsEnabled(true);
+    }
+  }, [devTools]);
   // Unread count from the inbox cache warmed at splash / by Home's badge poll —
   // a cheap synchronous read, shown on the Inbox row when available.
   const readUnreadCount = () => (peekNotifications() ?? []).filter((n) => !n.is_read).length;
@@ -132,7 +150,16 @@ export default function SettingsScreen() {
                     title="Preferences"
                     description="Choose which order alerts you receive"
                     chevron
+                    showSeparator
                     onPress={() => setShowNotifications(true)}
+                  />
+                  <ListRow
+                    icon="shield-checkmark-outline"
+                    iconTile
+                    title="Order alert setup"
+                    description="Lock-screen, alarm and battery settings"
+                    chevron
+                    onPress={() => router.push('/alert-setup')}
                   />
                 </Card>
               </Section>
@@ -184,9 +211,26 @@ export default function SettingsScreen() {
               <Section title="About">
                 <Card>
                   <KeyValueRow label="Store ID" value={store?.id ?? 'Unavailable'} showSeparator />
-                  <KeyValueRow label="Version" value={APP_VERSION} />
+                  <Pressable onPress={onVersionTap} accessible={false}>
+                    <KeyValueRow label="Version" value={APP_VERSION} />
+                  </Pressable>
                 </Card>
               </Section>
+
+              {DEV_TOOLS_AVAILABLE && devTools ? (
+                <Section title="Developer tools">
+                  <Card padded={false}>
+                    <ListRow
+                      icon="construct-outline"
+                      iconTile
+                      title="Developer tools"
+                      description="Simulate an incoming order · demo login"
+                      chevron
+                      onPress={() => router.push('/dev-tools')}
+                    />
+                  </Card>
+                </Section>
+              ) : null}
 
               <Button
                 label="Log out"

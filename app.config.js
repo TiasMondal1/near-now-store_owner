@@ -6,6 +6,7 @@ const path = require("path");
 const withAbiSplits = require("./plugins/withAbiSplits");
 const withTabletSupport = require("./plugins/withTabletSupport");
 const withRemoveMediaPermissions = require("./plugins/withRemoveMediaPermissions");
+const withLockScreenAlerts = require("./plugins/withLockScreenAlerts");
 
 // This app's android/app/build.gradle (and root build.gradle/settings.gradle/
 // gradlew) were deleted from git by an errant "cleanup" commit (ec154b4,
@@ -184,6 +185,8 @@ module.exports = () => {
       withAbiSplits,
       withTabletSupport,
       withRemoveMediaPermissions,
+      // Full-screen (lock-screen) incoming-order alert via Notifee.
+      withLockScreenAlerts,
     ],
     extra: {
       apiBaseUrl:

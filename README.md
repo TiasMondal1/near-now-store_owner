@@ -195,6 +195,65 @@ await storeService.updateStore(storeId, {
 }, token);
 ```
 
+### Incoming-order popup (ring + Accept / Reject)
+
+A new `pending_acceptance` allocation opens a full-screen popup over whatever
+screen is up, loops `assets/sounds/order_chime.wav` + vibration for 45 s, and
+offers Accept (with per-item ticks) / Reject (two-tap confirm) / Not now.
+
+- Trigger: the always-mounted `IncomingOrdersProvider` poll (15 s), nudged
+  instantly by a push (`lib/notifications.ts`) or a Supabase realtime row.
+  The push payload carries no order data, so the popup is driven from the
+  `/shopkeeper/orders?active=true` response, not the notification itself.
+- Files: `components/IncomingOrderAlertHost.tsx` (queue, ringer, API calls),
+  `components/IncomingOrderAlertSheet.tsx` (UI), `lib/incomingOrderAlert.ts`
+  (`pickNewAlerts`, seen-set on disk, `orderRinger` via `expo-audio`).
+- Each order rings once ever (seen-set in AsyncStorage); orders older than
+  10 min never ring. An order that is answered elsewhere or expires while
+  shown closes itself.
+- App killed/backgrounded (Android): the push is routed through a headless
+  task (`lib/backgroundNotifications.ts`, registered from `index.ts`) to a
+  Notifee full-screen alert (`lib/lockScreenAlert.ts`) that takes over the
+  lock screen, loops the chime and offers Accept / Reject. The tapped action
+  is applied by the in-app popup once the order loads. Needs a native rebuild
+  (`plugins/withLockScreenAlerts.js` adds USE_FULL_SCREEN_INTENT and
+  showWhenLocked/turnScreenOn); Android 14+ users are prompted once to allow
+  full-screen notifications. Without the native module (Expo Go) the plain
+  banner is the fallback.
+
+### "Store online" foreground service (`lib/orderListenerService.ts`)
+
+While the store is online, a Notifee foreground service (ongoing silent
+"Store online — listening for orders" notification, `specialUse` type) keeps
+the process alive. The incoming-orders provider keeps a 20 s background poll
+running, realtime stays connected, and a new pending order is raised by the
+popup host as the Notifee lock-screen ring with order details — independent
+of push delivery. Stops when the store goes offline or on logout.
+
+### Order alert setup (`lib/alertSetup.ts`, `app/alert-setup.tsx`)
+
+Checklist of the Android settings alerts depend on — notifications,
+full-screen lock-screen alerts (Android 14+), Alarms & reminders, battery
+unrestricted, OEM autostart — with live status where the OS exposes it and a
+deep link to the exact system page for each. Home shows a warning card until
+everything passes; the screen auto-opens once per install after login.
+
+### Developer tools (TEMPORARY — dev/preview builds only)
+
+`lib/devTools.ts`, `app/dev-tools.tsx`; entry row at the bottom of Settings,
+gated by `DEV_TOOLS_AVAILABLE` (`EXPO_PUBLIC_ENV !== "production"`), so
+production builds contain no entry point. Hide with the toggle on the screen;
+re-show by tapping the Version row in Settings 7 times.
+
+- **Simulate incoming order** — after 10 s raises a fake DEMO allocation into
+  the popup and posts the real OS alert (Notifee lock-screen ring when the
+  build has it, else a scheduled banner). Accept/Reject on DEMO orders are
+  handled locally and never call the backend.
+- **Demo login** — "Save this login" stores the current real session token
+  (SecureStore); the landing screen then shows "Use saved demo session" so
+  re-login skips the Twilio OTP for up to 30 days.
+
+
 ### Notification Service (`lib/notifications.ts`)
 ```typescript
 import { notificationService } from './lib/notifications';

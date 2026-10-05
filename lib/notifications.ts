@@ -11,6 +11,10 @@ import { router } from 'expo-router';
 import { apiClient } from './api-client';
 import { getSession } from '../session';
 import { emitOrdersChanged } from './orderEvents';
+import { emitDemoOrder } from './demoOrderEvents';
+import { LOCK_SCREEN_ALERTS_AVAILABLE, cancelLockScreenAlerts, setupLockScreenAlertHandling } from './lockScreenAlert';
+import { NEW_ORDER_BACKGROUND_TASK } from './backgroundNotifications';
+import { stopOrderListener } from './orderListenerService';
 
 const PUSH_TOKEN_KEY = 'push_notification_token';
 const NOTIFICATION_PREFERENCES_KEY = 'notification_preferences';
@@ -80,6 +84,7 @@ class NotificationService {
   // screen once per accumulated listener.
   private receivedSub: { remove: () => void } | null = null;
   private responseSub: { remove: () => void } | null = null;
+  private lastHandledLaunchTapId: string | null = null;
 
   private constructor() {
     this.readyPromise = this.loadPreferences();
@@ -117,6 +122,7 @@ class NotificationService {
       if (Device.isDevice) {
         await this.registerForPushNotifications();
         this.setupNotificationListeners();
+        await this.setupBackgroundAlerts();
       } else {
         if (__DEV__) console.log('Notifications disabled: Not a physical device');
       }
@@ -124,6 +130,27 @@ class NotificationService {
       if (__DEV__) console.warn('Failed to initialize notifications:', error);
       // Don't throw - app should work without notifications
     }
+  }
+
+  /**
+   * Android lock-screen ringing alert (lib/lockScreenAlert.ts): route pushes
+   * that arrive while backgrounded/killed through the headless task, listen
+   * for Accept/Reject taps. The permissions themselves (full-screen, exact
+   * alarm, battery) are handled by the Order alert setup screen
+   * (lib/alertSetup). No-op where Notifee's native module is absent.
+   */
+  private backgroundAlertsReady = false;
+  private async setupBackgroundAlerts(): Promise<void> {
+    if (!Notifications || Platform.OS !== 'android' || !LOCK_SCREEN_ALERTS_AVAILABLE) return;
+    if (!this.backgroundAlertsReady) {
+      this.backgroundAlertsReady = true;
+      try {
+        await Notifications.registerTaskAsync(NEW_ORDER_BACKGROUND_TASK);
+      } catch (e) {
+        if (__DEV__) console.warn('[notifications] background task registration failed:', e);
+      }
+    }
+    await setupLockScreenAlertHandling();
   }
 
   /**
@@ -283,6 +310,18 @@ class NotificationService {
           if (__DEV__) console.warn('Error handling notification tap:', error);
         }
       });
+
+      // The tap that cold-started the app fired before any listener existed
+      // (Home mounts, then initialize() runs). Replay it once so a killed
+      // app still opens on the incoming order and the popup rings.
+      Notifications.getLastNotificationResponseAsync()
+        .then((response) => {
+          const id = response?.notification?.request?.identifier;
+          if (!response || !id || id === this.lastHandledLaunchTapId) return;
+          this.lastHandledLaunchTapId = id;
+          this.handleNotificationTap(response.notification);
+        })
+        .catch(() => {});
     } catch (error) {
       if (__DEV__) console.warn('Failed to setup notification listeners:', error);
     }
@@ -297,8 +336,25 @@ class NotificationService {
     // Navigate based on notification type — mirrors notification-inbox.tsx's
     // own openNotification handler for the in-app tap case, so both entry
     // points land in the same place.
+    // Developer-tools demo order (lib/devTools): the fake allocation rides
+    // in the payload so a tap — even one that cold-starts the app — can
+    // raise the same popup without any backend order existing.
+    if (typeof data?.demo === 'string') {
+      try {
+        emitDemoOrder(JSON.parse(data.demo));
+      } catch {
+        // malformed demo payload — ignore
+      }
+      router.push({ pathname: '/(tabs)/previous-orders', params: { tab: 'incoming' } });
+      return;
+    }
+
     if (data?.type === 'new_order') {
-      router.push('/(tabs)/previous-orders');
+      // Land on the Incoming segment, and refetch right now so the
+      // full-screen Accept/Reject popup (IncomingOrderAlertHost) rings for
+      // this order without waiting for the next poll tick.
+      emitOrdersChanged();
+      router.push({ pathname: '/(tabs)/previous-orders', params: { tab: 'incoming' } });
     }
   }
 
@@ -314,6 +370,38 @@ class NotificationService {
     await Notifications.scheduleNotificationAsync({
       content: { title, body, data, sound: true },
       trigger: null,
+    });
+  }
+
+  isLocalSchedulingAvailable(): boolean {
+    return !!Notifications;
+  }
+
+  /**
+   * Schedule a local notification `seconds` from now on the orders channel
+   * (order chime, max importance). Returns the identifier for cancelling.
+   */
+  async scheduleLocalNotification(
+    title: string,
+    body: string,
+    data: Record<string, any>,
+    seconds: number
+  ): Promise<string | null> {
+    if (!Notifications) return null;
+    return Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+        data,
+        sound: Platform.OS === 'ios' ? 'order_chime.wav' : true,
+        priority: Notifications.AndroidNotificationPriority.MAX,
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+        seconds: Math.max(1, seconds),
+        repeats: false,
+        channelId: 'orders_v2',
+      },
     });
   }
 
@@ -385,6 +473,8 @@ class NotificationService {
    * push init only runs once per app session, not per login).
    */
   async unregister(): Promise<void> {
+    cancelLockScreenAlerts().catch(() => {});
+    stopOrderListener().catch(() => {});
     try {
       const authToken = await this.getAuthToken();
       if (!authToken) return;

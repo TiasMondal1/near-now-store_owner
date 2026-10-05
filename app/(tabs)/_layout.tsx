@@ -8,6 +8,7 @@ import { setToastBottomOffset } from "../../components/ui";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { IncomingOrdersProvider, useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
 import { useStoreApprovalGate } from "../../lib/useStoreApprovalGate";
+import { IncomingOrderAlertHost } from "../../components/IncomingOrderAlertHost";
 
 // Pre-redesign Orders badge colour.
 const ORDERS_BADGE_ORANGE = "#FF9800";
@@ -124,6 +125,9 @@ export default function TabsLayout() {
   return (
     <IncomingOrdersProvider>
       <TabsNavigator />
+      {/* Full-screen ringing Accept/Reject popup for new orders. Lives here,
+          not in a screen, so it fires whichever tab or pushed screen is up. */}
+      <IncomingOrderAlertHost />
     </IncomingOrdersProvider>
   );
 }

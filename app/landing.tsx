@@ -3,7 +3,9 @@ import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Button, ConfirmSheet, Screen } from "../components/ui";
-import { getSession, clearSession } from "../session";
+import { getSession, clearSession, saveSession } from "../session";
+import { DEV_TOOLS_AVAILABLE, isDevToolsEnabled, loadDemoSession } from "../lib/devTools";
+import { resolveAuthenticatedRoute } from "../lib/storeApproval";
 import { colors, layout, radius, spacing, typography } from "../lib/theme";
 import { useBottomPadding, useLayout } from "../lib/useLayout";
 
@@ -21,6 +23,34 @@ export default function LandingScreen() {
   const { gutter, contentWidth } = useLayout();
   const paddingBottom = useBottomPadding();
   const [wrongAccount, setWrongAccount] = useState(false);
+  // TEMPORARY dev aid (lib/devTools): restore a previously saved real login
+  // token instead of paying for another Twilio OTP. Never shown in production.
+  const [demoName, setDemoName] = useState<string | null>(null);
+  const [demoBusy, setDemoBusy] = useState(false);
+  useEffect(() => {
+    if (!DEV_TOOLS_AVAILABLE) return;
+    let cancelled = false;
+    (async () => {
+      if (!(await isDevToolsEnabled())) return;
+      const s = await loadDemoSession();
+      if (!cancelled && s) setDemoName(s.user.name || "Demo shopkeeper");
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const restoreDemoSession = useCallback(async () => {
+    if (demoBusy) return;
+    setDemoBusy(true);
+    try {
+      const s = await loadDemoSession();
+      if (!s) { setDemoName(null); return; }
+      await saveSession(s);
+      router.replace(await resolveAuthenticatedRoute(s.token, s.user.id));
+    } catch {
+      router.replace("/");
+    } finally {
+      setDemoBusy(false);
+    }
+  }, [demoBusy, router]);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,6 +109,17 @@ export default function LandingScreen() {
           <View style={styles.actions}>
             <Button label="Continue with phone number" size="lg" fullWidth onPress={goToPhone} />
             <Button label="New here? Register your store" variant="text" size="md" fullWidth onPress={goToRegister} />
+            {DEV_TOOLS_AVAILABLE && demoName ? (
+              <Button
+                label={`Use saved demo session (${demoName})`}
+                variant="tonal"
+                size="md"
+                fullWidth
+                leftIcon="key-outline"
+                loading={demoBusy}
+                onPress={() => void restoreDemoSession()}
+              />
+            ) : null}
             <Text style={styles.footer}>Phone & OTP verification only</Text>
           </View>
         </View>

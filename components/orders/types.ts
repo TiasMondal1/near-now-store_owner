@@ -10,6 +10,8 @@ export type AllocationItem = {
 export type Allocation = {
   allocation_id: string;
   order_id: string;
+  /** Owning store — present in the API response; gates Accept on store online state. */
+  store_id?: string;
   order_code: string;
   alloc_status: "pending_acceptance" | "accepted";
   pickup_code: string | null;

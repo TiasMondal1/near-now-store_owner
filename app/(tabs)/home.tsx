@@ -16,7 +16,8 @@ import { useSelectedStore } from "../../lib/useSelectedStore";
 import { isStoreApproved, refreshStoreApproval } from "../../lib/storeApproval";
 import { notificationService } from "../../lib/notifications";
 import { onOrdersChanged } from "../../lib/orderEvents";
-import { maybePromptBatteryOptimization } from "../../lib/batteryOptimization";
+import { shouldAutoOpenAlertSetup, useAlertSetup } from "../../lib/alertSetup";
+import { startOrderListener, stopOrderListener } from "../../lib/orderListenerService";
 import { useSmartPoll } from "../../lib/useSmartPoll";
 import { useIncomingOrdersCount } from "../../lib/incomingOrdersContext";
 import { apiClient } from "../../lib/api-client";
@@ -129,9 +130,26 @@ export default function HomeTab() {
     // it). Fire-and-forget: never blocks or fails the screen — no permission,
     // Expo Go, etc. are all handled internally and are non-fatal.
     notificationService.initialize().catch(() => {});
-    // One-time nudge on OEMs whose battery optimiser delays pushes.
-    maybePromptBatteryOptimization().catch(() => {});
+    // First login on this install with alert settings missing: walk the
+    // shopkeeper through them once. The Home card below keeps nagging after.
+    shouldAutoOpenAlertSetup()
+      .then((open) => {
+        if (open) router.push("/alert-setup");
+      })
+      .catch(() => {});
   }, [session?.token]);
+
+  // Live status of the phone settings order alerts depend on (lib/alertSetup).
+  const alertSetup = useAlertSetup();
+
+  // "Store online — listening for orders" foreground service follows the
+  // store's online state (lib/orderListenerService). Logout stops it via
+  // notificationService.unregister().
+  useEffect(() => {
+    if (!selectedStore) return;
+    if (isStoreOnline) startOrderListener(selectedStore.name).catch(() => {});
+    else stopOrderListener().catch(() => {});
+  }, [isStoreOnline, selectedStore?.id, selectedStore?.name]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Warm start: the hook painted from the store cache, which can hold a stale
   // name / address for up to 10 minutes — genuinely refetch once in the
@@ -552,6 +570,26 @@ export default function HomeTab() {
                     pendingApproval={!approved}
                   />
                 </View>
+
+                {/* ── Alert setup warning ───────────────────────────────── */}
+                {!alertSetup.complete ? (
+                  <HomeCard
+                    title="Order alerts need setup"
+                    style={styles.block}
+                    footer={
+                      <HomePrimaryButton
+                        label="Fix now"
+                        onPress={() => router.push("/alert-setup")}
+                        accessibilityHint="Opens the order alert setup checklist"
+                      />
+                    }
+                  >
+                    <Text style={styles.body}>
+                      {alertSetup.missingCount} phone setting{alertSetup.missingCount === 1 ? "" : "s"} can stop new orders from
+                      ringing when the phone is locked.
+                    </Text>
+                  </HomeCard>
+                ) : null}
 
                 {/* ── Incoming orders ───────────────────────────────────── */}
                 {incomingCount > 0 ? (
