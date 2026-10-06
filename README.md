@@ -211,15 +211,25 @@ offers Accept (with per-item ticks) / Reject (two-tap confirm) / Not now.
 - Each order rings once ever (seen-set in AsyncStorage); orders older than
   10 min never ring. An order that is answered elsewhere or expires while
   shown closes itself.
-- App killed/backgrounded (Android): the push is routed through a headless
-  task (`lib/backgroundNotifications.ts`, registered from `index.ts`) to a
-  Notifee full-screen alert (`lib/lockScreenAlert.ts`) that takes over the
-  lock screen, loops the chime and offers Accept / Reject. The tapped action
-  is applied by the in-app popup once the order loads. Needs a native rebuild
-  (`plugins/withLockScreenAlerts.js` adds USE_FULL_SCREEN_INTENT and
-  showWhenLocked/turnScreenOn); Android 14+ users are prompted once to allow
-  full-screen notifications. Without the native module (Expo Go) the plain
-  banner is the fallback.
+- App backgrounded (Android): a push of type `new_order` — only that type,
+  never `order_cancelled` / `order_items_added` — is routed through a
+  headless task (`lib/backgroundNotifications.ts`, registered from
+  `index.ts`) to a Notifee alert (`lib/lockScreenAlert.ts`) that wakes the
+  screen and loops the chime. The push carries no order id, so that alert
+  has no Accept / Reject buttons: a tap opens the app on the popup. Alerts
+  the app raises itself (store online, below) carry the order id and do have
+  the buttons; a tapped action is applied only to that order
+  (`lib/orderAlertRules.ts` `resolveLockScreenTap`) and dropped after 90 s if
+  the order never loads. With the app open, only the in-app popup rings.
+- Over the lock screen only the notification shows; opening the app from it
+  asks for the unlock first (the app is deliberately not `showWhenLocked`).
+  `plugins/withLockScreenAlerts.js` adds USE_FULL_SCREEN_INTENT and the
+  foreground-service permissions; Android 14+ users are prompted once to
+  allow full-screen notifications. Without the native module (Expo Go) the
+  plain banner is the fallback.
+- Known limit: with the app fully closed, expo-notifications runs the
+  headless task only for data-only pushes, and order pushes carry a title
+  and body, so a closed app gets the normal banner rather than the ring.
 
 ### "Store online" foreground service (`lib/orderListenerService.ts`)
 
@@ -233,7 +243,7 @@ of push delivery. Stops when the store goes offline or on logout.
 ### Order alert setup (`lib/alertSetup.ts`, `app/alert-setup.tsx`)
 
 Checklist of the Android settings alerts depend on — notifications,
-full-screen lock-screen alerts (Android 14+), Alarms & reminders, battery
+full-screen lock-screen alerts (Android 14+), battery
 unrestricted, OEM autostart — with live status where the OS exposes it and a
 deep link to the exact system page for each. Home shows a warning card until
 everything passes; the screen auto-opens once per install after login.
@@ -241,9 +251,12 @@ everything passes; the screen auto-opens once per install after login.
 ### Developer tools (TEMPORARY — dev/preview builds only)
 
 `lib/devTools.ts`, `app/dev-tools.tsx`; entry row at the bottom of Settings,
-gated by `DEV_TOOLS_AVAILABLE` (`EXPO_PUBLIC_ENV !== "production"`), so
-production builds contain no entry point. Hide with the toggle on the screen;
-re-show by tapping the Version row in Settings 7 times.
+gated by `DEV_TOOLS_AVAILABLE` (`lib/devToolsFlag.ts`): true only in a dev
+client (`__DEV__`) or a build with `EXPO_PUBLIC_ENV=preview`, so every other
+release — including one built from a local `.env` that says `development` —
+has no entry point, and demo payloads in notifications are ignored. Hide with
+the toggle on the screen; re-show by tapping the Version row in Settings 7
+times.
 
 - **Simulate incoming order** — after 10 s raises a fake DEMO allocation into
   the popup and posts the real OS alert (Notifee lock-screen ring when the
@@ -253,6 +266,16 @@ re-show by tapping the Version row in Settings 7 times.
   (SecureStore); the landing screen then shows "Use saved demo session" so
   re-login skips the Twilio OTP for up to 30 days.
 
+
+### Release builds (local)
+
+`android/` is generated, not committed. `node scripts/build-apk-with-env.js`
+(add `aab` for a Play Store bundle) runs `expo prebuild` first, so every
+config plugin (Firebase, ABI splits + release signing, lock-screen alerts)
+is applied, then Gradle. Releases are production builds whatever the `.env`
+says; pass `--env=preview` for a tester build with developer tools. Prebuild
+runs without `--clean`, so `android/keystore.properties` and a keystore kept
+in `android/` survive — keep a backup of both outside `android/` anyway.
 
 ### Notification Service (`lib/notifications.ts`)
 ```typescript

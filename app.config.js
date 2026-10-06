@@ -7,6 +7,7 @@ const withAbiSplits = require("./plugins/withAbiSplits");
 const withTabletSupport = require("./plugins/withTabletSupport");
 const withRemoveMediaPermissions = require("./plugins/withRemoveMediaPermissions");
 const withLockScreenAlerts = require("./plugins/withLockScreenAlerts");
+const withoutAudioForegroundServices = require("./plugins/withoutAudioForegroundServices");
 
 // This app's android/app/build.gradle (and root build.gradle/settings.gradle/
 // gradlew) were deleted from git by an errant "cleanup" commit (ec154b4,
@@ -90,7 +91,7 @@ module.exports = () => {
   return {
     name: "Near & Now Shopkeeper",
     slug: "shopkeeperapp",
-    version: "1.0.0",
+    version: "1.1.0",
     orientation: "portrait",
     // App icon used on the device / launcher
     icon: "./near_now_shopkeeper.png",
@@ -130,7 +131,7 @@ module.exports = () => {
       // wiring the customer/rider apps already use — guarded so a checkout
       // without the file (or a prebuild-preflight quirk) doesn't fail outright.
       ...(hasGoogleServicesFile ? { googleServicesFile: googleServicesFilePath } : {}),
-      versionCode: 25,
+      versionCode: 27,
       jsEngine: "hermes",
       // Native Maps SDK meta-data — required for MapView tiles on Android
       config: {
@@ -187,6 +188,9 @@ module.exports = () => {
       withRemoveMediaPermissions,
       // Full-screen (lock-screen) incoming-order alert via Notifee.
       withLockScreenAlerts,
+      // expo-audio's unused media/microphone foreground services (Play
+      // would require a declaration + video for each).
+      withoutAudioForegroundServices,
     ],
     extra: {
       apiBaseUrl:

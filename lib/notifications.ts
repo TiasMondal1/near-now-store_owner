@@ -12,6 +12,7 @@ import { apiClient } from './api-client';
 import { getSession } from '../session';
 import { emitOrdersChanged } from './orderEvents';
 import { emitDemoOrder } from './demoOrderEvents';
+import { DEV_TOOLS_AVAILABLE } from './devToolsFlag';
 import { LOCK_SCREEN_ALERTS_AVAILABLE, cancelLockScreenAlerts, setupLockScreenAlertHandling } from './lockScreenAlert';
 import { NEW_ORDER_BACKGROUND_TASK } from './backgroundNotifications';
 import { stopOrderListener } from './orderListenerService';
@@ -338,8 +339,9 @@ class NotificationService {
     // points land in the same place.
     // Developer-tools demo order (lib/devTools): the fake allocation rides
     // in the payload so a tap — even one that cold-starts the app — can
-    // raise the same popup without any backend order existing.
-    if (typeof data?.demo === 'string') {
+    // raise the same popup without any backend order existing. Ignored in
+    // builds without developer tools, so no push can raise a fake order.
+    if (typeof data?.demo === 'string' && DEV_TOOLS_AVAILABLE) {
       try {
         emitDemoOrder(JSON.parse(data.demo));
       } catch {

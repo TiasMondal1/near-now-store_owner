@@ -4,52 +4,24 @@
  * handler are registered in the global scope, as both libraries require.
  *
  *  • expo-notifications background task: fires on Android for a remote push
- *    received while the app is not in the foreground. For a new-order push
- *    it raises the Notifee full-screen ringing alert
- *    (lib/lockScreenAlert.ts) and dismisses the plain banner expo posted.
+ *    received while the app is not in the foreground. For a push of type
+ *    "new_order" — and only that type — it raises the Notifee full-screen
+ *    ringing alert (lib/lockScreenAlert.ts) and dismisses the plain banner
+ *    expo posted. The task also runs for pushes received while the app is
+ *    open and for notification taps; neither rings (the in-app popup
+ *    already rings for an open app, and a tap is not a new order).
  *  • Notifee background event: Accept / Reject / tap on that alert while the
  *    app is not in the foreground.
  *
  * Everything is wrapped so a runtime without these native modules (Expo Go,
  * web) simply skips it.
  */
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import { handleLockScreenEvent, LOCK_SCREEN_ALERTS_AVAILABLE, showLockScreenOrderAlert } from "./lockScreenAlert";
 import { registerOrderListenerTask } from "./orderListenerService";
+import { NEW_ORDER_PUSH_TYPE, findPushText, findPushType, isNewOrderPush } from "./orderAlertRules";
 
 export const NEW_ORDER_BACKGROUND_TASK = "near-now-new-order-background";
-
-function findType(payload: any): string | null {
-  const candidates = [
-    payload?.data?.type,
-    payload?.notification?.data?.type,
-    payload?.notification?.request?.content?.data?.type,
-    payload?.data?.body?.type,
-  ];
-  for (const c of candidates) if (typeof c === "string") return c;
-  // FCM data messages sometimes arrive with `body` as a JSON string.
-  const body = payload?.data?.body;
-  if (typeof body === "string") {
-    try {
-      const parsed = JSON.parse(body);
-      if (typeof parsed?.type === "string") return parsed.type;
-    } catch {
-      // not JSON
-    }
-  }
-  return null;
-}
-
-function findText(payload: any, key: "title" | "body"): string | null {
-  const candidates = [
-    payload?.notification?.request?.content?.[key],
-    payload?.notification?.[key],
-    payload?.data?.[key],
-    payload?.data?.notification?.[key],
-  ];
-  for (const c of candidates) if (typeof c === "string" && c.trim()) return c;
-  return null;
-}
 
 if (Platform.OS === "android") {
   try {
@@ -57,11 +29,17 @@ if (Platform.OS === "android") {
     const TaskManager = require("expo-task-manager") as typeof import("expo-task-manager");
     TaskManager.defineTask(NEW_ORDER_BACKGROUND_TASK, async ({ data, error }) => {
       if (error || !LOCK_SCREEN_ALERTS_AVAILABLE) return;
-      const type = findType(data);
-      if (type && !type.includes("order")) return;
+      // Only a new order rings — not a cancellation, added items, a support
+      // reply, a push with no type, or the user tapping a notification.
+      if (!isNewOrderPush(data)) return;
+      // App open: the in-app popup (IncomingOrderAlertHost) rings already;
+      // a second, lock-screen ring on top of it would play twice.
+      if (AppState.currentState === "active") return;
+      // The push carries no order id, so this alert has no Accept / Reject
+      // buttons (lib/lockScreenAlert): a tap opens the app on the order.
       await showLockScreenOrderAlert({
-        title: findText(data, "title") ?? "New order request",
-        body: findText(data, "body") ?? "Tap to accept or reject",
+        title: findPushText(data, "title") ?? "New order request",
+        body: findPushText(data, "body") ?? "Tap to open the order",
       });
       // The plain banner expo-notifications posted for the same push is now
       // redundant next to the ringing alert.
@@ -73,7 +51,9 @@ if (Platform.OS === "android") {
           presented
             .filter((n) => {
               const d: any = n.request.content.data;
-              return !d?.demo && (!d?.type || String(d.type).includes("order"));
+              // Only the new-order banner the ringing alert replaces; a
+              // cancellation or items-added banner must stay.
+              return !d?.demo && findPushType({ data: d }) === NEW_ORDER_PUSH_TYPE;
             })
             .map((n) => Notifications.dismissNotificationAsync(n.request.identifier))
         );

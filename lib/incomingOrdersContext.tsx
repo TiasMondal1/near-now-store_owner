@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { getSession } from '../session';
 import { apiClient } from './api-client';
 import { useSmartPoll } from './useSmartPoll';
@@ -21,17 +21,45 @@ type IncomingOrdersValue = {
    */
   pendingAllocations: Allocation[];
   session: UserSession | null;
+  /**
+   * Accepted (in-progress) allocations per store id, from the same poll —
+   * Home's "active orders" count reads this instead of sending the identical
+   * GET /shopkeeper/orders?active=true request itself.
+   */
+  acceptedCountByStore: Readonly<Record<string, number>>;
   /** Force an immediate refetch of the pending list. */
   refreshIncoming: () => Promise<void>;
 };
+
+/** How often the app checks for new orders while open. */
+export const INCOMING_POLL_MS = 15_000;
+/** How often it checks in the background while the "store online" service runs. */
+export const INCOMING_BACKGROUND_POLL_MS = 20_000;
 
 const IncomingOrdersContext = createContext<IncomingOrdersValue>({
   incomingCount: 0,
   setIncomingCount: () => {},
   pendingAllocations: [],
   session: null,
+  acceptedCountByStore: {},
   refreshIncoming: async () => {},
 });
+
+/** Accepted allocations per store id — Home's former count, for every store at once. */
+export function countAcceptedByStore(orders: readonly { store_id?: string | null; alloc_status?: string }[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const o of orders) {
+    if (o.alloc_status !== 'accepted' || !o.store_id) continue;
+    counts[o.store_id] = (counts[o.store_id] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function sameCounts(a: Readonly<Record<string, number>>, b: Readonly<Record<string, number>>): boolean {
+  const ak = Object.keys(a);
+  if (ak.length !== Object.keys(b).length) return false;
+  return ak.every((k) => a[k] === b[k]);
+}
 
 export function IncomingOrdersProvider({ children }: { children: React.ReactNode }) {
   const [incomingCount, setIncomingCount] = useState(0);
@@ -46,6 +74,7 @@ export function IncomingOrdersProvider({ children }: { children: React.ReactNode
   // mounted.
   const [session, setSession] = useState<UserSession | null>(null);
   const [pendingAllocations, setPendingAllocations] = useState<Allocation[]>([]);
+  const [acceptedCountByStore, setAcceptedCountByStore] = useState<Readonly<Record<string, number>>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -81,6 +110,8 @@ export function IncomingOrdersProvider({ children }: { children: React.ReactNode
       // Identity-stable: this runs every 15s and the popup host keys effects
       // off this array — an identical-but-new array would churn them.
       setPendingAllocations((prev) => (samePending(prev, pending) ? prev : pending));
+      const accepted = countAcceptedByStore(orders);
+      setAcceptedCountByStore((prev) => (sameCounts(prev, accepted) ? prev : accepted));
     } catch {
       // Non-fatal — badge stays on its last known count.
     }
@@ -88,16 +119,13 @@ export function IncomingOrdersProvider({ children }: { children: React.ReactNode
 
   useEffect(() => { pollIncomingCount(); }, [pollIncomingCount]);
 
-  // Realtime health: true while every store channel reports SUBSCRIBED.
-  // Drives both polls below — realtime delivers order changes in ~1s, so a
-  // healthy socket only needs a slow safety-net poll.
-  const [realtimeHealthy, setRealtimeHealthy] = useState(false);
-  const channelStatusRef = useRef<Map<string, string>>(new Map());
-
+  // Fixed rate, never slowed for realtime. Production's store_orders RLS
+  // (service_role / admins only) gives this app's realtime connection no
+  // rows, yet every channel still reports SUBSCRIBED — slowing the poll on
+  // that (30 s open / 60 s background, 2026-10-05) only made new orders show
+  // up later. Fixed 2026-10-06.
   useSmartPoll(pollIncomingCount, {
-    intervalMs: 15_000,
-    slowIntervalMs: 30_000,
-    isRealtimeHealthy: realtimeHealthy,
+    intervalMs: INCOMING_POLL_MS,
     enabled: !!session?.token,
   });
 
@@ -107,25 +135,25 @@ export function IncomingOrdersProvider({ children }: { children: React.ReactNode
 
   // useSmartPoll pauses in the background on purpose. While the "store
   // online" foreground service keeps the process alive, run a background
-  // safety-net poll so a new order is noticed even if realtime drops — the
-  // popup host turns it into the lock-screen ring. 60 s while the realtime
-  // socket is healthy (it delivers changes itself), 20 s when it is down.
+  // safety-net poll so a new order is noticed even if the push is late —
+  // the popup host turns it into the lock-screen ring.
   const [listenerRunning, setListenerRunning] = useState(isOrderListenerRunning());
   useEffect(() => onOrderListenerChange(setListenerRunning), []);
   useEffect(() => {
     if (!listenerRunning || !session?.token) return;
     const id = setInterval(() => {
       if (AppState.currentState !== 'active') pollIncomingCount();
-    }, realtimeHealthy ? 60_000 : 20_000);
+    }, INCOMING_BACKGROUND_POLL_MS);
     return () => clearInterval(id);
-  }, [listenerRunning, session?.token, pollIncomingCount, realtimeHealthy]);
+  }, [listenerRunning, session?.token, pollIncomingCount]);
 
   // Realtime nudge: this provider wraps the whole tab layout, so it is the
   // one always-mounted place to watch store_orders for every store the
   // shopkeeper owns. Any INSERT/UPDATE just emits the shared event; the
-  // subscribers do their normal (authoritative) backend fetch. If realtime
-  // is blocked by RLS or the socket drops, nothing breaks — polling still
-  // runs.
+  // subscribers do their normal (authoritative) backend fetch. Today RLS
+  // blocks these rows for the app (see the poll above), so this delivers
+  // nothing and polling carries the load; it starts working as soon as a
+  // shopkeeper read path for store_orders exists.
   useEffect(() => {
     if (!session?.token || !supabase) return;
     let cancelled = false;
@@ -142,17 +170,11 @@ export function IncomingOrdersProvider({ children }: { children: React.ReactNode
             { event: '*', schema: 'public', table: 'store_orders', filter: `store_id=eq.${storeId}` },
             () => emitOrdersChanged()
           )
-          .subscribe((status) => {
-            channelStatusRef.current.set(storeId, status);
-            const all = Array.from(channelStatusRef.current.values());
-            setRealtimeHealthy(all.length === ids.length && all.every((st) => st === 'SUBSCRIBED'));
-          })
+          .subscribe()
       );
     })();
     return () => {
       cancelled = true;
-      channelStatusRef.current.clear();
-      setRealtimeHealthy(false);
       channels.forEach((ch) => supabase?.removeChannel(ch as any));
     };
   }, [session?.token, session?.user?.id]);
@@ -163,8 +185,8 @@ export function IncomingOrdersProvider({ children }: { children: React.ReactNode
   // layout to re-render just because this object literal has a new
   // reference.
   const value = useMemo<IncomingOrdersValue>(
-    () => ({ incomingCount, setIncomingCount, pendingAllocations, session, refreshIncoming: pollIncomingCount }),
-    [incomingCount, pendingAllocations, session, pollIncomingCount]
+    () => ({ incomingCount, setIncomingCount, pendingAllocations, session, acceptedCountByStore, refreshIncoming: pollIncomingCount }),
+    [incomingCount, pendingAllocations, session, acceptedCountByStore, pollIncomingCount]
   );
 
   return (

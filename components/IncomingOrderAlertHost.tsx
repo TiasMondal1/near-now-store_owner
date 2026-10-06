@@ -32,6 +32,7 @@ import { pluralItems } from "./orders/format";
 import { useIncomingOrders } from "../lib/incomingOrdersContext";
 import { notificationService } from "../lib/notifications";
 import { emitOrdersChanged } from "../lib/orderEvents";
+import { LOCK_ACTION_TTL_MS, resolveLockScreenTap, type LockScreenTap } from "../lib/orderAlertRules";
 import { triggerHaptic, useToast } from "./ui";
 import { IncomingOrderAlertSheet } from "./IncomingOrderAlertSheet";
 import type { Allocation } from "./orders/types";
@@ -41,6 +42,13 @@ function errorMessageOf(...candidates: unknown[]): string | null {
     if (typeof c === "string" && c.trim()) return c;
   }
   return null;
+}
+
+/** Online state of an allocation's store from the cached store list; unknown → allow. */
+function storeActiveFor(alloc: Allocation | null): boolean {
+  if (!alloc?.store_id) return true;
+  const store = peekStoresAny()?.find((s) => String(s.id) === String(alloc.store_id));
+  return store ? store.is_active !== false : true;
 }
 
 export function IncomingOrderAlertHost() {
@@ -206,10 +214,12 @@ export function IncomingOrderAlertHost() {
     if (current && AppState.currentState === "active") void cancelLockScreenAlerts();
   }, [current?.allocation_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Accept / Reject tapped on the lock-screen notification: the tap arrives
-  // before the order data does. Park it, then apply it to the matching
-  // (or, for a real push with no id, the first fresh) order once on screen.
-  const [lockAction, setLockAction] = useState<{ action: "accept" | "reject" | "open"; allocationId: string | null } | null>(null);
+  // Accept / Reject tapped on the lock-screen notification: the tap can
+  // arrive before the order data does. Park it, then apply it to exactly the
+  // order it was for once that order has loaded (resolveLockScreenTap) —
+  // never to another one. It used to fall back to the first queued order
+  // and wait forever, so a tap could answer an unrelated, later order.
+  const [lockAction, setLockAction] = useState<LockScreenTap | null>(null);
   useEffect(() => {
     const pull = () => {
       const p = takePendingLockScreenAction();
@@ -221,11 +231,7 @@ export function IncomingOrderAlertHost() {
 
   // Store online state for the order's store — Accept is blocked while the
   // store is offline, mirroring IncomingOrderCard. Unknown store → allow.
-  const storeActive = useMemo(() => {
-    if (!current?.store_id) return true;
-    const store = peekStoresAny()?.find((s) => String(s.id) === String(current.store_id));
-    return store ? store.is_active !== false : true;
-  }, [current]);
+  const storeActive = useMemo(() => storeActiveFor(current), [current]);
 
   const finish = useCallback(
     (allocId: string) => {
@@ -236,29 +242,31 @@ export function IncomingOrderAlertHost() {
     [refreshIncoming]
   );
 
-  const onAccept = useCallback(
-    async (itemIds: string[]) => {
-      if (!current || busy) return;
+  // Answer one specific order. The popup buttons pass the order on screen;
+  // a lock-screen tap passes the order it was for.
+  const acceptAlloc = useCallback(
+    async (alloc: Allocation, itemIds: string[]) => {
+      if (busy) return;
       stopRinging();
-      if (isDemoAllocation(current.allocation_id)) {
+      if (isDemoAllocation(alloc.allocation_id)) {
         void triggerHaptic("success");
         showToast({ message: `DEMO order accepted (${itemIds.length} items) — nothing was sent to the backend`, tone: "success" });
-        setQueue((prev) => prev.filter((a) => a.allocation_id !== current.allocation_id));
+        setQueue((prev) => prev.filter((a) => a.allocation_id !== alloc.allocation_id));
         return;
       }
       if (!session?.token) return;
       setBusy("accept");
       try {
         const response = await apiClient.post(
-          `/shopkeeper/allocations/${current.allocation_id}/accept`,
+          `/shopkeeper/allocations/${alloc.allocation_id}/accept`,
           { accepted_item_ids: itemIds },
           { Authorization: `Bearer ${session.token}` }
         );
         const json: any = response.data;
         if (response.success && json?.success) {
           void triggerHaptic("success");
-          showToast({ message: `Order #${current.order_code} accepted · moved to Active`, tone: "success" });
-          finish(current.allocation_id);
+          showToast({ message: `Order #${alloc.order_code} accepted · moved to Active`, tone: "success" });
+          finish(alloc.allocation_id);
         } else {
           void triggerHaptic("error");
           showToast({
@@ -273,41 +281,57 @@ export function IncomingOrderAlertHost() {
         setBusy(null);
       }
     },
-    [current, session?.token, busy, stopRinging, showToast, finish]
+    [session?.token, busy, stopRinging, showToast, finish]
+  );
+
+  const rejectAlloc = useCallback(
+    async (alloc: Allocation) => {
+      if (busy) return;
+      stopRinging();
+      if (isDemoAllocation(alloc.allocation_id)) {
+        showToast({ message: "DEMO order rejected — nothing was sent to the backend" });
+        setQueue((prev) => prev.filter((a) => a.allocation_id !== alloc.allocation_id));
+        return;
+      }
+      if (!session?.token) return;
+      setBusy("reject");
+      try {
+        const response = await apiClient.post(`/shopkeeper/allocations/${alloc.allocation_id}/reject`, undefined, {
+          Authorization: `Bearer ${session.token}`,
+        });
+        const json: any = response.data;
+        if (response.success && json?.success !== false) {
+          showToast({ message: `Order #${alloc.order_code} rejected` });
+          finish(alloc.allocation_id);
+        } else {
+          void triggerHaptic("error");
+          showToast({
+            message: errorMessageOf(json?.error, response.error) ?? "Couldn't reject the order. Try again.",
+            tone: "error",
+          });
+        }
+      } catch {
+        void triggerHaptic("error");
+        showToast({ message: "Couldn't reject the order. Try again.", tone: "error" });
+      } finally {
+        setBusy(null);
+      }
+    },
+    [session?.token, busy, stopRinging, showToast, finish]
+  );
+
+  const onAccept = useCallback(
+    async (itemIds: string[]) => {
+      if (!current) return;
+      await acceptAlloc(current, itemIds);
+    },
+    [current, acceptAlloc]
   );
 
   const onReject = useCallback(async () => {
-    if (!current || busy) return;
-    stopRinging();
-    if (isDemoAllocation(current.allocation_id)) {
-      showToast({ message: "DEMO order rejected — nothing was sent to the backend" });
-      setQueue((prev) => prev.filter((a) => a.allocation_id !== current.allocation_id));
-      return;
-    }
-    if (!session?.token) return;
-    setBusy("reject");
-    try {
-      const response = await apiClient.post(`/shopkeeper/allocations/${current.allocation_id}/reject`, undefined, {
-        Authorization: `Bearer ${session.token}`,
-      });
-      const json: any = response.data;
-      if (response.success && json?.success !== false) {
-        showToast({ message: `Order #${current.order_code} rejected` });
-        finish(current.allocation_id);
-      } else {
-        void triggerHaptic("error");
-        showToast({
-          message: errorMessageOf(json?.error, response.error) ?? "Couldn't reject the order. Try again.",
-          tone: "error",
-        });
-      }
-    } catch {
-      void triggerHaptic("error");
-      showToast({ message: "Couldn't reject the order. Try again.", tone: "error" });
-    } finally {
-      setBusy(null);
-    }
-  }, [current, session?.token, busy, stopRinging, showToast, finish]);
+    if (!current) return;
+    await rejectAlloc(current);
+  }, [current, rejectAlloc]);
 
   // "Not now" / Android back: close everything queued; the orders stay in
   // the Orders tab's Incoming list and are already marked seen.
@@ -318,12 +342,35 @@ export function IncomingOrderAlertHost() {
   }, [busy, stopRinging]);
 
   useEffect(() => {
-    if (!lockAction || !current || busy) return;
-    if (lockAction.allocationId && lockAction.allocationId !== current.allocation_id) return;
+    if (!lockAction || busy) return undefined;
+    const decision = resolveLockScreenTap(lockAction, queue, pendingAllocations);
+    if (decision.kind === "wait") {
+      // Its order has not loaded yet. Look again when the tap expires, so an
+      // order that never appears (answered elsewhere, expired) is dropped.
+      const tap = lockAction;
+      const t = setTimeout(
+        () => setLockAction((cur) => (cur === tap ? { ...tap } : cur)),
+        Math.max(0, tap.at + LOCK_ACTION_TTL_MS - Date.now()) + 50
+      );
+      return () => clearTimeout(t);
+    }
     setLockAction(null);
-    if (lockAction.action === "accept") void onAccept(current.items.map((i) => i.id));
-    else if (lockAction.action === "reject") void onReject();
-  }, [lockAction, current, busy, onAccept, onReject]);
+    if (decision.kind === "drop") {
+      if (decision.reason === "expired") showToast({ message: "That order is no longer waiting for you" });
+      return undefined;
+    }
+    const { alloc, inQueue } = decision;
+    if (lockAction.action === "accept" && !storeActiveFor(alloc)) {
+      // Same rule as the popup's Accept button: not while the store is
+      // offline. Put the order on screen so it can still be answered.
+      if (!inQueue) setQueue((prev) => (prev.some((a) => a.allocation_id === alloc.allocation_id) ? prev : [alloc, ...prev]));
+      showToast({ message: `Store is offline. Go online to accept order #${alloc.order_code}.`, tone: "error" });
+      return undefined;
+    }
+    if (lockAction.action === "accept") void acceptAlloc(alloc, alloc.items.map((i) => i.id));
+    else void rejectAlloc(alloc);
+    return undefined;
+  }, [lockAction, busy, queue, pendingAllocations, acceptAlloc, rejectAlloc, showToast]);
 
   return (
     <IncomingOrderAlertSheet

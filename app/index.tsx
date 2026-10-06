@@ -8,7 +8,9 @@ import { resolveAuthenticatedRoute } from "../lib/storeApproval";
 import { colors, motion } from "../lib/theme";
 
 const MIN_SPLASH_MS = 800;
-const BRAND_LOGO = require("../near_now_shopkeeper.png");
+// 384 px copy: shown at most 96 dp (= 384 px at 4x). The 1024 px original
+// stays for the app icon / splash config. (2026-10-06)
+const BRAND_LOGO = require("../assets/brand/near_now_shopkeeper_384.png");
 const LOGO_SIZE = 96;
 
 /**
