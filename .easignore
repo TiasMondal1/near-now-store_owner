@@ -1,0 +1,67 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+credentials/
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.keystore
+@*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files (keep .env out of repo - use .env.example as template)
+.env
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# iOS - fully generated, no native customisations
+/ios
+
+# Android - tracked because build.gradle has custom splits config.
+# Exclude only machine-local and generated-output paths:
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/keystore.properties
+android/app/release.keystore
+.android-signing/
+android/.kotlin/
+
+# Claude Code
+.claude/
+
+# Firebase Android app config — contains project identifiers, not committed
+google-services.json
+
+# Play Console service-account key used by `eas submit` — never commit
+google-service-account.json
+
+# EAS only: ignore the committed native project so EAS runs `expo prebuild`
+# and applies every config plugin (withLockScreenAlerts, google-services, ...).
+/android

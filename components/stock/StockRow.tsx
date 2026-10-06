@@ -7,8 +7,6 @@ import type { StockProduct } from "../../lib/useStoreStock";
 
 export type StockRowProps = {
   product: StockProduct;
-  /** Store is online — switches are locked while offline. */
-  storeActive: boolean;
   /** This row's toggle is in flight. */
   toggling: boolean;
   showSeparator: boolean;
@@ -28,7 +26,7 @@ const REMOVE_BTN = 32;
  * `Pressable` so both controls stay individually reachable to screen readers;
  * the wrapper only adds the long-press shortcut.
  */
-export const StockRow = memo(function StockRow({ product, storeActive, toggling, showSeparator, onToggle, onRemove }: StockRowProps) {
+export const StockRow = memo(function StockRow({ product, toggling, showSeparator, onToggle, onRemove }: StockRowProps) {
   const isActive = product.is_active !== false;
   const [imgError, setImgError] = useState(false);
   const handleToggle = useCallback(() => onToggle(product), [onToggle, product]);
@@ -64,9 +62,9 @@ export const StockRow = memo(function StockRow({ product, storeActive, toggling,
       <Switch
         value={isActive}
         onValueChange={handleToggle}
-        disabled={!storeActive || toggling}
+        disabled={toggling}
         accessibilityLabel={`${product.name} availability`}
-        accessibilityHint={!storeActive ? "Go online to change availability" : isActive ? "Turns this product off" : "Makes this product available"}
+        accessibilityHint={isActive ? "Turns this product off" : "Makes this product available"}
       />
       <Pressable
         onPress={handleRemove}

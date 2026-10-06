@@ -647,7 +647,6 @@ export default function HomeTab() {
                   variant="compact"
                   storeId={selectedStore.id}
                   token={session?.token}
-                  storeActive={isStoreOnline}
                   enabled={isFocused}
                 />
               </>

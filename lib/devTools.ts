@@ -29,7 +29,8 @@ export const DEMO_ORDER_DELAY_MS = 10_000;
 
 // ─── Enabled flag (hide the tools without rebuilding) ────────────────────────
 
-const ENABLED_KEY = "dev_tools_enabled_v1";
+// v2: ignores the "on" flag left by older builds, so tools start hidden after an update.
+const ENABLED_KEY = "dev_tools_enabled_v2";
 let enabledMem: boolean | null = null;
 const enabledListeners = new Set<(v: boolean) => void>();
 
@@ -38,9 +39,9 @@ export async function isDevToolsEnabled(): Promise<boolean> {
   if (enabledMem != null) return enabledMem;
   try {
     const raw = await AsyncStorage.getItem(ENABLED_KEY);
-    enabledMem = raw == null ? true : raw === "1";
+    enabledMem = raw === "1";
   } catch {
-    enabledMem = true;
+    enabledMem = false;
   }
   return enabledMem;
 }

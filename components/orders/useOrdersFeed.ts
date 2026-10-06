@@ -79,8 +79,7 @@ export function useOrdersFeed(isFocused: boolean, selected: SelectedStoreInput):
 
   const session = selected.session;
   const storeId = selected.store?.id ?? null;
-  // Mirrors home.tsx's storeActive gate on the product Active/Off toggle —
-  // this screen had no equivalent check on Accept, so a shopkeeper who took
+  // Gates Accept on store online state — without it a shopkeeper who took
   // their store offline could still accept a still-pending incoming order in
   // the same session. `!== false` keeps it true before store data has loaded
   // so it never blocks early. Found 2026-09-09.

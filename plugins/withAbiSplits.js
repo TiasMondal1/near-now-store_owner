@@ -12,6 +12,8 @@
  *      falling back to the debug keystore when they aren't provided.
  *   4. R8/Proguard + resource shrinking enabled for release (via
  *      gradle.properties) plus keep rules for React Native / Hermes / Expo.
+ *   5. R8 optimised resource shrinking, plus a keep list for resources that
+ *      are only referenced by name from JS.
  */
 const {
   withAppBuildGradle,
@@ -276,6 +278,28 @@ function withProguardKeepRules(config) {
   ]);
 }
 
+// Resources looked up only by name at runtime (from the JS bundle, never from
+// Java/Kotlin), so the shrinker can't see them being used: the order chime
+// (res/raw, played by name by the notification channel) and images the JS
+// bundle `require()`s (RN names them after their path, e.g.
+// near_now_shopkeeper.png → @drawable/near_now_shopkeeper).
+const RESOURCE_KEEP_XML = `<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/*,@drawable/near_now_shopkeeper,@drawable/assets_*,@drawable/node_modules_*,@drawable/notification_icon" />
+`;
+
+function withResourceKeepList(config) {
+  return withDangerousMod(config, [
+    "android",
+    (cfg) => {
+      const dir = path.join(cfg.modRequest.platformProjectRoot, "app", "src", "main", "res", "raw");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "nearnow_keep.xml"), RESOURCE_KEEP_XML, "utf8");
+      return cfg;
+    },
+  ]);
+}
+
 // ── Plugin ──────────────────────────────────────────────────────────────────
 
 module.exports = function withAbiSplits(config) {
@@ -291,8 +315,12 @@ module.exports = function withAbiSplits(config) {
   // Enable R8 code shrinking + resource shrinking for release builds.
   config = setGradleProperty(config, "android.enableMinifyInReleaseBuilds", "true");
   config = setGradleProperty(config, "android.enableShrinkResourcesInReleaseBuilds", "true");
+  // R8-integrated ("optimised") resource shrinking — supported since AGP 8.6
+  // and the default from AGP 9. Play Console flags its absence.
+  config = setGradleProperty(config, "android.r8.optimizedResourceShrinking", "true");
 
   config = withProguardKeepRules(config);
+  config = withResourceKeepList(config);
 
   return config;
 };

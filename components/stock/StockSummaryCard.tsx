@@ -9,7 +9,6 @@ export type StockSummaryCardProps = {
   products: StockProduct[];
   loading: boolean;
   error: boolean;
-  storeActive: boolean;
   onRetry: () => void;
   onManage: () => void;
   onAddProducts: () => void;
@@ -21,7 +20,7 @@ export type StockSummaryCardProps = {
  * skeleton line; cold failure → compact ErrorState; zero products → compact
  * EmptyState with "Add products".
  */
-export function StockSummaryCard({ products, loading, error, storeActive, onRetry, onManage, onAddProducts }: StockSummaryCardProps) {
+export function StockSummaryCard({ products, loading, error, onRetry, onManage, onAddProducts }: StockSummaryCardProps) {
   const total = products.length;
   const active = products.filter((p) => p.is_active !== false).length;
 
@@ -57,7 +56,6 @@ export function StockSummaryCard({ products, loading, error, storeActive, onRetr
             {active} active · {total - active} off
           </Text>
         </View>
-        {!storeActive ? <Text style={styles.hint}>Go online to change availability</Text> : null}
       </View>
     );
   }
@@ -120,7 +118,6 @@ const styles = StyleSheet.create({
   statRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   dot: { width: 6, height: 6, borderRadius: 3 },
   count: { fontSize: 14, fontWeight: "500", color: colors.textPrimary },
-  hint: { fontSize: 12, color: colors.textTertiary },
 });
 
 export default StockSummaryCard;

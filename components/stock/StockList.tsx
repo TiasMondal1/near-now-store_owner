@@ -14,8 +14,6 @@ type StockTab = "packaged" | "loose";
 export type StockListProps = {
   storeId: string | null | undefined;
   token: string | null | undefined;
-  /** Store is online. Availability switches are locked (with a visible hint) while offline. */
-  storeActive: boolean;
   /** Gates the 15s/30s safety-net poll — pass the host screen's `useIsFocused()`. */
   enabled: boolean;
   /** `full` = searchable Packaged/Loose card (Inventory tab). `compact` = Home summary card. Default `full`. */
@@ -45,7 +43,7 @@ const SECTION_LABEL: Record<StockTab, string> = { packaged: "packaged", loose: "
  * lib/useStoreStock.ts.
  */
 export const StockList = forwardRef<StockListHandle, StockListProps>(function StockList(
-  { storeId, token, storeActive, enabled, variant = "full", onAddProducts },
+  { storeId, token, enabled, variant = "full", onAddProducts },
   ref
 ) {
   const stock = useStoreStock({ storeId, token, enabled });
@@ -163,7 +161,6 @@ export const StockList = forwardRef<StockListHandle, StockListProps>(function St
         products={products}
         loading={loading}
         error={error}
-        storeActive={storeActive}
         onRetry={retry}
         onManage={openInventory}
         onAddProducts={openAddProducts}
@@ -267,7 +264,6 @@ export const StockList = forwardRef<StockListHandle, StockListProps>(function St
                 <StockRow
                   key={p.id}
                   product={p}
-                  storeActive={storeActive}
                   toggling={togglingProductId === p.id}
                   showSeparator={i < section.length - 1}
                   onToggle={handleToggle}
@@ -285,9 +281,6 @@ export const StockList = forwardRef<StockListHandle, StockListProps>(function St
     <View style={styles.stack}>
       {refreshError && products.length > 0 ? (
         <InlineNotice tone="warning" title="Couldn't refresh" message="Showing saved data" action={{ label: "Retry", onPress: retrySilent }} />
-      ) : null}
-      {!storeActive && products.length > 0 ? (
-        <InlineNotice tone="warning" icon="power-outline" title="Go online to change availability" message="Product switches are locked while your store is offline." />
       ) : null}
 
       <View style={styles.card}>

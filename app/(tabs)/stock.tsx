@@ -87,7 +87,6 @@ export default function StockTab() {
                   variant="full"
                   storeId={store?.id}
                   token={session?.token}
-                  storeActive={!!store?.is_active}
                   enabled={isFocused}
                   onAddProducts={openAddProducts}
                 />
