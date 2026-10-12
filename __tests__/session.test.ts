@@ -30,6 +30,9 @@ jest.mock("expo-secure-store", () => ({
   }),
 }));
 
+jest.mock("../lib/orderListenerService", () => ({ stopOrderListener: jest.fn(async () => {}) }));
+jest.mock("../lib/lockScreenAlert", () => ({ cancelLockScreenAlerts: jest.fn(async () => {}) }));
+
 const SESSION_KEY = "nearandnow_session";
 const TOKEN_KEY = "nearandnow_shopkeeper_token";
 
@@ -112,6 +115,27 @@ describe("clearSession", () => {
     await session.clearSession();
     expect(await session.getSession()).toBeNull();
     expect(mockStore[SESSION_KEY]).toBeUndefined();
+    expect(mockSecureStore[TOKEN_KEY]).toBeUndefined();
+  });
+
+  // 2026-10-12: a session ended by a 401 (not the Settings logout) left the
+  // "store online — listening for orders" service running.
+  it("stops the store-online listener and silences ringing alerts", async () => {
+    const session = loadSession();
+    const { stopOrderListener } = require("../lib/orderListenerService");
+    const { cancelLockScreenAlerts } = require("../lib/lockScreenAlert");
+    await session.saveSession({ token: "tok", user: baseUser });
+    await session.clearSession();
+    expect(stopOrderListener).toHaveBeenCalledTimes(1);
+    expect(cancelLockScreenAlerts).toHaveBeenCalledTimes(1);
+  });
+
+  it("still clears the session when stopping them fails", async () => {
+    const session = loadSession();
+    require("../lib/orderListenerService").stopOrderListener.mockRejectedValueOnce(new Error("native"));
+    require("../lib/lockScreenAlert").cancelLockScreenAlerts.mockRejectedValueOnce(new Error("native"));
+    await session.saveSession({ token: "tok", user: baseUser });
+    await expect(session.clearSession()).resolves.toBeUndefined();
     expect(mockSecureStore[TOKEN_KEY]).toBeUndefined();
   });
 });

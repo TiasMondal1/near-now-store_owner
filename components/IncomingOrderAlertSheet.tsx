@@ -64,13 +64,29 @@ export function IncomingOrderAlertSheet({
 }: IncomingOrderAlertSheetProps) {
   const insets = useSafeAreaInsets();
 
-  // Item inclusion — reset whenever a different order is shown.
+  // Item inclusion — every item starts ticked; reset whenever a different
+  // order is shown.
   const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set());
+  const knownItemIdsRef = useRef<Set<string>>(new Set());
   const allocId = alloc?.allocation_id ?? null;
   useEffect(() => {
-    setCheckedIds(new Set(alloc?.items.map((i) => i.id) ?? []));
+    const ids = alloc?.items.map((i) => i.id) ?? [];
+    knownItemIdsRef.current = new Set(ids);
+    setCheckedIds(new Set(ids));
     setRejectArmed(false);
   }, [allocId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Items added while this order is on screen (the host swaps in the
+  // server's latest copy) start ticked too, keeping the shopkeeper's own
+  // unticks. They used to stay unticked, so Accept sent them to another
+  // store as unavailable. (2026-10-12)
+  const items = alloc?.items;
+  useEffect(() => {
+    if (!items) return;
+    const added = items.map((i) => i.id).filter((id) => !knownItemIdsRef.current.has(id));
+    if (added.length === 0) return;
+    added.forEach((id) => knownItemIdsRef.current.add(id));
+    setCheckedIds((prev) => new Set([...prev, ...added]));
+  }, [items]);
 
   const toggleItem = useCallback((id: string) => {
     setCheckedIds((prev) => {
@@ -292,7 +308,7 @@ export function IncomingOrderAlertSheet({
             </Pressable>
             <Pressable
               style={({ pressed }) => [styles.acceptBtn, !canAccept && styles.acceptBtnDisabled, pressed && canAccept && styles.pressed]}
-              onPress={() => onAccept(Array.from(checkedIds))}
+              onPress={() => onAccept((alloc?.items ?? []).filter((i) => checkedIds.has(i.id)).map((i) => i.id))}
               disabled={!canAccept}
               accessibilityRole="button"
               accessibilityLabel={`${acceptLabel}, order ${alloc?.order_code ?? ""}`}

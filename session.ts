@@ -7,6 +7,8 @@ import { clearStoreApprovalCache } from "./lib/storeApproval";
 import { clearSelectedStore } from "./lib/selectedStore";
 import { OWNER_IMAGE_KEY } from "./lib/storage";
 import { setShopkeeperAuthToken } from "./lib/supabase";
+import { stopOrderListener } from "./lib/orderListenerService";
+import { cancelLockScreenAlerts } from "./lib/lockScreenAlert";
 
 const SESSION_KEY = "nearandnow_session";
 const TOKEN_KEY = "nearandnow_shopkeeper_token";
@@ -137,6 +139,13 @@ export async function getSession(): Promise<UserSession | null> {
 export async function clearSession() {
   _memSession = null;
   setShopkeeperAuthToken(null);
+  // A session can end without the Settings logout (a 401 in lib/api-client —
+  // e.g. this shopkeeper logged in on another phone — or the wrong-account
+  // path on landing). Only that logout stopped the "store online — listening
+  // for orders" service, so the notification stayed up with nothing behind
+  // it. Both are no-ops when nothing is running. (2026-10-12)
+  stopOrderListener().catch(() => {});
+  cancelLockScreenAlerts().catch(() => {});
   // Store list is cached independently of the session (in-memory + AsyncStorage,
   // shared across whoever's currently logged in) — without clearing it here, a
   // different shopkeeper logging in within the cache's TTL would see the

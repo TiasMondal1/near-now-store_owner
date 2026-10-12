@@ -5,6 +5,7 @@
  */
 
 import { supabase } from "./supabase";
+import { apiClient } from "./api-client";
 
 export type StoreOrderRow = {
   id: string;
@@ -277,6 +278,10 @@ async function getOrdersFromDbViaRpc(
       quantity: Number(it.quantity ?? 0),
       unit: it.unit ?? "pcs",
       image_url: it.image_url,
+      // The RPC names this `price`, so it is always undefined here and
+      // Payouts falls back to the store's server-computed total. Don't just
+      // switch to `it.price`: the RPC also returns items written off as
+      // unavailable, and summing them would overstate the store's payout.
       price: it.unit_price != null ? Number(it.unit_price) : undefined,
     })) : [],
     store_id: row.store_id,
@@ -453,58 +458,51 @@ export async function getPlacedAtMap(storeOrderIds: string[]): Promise<Record<st
   return result;
 }
 
+type StoreOrderResponse = {
+  store_order?: StoreOrderRow | null;
+  customer_order?: CustomerOrderRow | null;
+  items?: OrderItemRow[] | null;
+};
+
 /**
- * Fetch a single store_order with items (for order details modal / invoice).
+ * One of this shopkeeper's store orders with its items, for the invoice
+ * screen — from GET /shopkeeper/store-orders/:id. This used to read
+ * store_orders / order_items straight from Supabase; once those tables became
+ * service-role only (20260930070000) the read always came back empty and
+ * every invoice said "Order not found". The backend also leaves out items
+ * written off as unavailable, so the invoice matches the store's subtotal.
+ * (2026-10-12)
  *
- * `ownStoreIds` — when provided, the row must belong to one of these stores
- * or null is returned. The invoice screen takes the order id straight from a
- * route param (deep link / push payload), so without this check it would
- * render whatever order the id points at, relying purely on server-side RLS
- * that this repo cannot see.
+ * Resolves null when there is no such order for this shopkeeper (404 / 403,
+ * or an older backend without the route); throws on a network or server
+ * failure so the screen can offer a retry. `ownStoreIds` re-checks ownership
+ * on the client: the id comes straight from a route param.
  */
-export async function getOrderByIdFromDb(
+export async function getStoreOrderById(
   orderId: string,
+  token: string,
   ownStoreIds?: readonly string[]
 ): Promise<OrderForStore | null> {
-  if (!supabase || !orderId) return null;
+  if (!orderId || !token) return null;
   if (ownStoreIds && ownStoreIds.length === 0) return null;
 
-  let soQuery = supabase
-    .from("store_orders")
-    .select("id, store_id, customer_order_id, status, subtotal_amount, delivery_fee, created_at, delivered_at, cancelled_at")
-    .eq("id", orderId);
-  if (ownStoreIds) soQuery = soQuery.in("store_id", [...ownStoreIds]);
-  const { data: storeOrderData, error: soError } = await soQuery.maybeSingle();
-
-  if (soError || !storeOrderData) {
-    if (soError) console.warn("[orders-db] getOrderByIdFromDb error:", soError.message);
-    return null;
+  const res = await apiClient.get<StoreOrderResponse>(
+    `/shopkeeper/store-orders/${encodeURIComponent(orderId)}`,
+    { Authorization: `Bearer ${token}` }
+  );
+  if (!res.success) {
+    if (res.status === 404 || res.status === 403) return null;
+    throw new Error(res.error || "Couldn't load the order");
   }
 
-  const so = storeOrderData as StoreOrderRow;
-  // Belt-and-braces: the .in() filter above should already guarantee this.
+  const so = res.data?.store_order;
+  if (!so) return null;
   if (ownStoreIds && !ownStoreIds.includes(String(so.store_id))) return null;
+  return buildStoreOrder(so, res.data?.customer_order ?? null, res.data?.items ?? []);
+}
 
-  let co: CustomerOrderRow | null = null;
-  if (so.customer_order_id) {
-    const { data: coData } = await supabase
-      .from("customer_orders")
-      .select("id, order_code, status, total_amount, placed_at, delivered_at, cancelled_at")
-      .eq("id", so.customer_order_id)
-      .maybeSingle();
-    co = coData as CustomerOrderRow | null;
-  }
-
-  const { data: itemsData, error: itemsError } = await supabase
-    .from("order_items")
-    .select("id, store_order_id, product_name, unit, image_url, unit_price, quantity")
-    .eq("store_order_id", orderId);
-
-  if (itemsError) {
-    console.warn("[orders-db] getOrderByIdFromDb order_items error:", itemsError.message);
-  }
-
-  const rawItems = (itemsData ?? []) as OrderItemRow[];
+/** Store order + customer order + item rows → the shape the invoice renders. */
+function buildStoreOrder(so: StoreOrderRow, co: CustomerOrderRow | null, rawItems: OrderItemRow[]): OrderForStore {
   const order_items = rawItems.map((it) => ({
     id: it.id,
     product_name: it.product_name || "Item",

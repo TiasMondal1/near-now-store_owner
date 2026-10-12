@@ -8,8 +8,7 @@ import { formatINR, formatStatus, getStatusTone, parseDbDate } from "../../lib/o
 import { colors, layout, radius, spacing, typography } from "../../lib/theme";
 import { useLayout, useBottomPadding } from "../../lib/useLayout";
 import { getSession } from "../../session";
-import { config } from "../../lib/config";
-import { getOrderByIdFromDb, type OrderForStore } from "../../lib/orders-db";
+import { getStoreOrderById, type OrderForStore } from "../../lib/orders-db";
 import { fetchStoresCached, peekStores } from "../../lib/appCache";
 import {
   Badge,
@@ -26,7 +25,6 @@ import {
 import { InvoiceItemsCard } from "../../components/payouts/InvoiceItemsCard";
 import { buildInvoiceHtml, computePayout, toLineItems } from "../../components/payouts/invoiceHtml";
 
-const API_BASE = config.API_BASE;
 // 384 px copy of the 1024 px icon art; shown at 40 dp here. (2026-10-06)
 const BRAND_LOGO = require("../../assets/brand/near_now_shopkeeper_384.png");
 
@@ -69,20 +67,10 @@ export default function InvoiceScreen() {
         const ownStoreIds = stores.map((st) => String(st.id));
         if (ownStoreIds.length === 0) { if (!cancelled) { setOrder(null); setLoading(false); } return; }
 
-        const fromDb = await getOrderByIdFromDb(id, ownStoreIds);
-        if (fromDb) { if (!cancelled) { setOrder(fromDb); setLoading(false); } return; }
-
-        const res = await fetch(`${API_BASE}/api/orders/${id}`, {
-          headers: { Authorization: `Bearer ${s.token}` },
-        });
-        const raw = await res.text();
-        // A malformed / non-JSON body means the server answered without an
-        // order — that is "not found", not a network failure.
-        let json: any = null;
-        try { json = raw ? JSON.parse(raw) : null; } catch { json = null; }
-        const apiOrder = json?.success && json?.order ? (json.order as OrderForStore) : null;
-        const apiStoreId = apiOrder ? String((apiOrder as any).store_id ?? "") : "";
-        if (!cancelled) setOrder(apiOrder && ownStoreIds.includes(apiStoreId) ? apiOrder : null);
+        // Null = no such order for this shopkeeper; a network / server
+        // failure throws into the retry state below.
+        const found = await getStoreOrderById(id, s.token, ownStoreIds);
+        if (!cancelled) setOrder(found);
       } catch {
         if (!cancelled) { setOrder(null); setLoadError(true); }
       } finally {

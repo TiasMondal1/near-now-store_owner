@@ -56,6 +56,32 @@ describe("pickNewAlerts", () => {
     const broken = { ...alloc("x", 10_000), allocation_id: "" };
     expect(pickNewAlerts([broken], new Set(), NOW)).toEqual([]);
   });
+
+  // 2026-10-12: the window runs from when the store could first see the
+  // request, not from when the customer placed the order.
+  const offeredAgo = (a: Allocation, ms: number | null): Allocation => ({
+    ...a,
+    offered_at: ms == null ? null : new Date(NOW - ms).toISOString(),
+  });
+
+  it("rings for a request reallocated to this store long after the order was placed", () => {
+    const third = offeredAgo(alloc("third", 12 * 60_000), 30_000);
+    expect(pickNewAlerts([third], new Set(), NOW).map((a) => a.allocation_id)).toEqual(["third"]);
+  });
+
+  it("skips a request offered to this store longer ago than the window", () => {
+    const stale = offeredAgo(alloc("stale", FRESH_WINDOW_MS + 60_000), FRESH_WINDOW_MS + 1);
+    expect(pickNewAlerts([stale], new Set(), NOW)).toEqual([]);
+  });
+
+  it("falls back to placed_at when offered_at is missing or unparseable (older backend)", () => {
+    const pending = [
+      offeredAgo(alloc("old-null", FRESH_WINDOW_MS + 1), null),
+      { ...alloc("old-bad", FRESH_WINDOW_MS + 1), offered_at: "not a date" },
+      offeredAgo(alloc("fresh-null", 30_000), null),
+    ];
+    expect(pickNewAlerts(pending, new Set(), NOW).map((a) => a.allocation_id)).toEqual(["fresh-null"]);
+  });
 });
 
 describe("pruneSeen", () => {

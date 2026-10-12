@@ -35,8 +35,13 @@ export const RING_MAX_MS = 45 * 1000;
 
 /**
  * Pending allocations that should trigger the popup right now: not yet
- * shown, and either recently placed or with an unparseable `placed_at` (a
- * missing timestamp must not silence a real order). Preserves input order.
+ * shown, and either recently offered to the store or with no parseable time
+ * (a missing timestamp must not silence a real order). Preserves input order.
+ *
+ * Freshness runs from `offered_at` — when this store could first see the
+ * request — and only falls back to `placed_at` on an older backend. Timed
+ * from placed_at, an order reallocated to a third store (5 min per store) or
+ * paid late reached it already "stale" and never rang. (2026-10-12)
  */
 export function pickNewAlerts(
   pending: Allocation[],
@@ -48,8 +53,8 @@ export function pickNewAlerts(
   for (const a of pending) {
     if (a.alloc_status !== "pending_acceptance") continue;
     if (!a.allocation_id || seen.has(a.allocation_id)) continue;
-    const placed = parseDbDate(a.placed_at);
-    if (placed && now - placed.getTime() > freshWindowMs) continue;
+    const since = parseDbDate(a.offered_at) ?? parseDbDate(a.placed_at);
+    if (since && now - since.getTime() > freshWindowMs) continue;
     out.push(a);
   }
   return out;

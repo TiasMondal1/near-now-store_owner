@@ -20,6 +20,8 @@ interface ApiResponse<T = any> {
   data?: T;
   error?: string;
   error_code?: string;
+  /** HTTP status of a failed request; absent for network errors and timeouts. */
+  status?: number;
 }
 
 class ApiClient {
@@ -161,6 +163,7 @@ class ApiClient {
       success: false,
       error: errorMessage,
       error_code: errorCode,
+      ...(typeof lastError?.status === 'number' ? { status: lastError.status } : {}),
     };
   }
 

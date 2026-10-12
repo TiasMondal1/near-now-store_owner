@@ -17,6 +17,12 @@ export type Allocation = {
   alloc_status: "pending_acceptance" | "accepted";
   pickup_code: string | null;
   placed_at: string;
+  /**
+   * When this store could first see the request (pending only): later than
+   * placed_at for a reallocated or late-paid order. Absent from older
+   * backends.
+   */
+  offered_at?: string | null;
   items: AllocationItem[];
   customer_area: string | null;
   customer_distance: string | null;
