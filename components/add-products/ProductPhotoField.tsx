@@ -6,9 +6,11 @@
  *
  * Picker: `requestCameraPermission` (the shared OS-permission explanation —
  * the one Alert the design system keeps), launchCameraAsync /
- * launchImageLibraryAsync with `{ base64: true, quality: 0.8 }`, a synchronous
- * re-entrancy guard against double taps, try/catch around every native call,
- * and an error Toast when the camera / gallery can't be opened.
+ * launchImageLibraryAsync, then lib/productPhoto.ts downscales the photo to
+ * 1024 px and re-encodes it as JPEG (with base64) before the form sees it. A
+ * synchronous re-entrancy guard against double taps, try/catch around every
+ * native call, and an error Toast when the camera / gallery can't be opened
+ * or the photo can't be processed.
  */
 import React, { forwardRef, useCallback, useRef, useState } from "react";
 import { Image, Pressable, StyleSheet, Text, View, type TextInput } from "react-native";
@@ -16,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { ActionSheet, ConfirmSheet, TextField, useToast, type ActionSheetOption } from "../ui";
 import { requestCameraPermission } from "../kyc/media";
+import { prepareProductPhoto } from "../../lib/productPhoto";
 import { colors, layout, radius, spacing } from "../../lib/theme";
 
 export type ProductPhotoFieldProps = {
@@ -48,34 +51,49 @@ export const ProductPhotoField = forwardRef<TextInput, ProductPhotoFieldProps>(f
   // camera/gallery picker calls.
   const inFlightRef = useRef(false);
 
+  // The full-size original never reaches the form: it would go inline into
+  // the submission request and overflow the API's body cap.
+  const applyPicked = useCallback(
+    async (asset: ImagePicker.ImagePickerAsset) => {
+      try {
+        const photo = await prepareProductPhoto(asset);
+        onPicked(photo.uri, photo.base64);
+      } catch (err) {
+        if (__DEV__) console.warn("[add-products] prepareProductPhoto failed:", err);
+        toast.show({ message: "Couldn't use that photo. Please try another.", tone: "error" });
+      }
+    },
+    [onPicked, toast]
+  );
+
   const pickFromCamera = useCallback(async () => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     try {
       if (!(await requestCameraPermission())) return;
-      const res = await ImagePicker.launchCameraAsync({ base64: true, quality: 0.8 });
-      if (!res.canceled) onPicked(res.assets[0].uri, res.assets[0].base64 || null);
+      const res = await ImagePicker.launchCameraAsync({ quality: 1 });
+      if (!res.canceled) await applyPicked(res.assets[0]);
     } catch (err) {
       if (__DEV__) console.warn("[add-products] pickFromCamera failed:", err);
       toast.show({ message: "Couldn't open camera. Please try again.", tone: "error" });
     } finally {
       inFlightRef.current = false;
     }
-  }, [onPicked, toast]);
+  }, [applyPicked, toast]);
 
   const pickFromGallery = useCallback(async () => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     try {
-      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.8 });
-      if (!res.canceled) onPicked(res.assets[0].uri, res.assets[0].base64 || null);
+      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 1 });
+      if (!res.canceled) await applyPicked(res.assets[0]);
     } catch (err) {
       if (__DEV__) console.warn("[add-products] pickFromGallery failed:", err);
       toast.show({ message: "Couldn't open gallery. Please try again.", tone: "error" });
     } finally {
       inFlightRef.current = false;
     }
-  }, [onPicked, toast]);
+  }, [applyPicked, toast]);
 
   const options: ActionSheetOption[] = [
     { key: "camera", label: "Take photo", icon: "camera-outline", onPress: () => void pickFromCamera() },

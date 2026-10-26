@@ -400,6 +400,11 @@ export async function addCustomMasterProduct(
       },
       body: JSON.stringify(storeId ? { ...submissionPayload, store_id: storeId } : submissionPayload),
     });
+    // 413 comes from the API's body cap or, above 4.5 MB, from Vercel itself
+    // (not JSON) — either way the photo is what made the request too big.
+    if (res.status === 413) {
+      return { success: false, error: "The product photo is too large. Please retake it or choose a smaller one." };
+    }
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data?.success) {
       return { success: false, error: data?.error || "Failed to submit product for review" };
