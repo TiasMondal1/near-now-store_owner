@@ -176,7 +176,7 @@ export default function StoreOwnerSignupScreen() {
       setOwnerImageUri(uri);
       setUploadingOwnerImage(true);
       try {
-        const res = await uploadOwnerImage(session.user.id, uri);
+        const res = await uploadOwnerImage(uri);
         if (res.ok) {
           await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);
           setOwnerImageUri(res.url);
@@ -321,7 +321,7 @@ export default function StoreOwnerSignupScreen() {
       if (pendingOwnerImageUri) {
         (async () => {
           try {
-            const uploadRes = await uploadOwnerImage(json.user.id, pendingOwnerImageUri);
+            const uploadRes = await uploadOwnerImage(pendingOwnerImageUri);
             if (!uploadRes.ok) return;
             await AsyncStorage.setItem(OWNER_IMAGE_KEY, uploadRes.url);
             const stores = await fetchStoresCached(json.token, json.user.id);

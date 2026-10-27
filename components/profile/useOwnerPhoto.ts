@@ -94,7 +94,7 @@ export function useOwnerPhoto(session: OwnerPhotoSession, storeId: string | unde
       setUri(localUri);
       setUploading(true);
       try {
-        const res = await uploadOwnerImage(session.user.id, localUri);
+        const res = await uploadOwnerImage(localUri);
         if (res.ok) {
           // Save remote URL so it persists across sessions
           await AsyncStorage.setItem(OWNER_IMAGE_KEY, res.url);

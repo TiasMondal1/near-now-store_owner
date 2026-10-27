@@ -1,29 +1,27 @@
 /**
- * Supabase Storage helpers for uploading images from the app.
+ * Uploads the store's gallery photos and the owner's photo.
  *
- * Buckets used directly from the app:
- *   store-images        – store gallery photos, up to MAX_STORE_IMAGES (public)
- *   store-owner-images  – store owner profile photo (public)
+ * Buckets (public, so the returned URL works directly in <Image>):
+ *   store-images        – store gallery photos, up to MAX_STORE_IMAGES
+ *   store-owner-images  – the store owner's profile photo
  *
- * Both should be PUBLIC so the returned URL is directly usable in
- * <Image source={{ uri }}> without signed-URL expiry.
+ * How (2026-10-27): the backend checks who is asking and hands out a
+ * one-photo upload token for a fresh path in that store's / owner's folder
+ * (POST /store-owner/upload-url); the photo then goes straight to Storage with
+ * uploadToSignedUrl, which needs no Storage policy. These uploads used the
+ * anon key with `upsert: true`, so the buckets had to let anyone write —
+ * anyone holding the (public) key could overwrite any owner's photo. Every
+ * upload now gets a new path, so nothing is overwritten.
  *
  * Verification documents (Aadhaar, FSSAI, etc.) are NOT uploaded from here —
- * that bucket (store-documents) is private, and uploads are proxied through
- * the backend instead (see lib/verificationDocuments.ts), since this app has
- * no real Supabase Auth session to scope a client-side storage policy to.
- *
- * Buckets and the anon-key write policies these uploads rely on are created
- * by supabase/migrations/20260802000000_store_owner_images_buckets.sql in the
- * near-and-now repo (previously manual/untracked — see that file for why
- * these need an anon write policy, unlike the backend-proxied verification
- * documents flow). uploadStoreImage() results are registered in the
- * `store_images` table (migration 20260903000000) via
- * storeOwner.controller.ts's addStoreImage, not written straight to
- * stores.image_url anymore — see profile.tsx's gallery UI.
+ * that bucket (store-documents) is private and uploads are proxied through
+ * the backend (lib/verificationDocuments.ts). uploadStoreImage() results are
+ * registered in `store_images` via POST /store-owner/stores/:id/images.
  */
 
 import { supabase } from './supabase';
+import { apiClient } from './api-client';
+import { getSession } from '../session';
 
 /**
  * Shared AsyncStorage key for the owner's profile photo URL — both
@@ -65,16 +63,15 @@ function imageExtAndMime(localUri: string): { ext: string; mime: string } {
   return { ext, mime: IMAGE_EXT_TO_MIME[ext] };
 }
 
+type UploadTarget = { kind: 'store_image'; store_id: string } | { kind: 'owner_photo' };
+
+type UploadUrl = { bucket: string; path: string; token: string; public_url: string };
+
 /**
- * Upload an image file from a local URI to a Supabase Storage bucket.
+ * Upload an image file from a local URI through a backend-issued upload token.
  * Returns the public URL on success.
  */
-async function uploadImage(
-  bucket: string,
-  path: string,
-  localUri: string,
-  mimeType = 'image/jpeg'
-): Promise<UploadResult> {
+async function uploadImage(target: UploadTarget, localUri: string, mimeType = 'image/jpeg'): Promise<UploadResult> {
   if (!supabase) return { ok: false, error: 'Supabase not configured' };
 
   try {
@@ -89,17 +86,25 @@ async function uploadImage(
       return { ok: false, error: 'Image is too large. Please choose a photo under 5 MB.' };
     }
 
-    const { error } = await supabase.storage
-      .from(bucket)
-      .upload(path, arrayBuffer, {
-        contentType: mimeType,
-        upsert: true,
-      });
+    const session = await getSession();
+    if (!session?.token) return { ok: false, error: 'Please log in again to upload photos.' };
 
+    const issued = await apiClient.post<UploadUrl & { success: boolean }>(
+      '/store-owner/upload-url',
+      { ...target, content_type: mimeType },
+      { Authorization: `Bearer ${session.token}` }
+    );
+    const upload = issued.data;
+    if (!issued.success || !upload?.token) {
+      return { ok: false, error: issued.error || 'Could not prepare the upload. Please try again.' };
+    }
+
+    const { error } = await supabase.storage
+      .from(upload.bucket)
+      .uploadToSignedUrl(upload.path, upload.token, arrayBuffer, { contentType: mimeType });
     if (error) return { ok: false, error: error.message };
 
-    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
-    return { ok: true, url: data.publicUrl };
+    return { ok: true, url: upload.public_url };
   } catch (e: any) {
     return { ok: false, error: e?.message ?? 'Upload failed' };
   }
@@ -107,35 +112,19 @@ async function uploadImage(
 
 /**
  * Upload one photo to the store's gallery (up to MAX_STORE_IMAGES, enforced
- * backend-side in storeOwner.controller.ts's addStoreImage). Each upload
- * gets its own path — a fixed `cover.${ext}` path would silently overwrite
- * whatever was there before, which is exactly the single-image limitation
- * this multi-image support replaces.
+ * backend-side in storeOwner.controller.ts's addStoreImage). The backend picks
+ * a new path for each upload, so a photo never overwrites another.
  */
 export async function uploadStoreImage(
   storeId: string,
   localUri: string
 ): Promise<UploadResult> {
-  const { ext, mime } = imageExtAndMime(localUri);
-  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const path = `${storeId}/${unique}.${ext}`;
-  return uploadImage('store-images', path, localUri, mime);
+  const { mime } = imageExtAndMime(localUri);
+  return uploadImage({ kind: 'store_image', store_id: storeId }, localUri, mime);
 }
 
-/**
- * Upload the store owner's profile photo.
- *
- * NOTE: the bucket's anon write policy plus `upsert: true` on a predictable
- * `<ownerId>/avatar.*` path means anyone holding the (public) anon key can
- * overwrite any owner's photo. That can only be closed server-side — by
- * scoping the storage policy to the `x-shopkeeper-token` header the same
- * way the table RLS does — and is tracked as a backend follow-up.
- */
-export async function uploadOwnerImage(
-  ownerId: string,
-  localUri: string
-): Promise<UploadResult> {
-  const { ext, mime } = imageExtAndMime(localUri);
-  const path = `${ownerId}/avatar.${ext}`;
-  return uploadImage('store-owner-images', path, localUri, mime);
+/** Upload the store owner's profile photo (to the signed-in owner's own folder). */
+export async function uploadOwnerImage(localUri: string): Promise<UploadResult> {
+  const { mime } = imageExtAndMime(localUri);
+  return uploadImage({ kind: 'owner_photo' }, localUri, mime);
 }
