@@ -13,7 +13,6 @@ export type StoreProductRow = {
   master_product_id: string;
   is_active?: boolean;
   name?: string;
-  phone?: string;
 };
 
 export type StoreProductWithName = StoreProductRow & { name: string };
@@ -51,7 +50,7 @@ export async function getStoreProductsFromDbStrict(
   if (!supabase) return [];
   const { data, error } = await supabase
     .from("products")
-    .select("id, store_id, master_product_id, is_active, name, phone")
+    .select("id, store_id, master_product_id, is_active, name")
     .eq("store_id", storeId)
     .is("deleted_at", null)
     .order("created_at", { ascending: true });
@@ -89,7 +88,9 @@ function mapJoinRows(rows: any[], select: string): StoreProductWithName[] {
   return rows.map((row) => {
     const rel = row[relationKey];
     const fromMaster = rel?.name ?? (rel && (rel as any).name);
-    const resolvedName = (fromMaster && String(fromMaster).trim()) || row.name || "Product";
+    // products.name is the *store's* name (copied by the fill_product_store_info
+    // trigger), never the product's — it must not stand in for a missing one.
+    const resolvedName = (fromMaster && String(fromMaster).trim()) || "Product";
     const unitFromMaster = rel?.unit ? String(rel.unit) : "";
     const isLoose = rel?.is_loose === true;
     const imageUrl = rel?.image_url ? String(rel.image_url) : null;
@@ -100,7 +101,8 @@ function mapJoinRows(rows: any[], select: string): StoreProductWithName[] {
 
 /**
  * Get store products with names. Tries joined query first (master_products.name),
- * then falls back to two-query merge. Uses products.name if present (e.g. custom products).
+ * then falls back to two-query merge. A product's name always comes from the
+ * catalogue: products.name holds the store's name (see mapJoinRows).
  */
 export async function getStoreProductsWithNames(
   storeId: string
@@ -108,8 +110,8 @@ export async function getStoreProductsWithNames(
   if (!supabase) return [];
 
   const allSelects = [
-    "id, store_id, master_product_id, is_active, name, phone, master_products(name, unit, is_loose, image_url)",
-    "id, store_id, master_product_id, is_active, name, phone, master_product(name, unit, is_loose, image_url)",
+    "id, store_id, master_product_id, is_active, name, master_products(name, unit, is_loose, image_url)",
+    "id, store_id, master_product_id, is_active, name, master_product(name, unit, is_loose, image_url)",
   ];
   // Put the cached winner first so we skip the probe on warm calls
   const toTry = _workingJoinSelect
@@ -196,8 +198,7 @@ export type UpsertResult = { id: string } | { error: string };
 export async function upsertStoreProduct(
   storeId: string,
   masterProductId: string,
-  storeName?: string,
-  ownerPhone?: string
+  storeName?: string
 ): Promise<UpsertResult | null> {
   if (!supabase) return { error: "Supabase not configured" };
   if (!storeId || !masterProductId) return { error: "Missing store_id or master_product_id" };
@@ -239,7 +240,6 @@ export async function upsertStoreProduct(
       is_active: true,
     };
     if (storeName) updatePayload.name = storeName;
-    if (ownerPhone) updatePayload.phone = ownerPhone;
     // .select() so an RLS-filtered update (0 rows touched, no error) is
     // reported as a failure instead of a phantom success.
     const { data: updatedRows, error: updateErr } = await supabase
@@ -258,7 +258,6 @@ export async function upsertStoreProduct(
     is_active: true,
   };
   if (storeName) insertPayload.name = storeName;
-  if (ownerPhone) insertPayload.phone = ownerPhone;
 
   const { data: insertData, error: insertErr } = await supabase
     .from("products")
