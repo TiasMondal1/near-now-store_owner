@@ -13,6 +13,7 @@ import { EmptyState, ErrorState, InlineNotice, Screen, Skeleton, triggerHaptic }
 import { dateFromOrderCode } from "../../components/orders";
 import { PayoutSummaryCard } from "../../components/payouts/PayoutSummaryCard";
 import { PayoutRow } from "../../components/payouts/PayoutRow";
+import { BankTransfersCard } from "../../components/payouts/BankTransfersCard";
 
 /** persistCache key for the delivered-order rows — instant Payouts paint. */
 const payoutsCacheKey = (storeId: string) => `payouts:${storeId}`;
@@ -290,8 +291,11 @@ export default function PaymentsTab() {
   const coldLoading = loading && payouts.length === 0;
   const showStaleNotice = payoutsError && payouts.length > 0;
 
+  // Bumped on pull-to-refresh so BankTransfersCard refetches alongside the orders.
+  const [transfersRefreshKey, setTransfersRefreshKey] = useState(0);
   const onRefresh = useCallback(() => {
     setRefreshing(true);
+    setTransfersRefreshKey((k) => k + 1);
     load(false);
   }, [load]);
 
@@ -430,6 +434,12 @@ export default function PaymentsTab() {
           <Text style={styles.quickStatLabel}>All Time</Text>
         </View>
       </View>
+
+      {session?.token && storeId ? (
+        <View style={[styles.summaryWrap, { paddingHorizontal: gutter }]}>
+          <BankTransfersCard token={session.token} storeId={storeId} refreshKey={transfersRefreshKey} />
+        </View>
+      ) : null}
 
       <Text style={[styles.sectionTitle, { paddingHorizontal: gutter }]} accessibilityRole="header">
         Order History

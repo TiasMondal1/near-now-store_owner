@@ -32,7 +32,9 @@ import {
   UploadDropzone,
   accountNumberError,
   hasBillingChange,
+  holderNameError,
   ifscCodeError,
+  normalizeHolderName,
   pendingBillingChangeLines,
   usePassbookPicker,
   type PendingBillingChangeRequest,
@@ -64,15 +66,17 @@ export default function BillingInfoScreen() {
   const [accountNumber, setAccountNumber] = useState("");
   const [ifscCode, setIfscCode] = useState("");
   const [branchName, setBranchName] = useState("");
+  const [holderName, setHolderName] = useState("");
   const [saving, setSaving] = useState(false);
   const [pendingChangeRequest, setPendingChangeRequest] = useState<PendingBillingChangeRequest>(null);
   const [saveNotice, setSaveNotice] = useState<SaveNotice | null>(null);
   // Validation errors appear once a field has been touched or a submit was attempted.
-  const [touched, setTouched] = useState<{ account: boolean; ifsc: boolean }>({ account: false, ifsc: false });
+  const [touched, setTouched] = useState<{ holder: boolean; account: boolean; ifsc: boolean }>({ holder: false, account: false, ifsc: false });
 
   const clearSaveNotice = useCallback(() => setSaveNotice(null), []);
   const passbook = usePassbookPicker({ onStaged: clearSaveNotice });
 
+  const holderRef = useRef<TextInput>(null);
   const accountRef = useRef<TextInput>(null);
   const ifscRef = useRef<TextInput>(null);
   const branchRef = useRef<TextInput>(null);
@@ -116,6 +120,7 @@ export default function BillingInfoScreen() {
       setAccountNumber(info.bankAccountNumber ?? "");
       setIfscCode(info.bankIfscCode ?? "");
       setBranchName(info.bankBranchName ?? "");
+      setHolderName(info.bankAccountHolderName ?? "");
       setPassbookServerUrl(info.passbookUrl);
     },
     [reconcileOwnerPhoto, setPassbookServerUrl]
@@ -178,29 +183,33 @@ export default function BillingInfoScreen() {
 
   // ── Validation + save ──────────────────────────────────────────────────────
 
+  const holderErr = holderNameError(holderName);
   const acctErr = accountNumberError(accountNumber);
   const ifscErr = ifscCodeError(ifscCode);
-  const canSubmit = !acctErr && !ifscErr;
+  const canSubmit = !holderErr && !acctErr && !ifscErr;
   const submitHint = useMemo(() => {
     if (canSubmit) return null;
+    if (holderErr) return "Enter the account holder name to submit";
     if (acctErr && ifscErr) return "Enter your account number and IFSC code to submit";
     return acctErr ? "Enter a valid account number to submit" : "Enter a valid IFSC code to submit";
-  }, [canSubmit, acctErr, ifscErr]);
+  }, [canSubmit, holderErr, acctErr, ifscErr]);
 
   const handleSave = async () => {
     if (!token || !storeId) return;
-    // Both bank fields are required; the regexes must pass before anything is sent.
+    // Holder name, account number and IFSC are required; the regexes must pass before anything is sent.
     if (!canSubmit) {
-      setTouched({ account: true, ifsc: true });
-      (acctErr ? accountRef : ifscRef).current?.focus();
+      setTouched({ holder: true, account: true, ifsc: true });
+      (holderErr ? holderRef : acctErr ? accountRef : ifscRef).current?.focus();
       return;
     }
+    const holder = normalizeHolderName(holderName);
     const acct = accountNumber.trim();
     const ifsc = ifscCode.trim().toUpperCase();
     setSaving(true);
     setSaveNotice(null);
     try {
       const res = await saveBillingInfo(token, storeId, {
+        bankAccountHolderName: holder,
         bankAccountNumber: acct,
         bankIfscCode: ifsc,
         bankBranchName: branchName.trim(),
@@ -211,6 +220,7 @@ export default function BillingInfoScreen() {
         return;
       }
       passbook.clearPending();
+      setHolderName(holder);
       setIfscCode(ifsc);
       if (res.cancelled) {
         setSaveNotice({
@@ -332,6 +342,25 @@ export default function BillingInfoScreen() {
 
               <Card title="Bank account">
                 <View style={styles.fields}>
+                  <TextField
+                    ref={holderRef}
+                    label="Account holder name"
+                    value={holderName}
+                    onChangeText={(t) => {
+                      setHolderName(t);
+                      setSaveNotice(null);
+                    }}
+                    onBlur={() => setTouched((p) => ({ ...p, holder: true }))}
+                    error={touched.holder ? holderErr : undefined}
+                    helper="Exactly as printed on your passbook or cheque"
+                    placeholder="e.g. Ramesh Kumar Das"
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                    returnKeyType="next"
+                    onSubmitEditing={() => accountRef.current?.focus()}
+                    blurOnSubmit={false}
+                    accessibilityLabel="Account holder name"
+                  />
                   <TextField
                     ref={accountRef}
                     label="Bank account number"

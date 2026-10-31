@@ -9,6 +9,8 @@ export type BillingInfo = {
   bankAccountNumber: string | null;
   bankIfscCode: string | null;
   bankBranchName: string | null;
+  /** Absent from backends older than 2026-10-28. */
+  bankAccountHolderName?: string | null;
   passbookUrl: string | null;
 };
 
@@ -36,6 +38,7 @@ export async function saveBillingInfo(
     bankAccountNumber?: string;
     bankIfscCode?: string;
     bankBranchName?: string;
+    bankAccountHolderName?: string;
     file?: PickedBillingFile;
   }
 ): Promise<{ ok: true; cancelled: boolean } | { ok: false; error: string }> {
@@ -43,6 +46,7 @@ export async function saveBillingInfo(
   if (fields.bankAccountNumber !== undefined) form.append("bank_account_number", fields.bankAccountNumber);
   if (fields.bankIfscCode !== undefined) form.append("bank_ifsc_code", fields.bankIfscCode);
   if (fields.bankBranchName !== undefined) form.append("bank_branch_name", fields.bankBranchName);
+  if (fields.bankAccountHolderName !== undefined) form.append("bank_account_holder_name", fields.bankAccountHolderName);
   if (fields.file) {
     form.append("file", {
       uri: fields.file.uri,

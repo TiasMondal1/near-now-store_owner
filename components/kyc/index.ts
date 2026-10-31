@@ -22,7 +22,9 @@ export {
   CHANGE_FIELD_LABELS,
   accountNumberError,
   hasBillingChange,
+  holderNameError,
   ifscCodeError,
+  normalizeHolderName,
   pendingBillingChangeLines,
   type PendingBillingChangeRequest,
 } from "./billing";

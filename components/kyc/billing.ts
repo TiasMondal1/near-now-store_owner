@@ -11,6 +11,7 @@ export const CHANGE_FIELD_LABELS: Readonly<Record<string, string>> = {
   bank_account_number: "Bank account number",
   bank_ifsc_code: "IFSC code",
   bank_branch_name: "Bank branch",
+  bank_account_holder_name: "Account holder name",
   bank_passbook_storage_path: "Passbook / cheque photo",
 };
 
@@ -37,6 +38,21 @@ export function pendingBillingChangeLines(request: PendingBillingChangeRequest):
 
 const ACCOUNT_PATTERN = /^[0-9]{6,20}$/;
 const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+// Same rule as the backend (storeOwner.controller.ts ACCOUNT_HOLDER_PATTERN).
+const HOLDER_NAME_PATTERN = /^[A-Za-z][A-Za-z .'&-]{2,119}$/;
+
+/** The holder name as it is sent: trimmed, inner whitespace collapsed. */
+export function normalizeHolderName(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+/** Inline error for the account holder name field, or undefined when valid. */
+export function holderNameError(value: string): string | undefined {
+  const name = normalizeHolderName(value);
+  if (!name) return "Enter the name on the bank account.";
+  if (!HOLDER_NAME_PATTERN.test(name)) return "Use letters and spaces only, as printed on your passbook.";
+  return undefined;
+}
 
 /** Inline error for the bank account number field, or undefined when valid. */
 export function accountNumberError(value: string): string | undefined {
